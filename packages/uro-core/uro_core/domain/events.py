@@ -57,6 +57,8 @@ class BeatResolvedPayload(BaseModel):
     participant_id: str
     intent_text: str
     narration: str
+    # short recap for the chronicle; populated once a summarizer exists (docs/12)
+    synopsis: str = ""
 
 
 # --- Constructors (the only sanctioned way to mint these events) ---
@@ -71,7 +73,12 @@ def world_genesis(world_name: str) -> DomainEvent:
 
 
 def beat_resolved(
-    *, beat_id: str, participant_id: str, intent_text: str, narration: str
+    *,
+    beat_id: str,
+    participant_id: str,
+    intent_text: str,
+    narration: str,
+    synopsis: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="BeatResolved",
@@ -81,5 +88,6 @@ def beat_resolved(
             participant_id=participant_id,
             intent_text=intent_text,
             narration=narration,
+            synopsis=synopsis,
         ).model_dump(),
     )

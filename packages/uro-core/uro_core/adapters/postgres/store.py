@@ -14,6 +14,7 @@ import asyncpg
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent, world_genesis
 from uro_core.domain.hashing import compute_commit_hash
 from uro_core.domain.ids import new_id
+from uro_core.metering import LLMCall
 from uro_core.timeline.models import Campaign, Commit, World
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
@@ -184,7 +185,7 @@ class PostgresEventStore:
                 FROM chain
                 JOIN events e ON e.commit_id = chain.commit_id
                 WHERE e.event_type = 'BeatResolved'
-                ORDER BY chain.depth ASC, e.seq ASC
+                ORDER BY chain.depth ASC, e.seq DESC
                 LIMIT $2
                 """,
                 branch_id,
@@ -192,6 +193,25 @@ class PostgresEventStore:
             )
         # rows are newest-first; present oldest-first for chat reconstruction.
         return [BeatResolvedPayload(**r["payload"]) for r in reversed(rows)]
+
+    # --- metering (docs/07, D-14). Operational, prunable; not world truth. ---
+    # Note: on EventStore for Phase 0's single store; splits into a UsageRecorder
+    # port when the server lands (Phase 5).
+
+    async def record_llm_call(self, call: LLMCall) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO llm_calls "
+                "(call_id, stage_tag, model, prompt_hash, tokens_in, tokens_out, latency_ms) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                call.call_id,
+                call.stage_tag,
+                call.model,
+                call.prompt_hash,
+                call.tokens_in,
+                call.tokens_out,
+                call.latency_ms,
+            )
 
     # --- helpers ---
 

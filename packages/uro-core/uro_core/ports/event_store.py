@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent
+from uro_core.metering import LLMCall
 from uro_core.timeline.models import Campaign, Commit, World
 
 
@@ -34,4 +35,8 @@ class EventStore(Protocol):
         Reconstructed by walking the commit chain from the branch head — this is
         what makes a resumed session pick up from the log, not from process memory.
         """
+        ...
+
+    async def record_llm_call(self, call: LLMCall) -> None:
+        """Record one stage-tagged LLM call for usage metering (docs/07, D-14)."""
         ...

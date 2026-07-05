@@ -1,8 +1,10 @@
 """LLM provider PORT (docs/04).
 
-Phase 0 needs only streamed text completion. Structured output, embeddings, and
-usage metering arrive in Phase 1. Concrete adapters live in providers/adapters/
-and are banned from the core ring (D-27).
+Phase 0 needs only streamed text completion. Structured output and embeddings
+arrive in Phase 1; usage metering is captured from Phase 0 by the engine timing
+each call (docs/01 rule 5, D-14 — token counts join when this port grows a usage
+channel). Concrete adapters live in providers/adapters/ and are banned from the
+core ring (D-27).
 """
 
 from __future__ import annotations

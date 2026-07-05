@@ -111,10 +111,14 @@ def play(
                     break
                 if not intent:
                     continue
-                async for chunk in engine.run_beat_stream(campaign, PARTICIPANT, intent):
-                    sys.stdout.write(chunk)
-                    sys.stdout.flush()
-                sys.stdout.write("\n")
+                try:
+                    async for chunk in engine.run_beat_stream(campaign, PARTICIPANT, intent):
+                        sys.stdout.write(chunk)
+                        sys.stdout.flush()
+                    sys.stdout.write("\n")
+                except Exception as exc:
+                    sys.stdout.write("\n")
+                    typer.echo(f"beat failed ({exc}); nothing was saved — try again.", err=True)
         finally:
             await store.close()
 
