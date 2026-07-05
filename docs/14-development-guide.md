@@ -42,7 +42,7 @@ No SQLite mode (D-13): local *is* Postgres, identical to live.
 
 ## Conventions
 
-- **Import discipline enforced, not hoped for:** an `import-linter` contract forbids `uro_core.{domain,timeline,engines,pipeline,memory}` from importing `fastapi|asyncpg|httpx|uro_core.adapters` — the hexagonal rule from `01` as a CI failure.
+- **Import discipline enforced, not hoped for:** an `import-linter` contract forbids `uro_core.{domain,timeline,engines,pipeline,memory}` from importing `fastapi|asyncpg|httpx|uro_core.adapters|uro_core.providers.adapters|uro_core.rulesets.uro_basic` — the hexagonal rule from `01` as a CI failure. The last two targets are load-bearing (D-27): the core ring may import the provider/ruleset **ports** (`uro_core.providers`, `uro_core.rulesets`) but never the concrete impls, and a leaf-library ban alone misses them — the pure-Python ruleset built-in pulls in no bannable library at all.
 - IDs: ULID everywhere (`python-ulid`). Wall-clock timestamps UTC; never conflate with `world_time`.
 - `ruff` for lint + format (line length 100); `mypy --strict` on `domain/`, `timeline/`, `pipeline/`; lenient on adapters.
 - Async end-to-end; no blocking I/O outside adapters.

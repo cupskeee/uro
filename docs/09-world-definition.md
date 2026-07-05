@@ -30,14 +30,22 @@ name = "Ashfall"
 tone = ["grim", "low-magic", "political"]
 
 [content]                    # per-world, NOT per-user (owner decision)
-rating   = "mature"          # none | mild | mature | explicit
-enabled  = ["violence", "horror"]        # dimensions the world expects
-disabled = ["sexual_content"]            # probes test exactly these declarations
+rating   = "mature"          # intensity CEILING: none | mild | mature | explicit
+enabled  = ["violence", "horror"]        # content CATEGORIES in play (the dimension vocabulary)
+disabled = ["sexual_content"]            # categories the world excludes
+# Two axes: `rating` is how intense, enabled/disabled is which categories. A world runs at
+# `rating` intensity across its `enabled` categories. Recognized dimension vocabulary:
+# violence, horror, sexual_content, profanity (canonical set shared with the probe, `04`).
+# The content_rating probe (`04`) tests ENABLED categories at the `rating` tier and warns on
+# refusal; the engine does NOT probe or enforce `disabled` (that would be moderation — D-5);
+# `disabled` is a declaration consumed by prompt packs and consuming platforms.
 
-[calendar]                   # derives years/seasons/eras from the day counter (D-22)
+[calendar]                   # derives years & seasons from the day counter (D-22)
 days_per_year = 360
 seasons = ["thaw", "highsun", "harvest", "longdark"]
-epoch_label = "After the Sundering"
+epoch_label = "After the Sundering"   # single epoch for date rendering. Named narrative eras
+                                      # (e.g. history.seed_era below) are EVENT-driven, not arithmetic —
+                                      # a History-layer concept, not derived from the day counter.
 
 [ruleset]
 id = "uro-basic"             # or any installed plugin
@@ -72,6 +80,8 @@ parse & schema-validate  →  entity extraction  →  cross-linking  →  SUFFIC
                              entities out of       and seeds)
                              lore/*.md)
 ```
+
+`uro world validate` stops at the report. `uro world create` (import) goes further: it commits `WorldGenesis`, then — in the **same import commit, emitter `S`** — emits `PlaceCreated`/`FactionCreated`/`ActorCreated` for every authored (and AI-backfilled) seed entity and `EdgeAdded` for every authored/cross-linked relation (`12` whitelists `S` on all of these). So authored geography, actors, factions, and relations exist as timeline state *before* any History seeding runs. These are seed-independent (they're what the author wrote); History seeding (`H`, run by `uro world seed`) then layers seed-dependent dynasties/wars on top — which is why identical geography survives across different seeds (`03`, Phase 4 acceptance). A world that sets no `history.simulate_years` still has its authored entities, because they land at create, not seed.
 
 The **sufficiency check** scores the assembled world against a coverage rubric — the dimensions the pipeline actually needs at runtime:
 

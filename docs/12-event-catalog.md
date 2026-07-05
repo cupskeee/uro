@@ -13,7 +13,8 @@ seq          int
 event_type   str                  # from this catalog
 entity_refs  [entity_id]          # every entity the event touches (recall index)
 world_time   {day: int, segment: morning|afternoon|evening|night}   # absolute day since world epoch;
-                                                                    # world-pack calendar derives years/seasons/eras (D-22)
+                                                                    # world-pack calendar derives years & seasons (D-22).
+                                                                    # Named eras are event-driven (History layer), not arithmetic.
 caused_by    (below)
 payload      {v: 1, ...}          # versioned per event type
 ```
@@ -24,7 +25,7 @@ payload      {v: 1, ...}          # versioned per event type
 
 Each event type declares who may emit it — this is a hard validation rule at commit time and a core hallucination defense: the LLM-fed extractor can only ever *propose* types marked **X**; mechanical outcomes only ever come from the ruleset.
 
-Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects · **H** = History service · **A** = Actor service (off-screen sim) · **P** = pipeline core · **S** = system/API (import, seeding, admin, fork ops) · **E** = external resolver (Chronicler mode, D-25 — mechanical facts within the encounter it was handed; interpretive content distilled then gauntlet-validated).
+Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects · **H** = History service (seeding, adaptation, and mid-play thread consequences) · **A** = Actor service (off-screen sim) · **P** = pipeline core · **S** = system/API (import, seeding, admin, fork ops) · **E** = external resolver (Chronicler mode, D-25 — the encounter it was handed: the opening handoff/parking event, then the mechanical facts reported back; interpretive content distilled then gauntlet-validated).
 
 ## Catalog v0
 
@@ -34,8 +35,8 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | `WorldGenesis` | manifest snapshot, pack hash, seed | S | first commit of every world |
 | `PlaceCreated` | place entity, tier of detail | X H S | extractor may create Sites only |
 | `PlaceStateChanged` | place_id, changes{} | X H A | population, government ref, economy flavor |
-| `TerrainChanged` | place_id, description, effects[] | H S | the meteor crater; slow-layer physical change |
-| `PlaceDestroyed` | place_id, cause | H R S | |
+| `TerrainChanged` | place_id, description, effects[] | H R S | the meteor crater; slow-layer physical change. Mid-play, History emits it as a **thread's consequence-on-resolution** (`02`), `caused_by=player_action` — this is how a player-triggered cataclysm is recorded during a campaign (not extractor/pipeline) |
+| `PlaceDestroyed` | place_id, cause | H R S | as above — a thread consequence or ruleset effect, not extractor-proposed |
 
 ### Actors
 | event_type | payload | emit | notes |
@@ -60,7 +61,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 |---|---|---|---|
 | `FactionCreated` | faction entity (incl. kind=religion) | X H S | |
 | `FactionStateChanged` | faction_id, changes{} | X H A | goals, resources, territory refs |
-| `EdgeAdded` / `EdgeUpdated` / `EdgeRemoved` | src, rel_type, dst, weight, attrs | X H A P | ALL typed relations (`member_of`, `at_war_with`, `owns`, `knows`, …) — the graph is event-sourced too |
+| `EdgeAdded` / `EdgeUpdated` / `EdgeRemoved` | src, rel_type, dst, weight, attrs | X H A P S | ALL typed relations (`member_of`, `at_war_with`, `owns`, `knows`, …) — the graph is event-sourced too. `S` covers import: authored/cross-linked world-pack relations become `EdgeAdded` at `WorldGenesis` (`09`) |
 
 ### Claims & beliefs (epistemic layer)
 | event_type | payload | emit | notes |
@@ -96,7 +97,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Encounter (ruleset-driven)
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `EncounterStarted` | encounter_id, participants[], initiative[] | R E | E: encounter parked with an external resolver |
+| `EncounterStarted` | encounter_id, participants[], initiative[] | R E | E: the parking handoff that opens an external-resolver-owned encounter (Uro decides *to* park via `ModeChanged` P/R; `EncounterStarted` marks the boundary where authority passes to E) |
 | `EncounterTurnTaken` | encounter_id, actor_id, action, result, trace | R | trace = human-readable roll math for narration; external resolvers report bundles, not turns |
 | `EncounterEnded` | encounter_id, outcome | R E | E: outcome bundle — participants, witnesses, casualties, notable feats |
 
@@ -104,7 +105,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | event_type | payload | emit | notes |
 |---|---|---|---|
 | `HistorySeeded` | seed, simulated_years, era_summary | H | seeding also emits ordinary Created/Edge events; this is the header |
-| `AdaptationApplied` | trigger_refs, scope, summary | H | header for a fork/time-skip adaptation pass (OQ-8) |
+| `AdaptationApplied` | trigger_refs, scope, summary | H | header for an adaptation pass — at fork/time-skip AND after a major in-play event (OQ-8); ripple events carry `caused_by=history, pass=adaptation` |
 
 ## Rules of the catalog
 

@@ -61,6 +61,12 @@ forbidden_modules = [
     "asyncpg",
     "httpx",
     "uro_core.adapters",
+    # Concrete provider/ruleset impls — the core ring may import their PORTS
+    # (uro_core.providers, uro_core.rulesets) but never these impls. The leaf-lib
+    # bans above only catch providers incidentally (via httpx) and miss the pure-Python
+    # ruleset built-in entirely; these two entries close that structurally (F4/D-27).
+    "uro_core.providers.adapters",
+    "uro_core.rulesets.uro_basic",
 ]
 
 # ---------------------------------------------------------------- pytest

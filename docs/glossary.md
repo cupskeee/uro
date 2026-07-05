@@ -14,7 +14,7 @@ One line per term; the linked doc is the authority. Terms are used *exactly* thi
 | **Branch** | A named head pointer on a world's commit chain; campaigns play on branches | `03` |
 | **Campaign** | A play-through: party + branch + ruleset config; writes to its branch, world outlives it | `02` |
 | **Capability probe** | Per-world test suite verifying bound models can deliver the world's declared requirements (incl. content rating) | `04` |
-| **Chronicle** | The human-readable projection of a world's full event history across campaigns (the report's "Lore Wall") | `02` |
+| **Chronicle** | The human-readable projection of a **branch's** history across the campaigns in its lineage — genesis to branch head (the report's "Lore Wall"); divergent branches never see each other's post-fork events | `02` |
 | **Chronicler mode** | Integration posture where an external game owns its domain and Uro is the world-memory/consequence layer around it (D-25) | `00`, `06` |
 | **Claim** | A statement with engine-level truth (`true/false/unknown`) plus per-actor beliefs; unifies the report's facts and rumors | `02` |
 | **Commit** | A parent-linked, hash-chained batch of events; the timeline's unit of history | `03` |
@@ -49,4 +49,4 @@ One line per term; the linked doc is the authority. Terms are used *exactly* thi
 | **Trust model** | The evidence hierarchy for canon: state > narrator prose > dialogue (testimony) > player text (never evidence) | `13` |
 | **World** | The container universe: definition + timeline; content settings live here | `02` |
 | **World pack** | The portable directory/archive defining a world (manifest, lore, seeds, prompts) | `09` |
-| **World time** | In-fiction time: absolute day counter + segment; the world-pack calendar derives years/seasons/eras (D-22); never wall-clock | `12` |
+| **World time** | In-fiction time: absolute day counter + segment; the world-pack calendar derives years & seasons (D-22); named eras are event-driven, not arithmetic; never wall-clock | `12` |

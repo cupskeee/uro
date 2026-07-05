@@ -19,7 +19,7 @@ The container. Definition-level data from the world pack (name, cosmology, magic
 Hierarchical geography: `Region ⊃ Settlement ⊃ Site` (a tavern is a Site in a Settlement in a Region). Terrain, climate, resources, population, government ref (→ Faction/Actor). **Physical state is mutable via events** — `PlaceDestroyed`, `TerrainChanged` (the meteor crater) are ordinary timeline events on the slow-changing layer.
 
 ### Actor (NPC or PC)
-One type for all characters; PCs are actors flagged `player_controlled` and bound to a campaign. Key design point — **promotion tiers**, because "every NPC should have a profile, but not too seriously at first" and any extra can become important:
+One type for all characters; PCs are actors bound to a campaign. "Is this actor a PC?" is **not** a global flag on the actor — it's answered per-branch by the campaign's `PCBound`/`PCReleased` history (`12`), because the same `actor_id` can be a PC on one fork and an ordinary NPC on another (the meteor test's retired wizard, `03`). Like all actor state, it's "state at a point on a branch," never a standalone property. Key design point — **promotion tiers**, because "every NPC should have a profile, but not too seriously at first" and any extra can become important:
 
 | Tier | Name | Contents | Created by |
 |---|---|---|---|
@@ -56,7 +56,7 @@ A play-through: branch ref (its timeline), party (PC actor refs), current scene/
 Ephemeral-ish play context: place ref, present actors, mode (`freeroam | encounter | downtime`), open hooks. Scenes are reconstructable from events; stored as a projection for speed.
 
 ### Chronicle (the "Lore Wall")
-Not a stored entity — a **projection** over the event log: the human-readable history of a world across all its campaigns ("every action, NPC, faction reputation, and quest outcome"). Exposed via API for platforms to render; exported in packs. Cross-session continuity falls out of the architecture rather than being a feature.
+Not a stored entity — a **projection** over the event log, materialized **per branch** (`08`: `?branch=B`): the human-readable history along that branch's lineage — every campaign from world genesis up to the branch head ("every action, NPC, faction reputation, and quest outcome"). Because branches don't merge (`03`), divergent branches keep separate chronicles and never see each other's post-fork events: a what-if branch forked before the meteor never chronicles the meteor; sibling forks are mutually invisible. "Across all its campaigns" means *along the lineage*, not world-globally. Exposed via API for platforms to render; exported in packs. Cross-session continuity falls out of the architecture rather than being a feature.
 
 ## Relationships (the graph)
 

@@ -71,6 +71,7 @@ The phases prove the *machine* works; nothing in them proves the *bet* — that 
 - `uro-server`: full REST surface, WebSocket play channel, SSE beats, token auth mode.
 - Session/participant model with `SoloArbiter`; CLI HTTP-client mode.
 - Export/import packs (world, branch-at-commit) with hash-chain verification.
+- **Off-screen belief/rumor propagation** (the war-story ripple depends on it; it is scheduled here, not assumed): Actor-service simulate-on-observation emits `BeliefChanged` fan-out along contact edges with per-hop confidence/detail decay, **tier-agnostic** so an ordinary downstream NPC can acquire and retell a rumor (OQ-4). This is also the roadmap's first build of off-screen agenda resolution.
 - **Proof of Chronicler mode:** the outcome-bundle endpoint, bundle schema v0 (participants, witnesses, casualties, notable feats, loot, duration), rule-based distillation into the standard gauntlet — and a ~50-line toy auto-battler script as the external "game."
 
 **Acceptance:** two CLI clients (two tokens) attached to one campaign both receive the same streamed beats; a world exported from one machine imports and continues on another. Plus **the war-story test**: a toy external battle in which the PC's spectacular feat has surviving enemy witnesses — beats later, a tavern NPC retells a distorted version of it, with the belief chain traceable back to those witnesses; re-run the same battle with zero survivors and nobody ever mentions it.

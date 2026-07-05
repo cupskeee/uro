@@ -63,7 +63,7 @@ Per owner feedback: when a world declares requirements (e.g. mature content enab
 |---|---|---|
 | `structured_output` | Schema compliance rate over N tries | planner, extractor (hard requirement) |
 | `context_window` | Declared vs. usable effective context | all roles |
-| `content_rating` | Generates test prompts at the world's declared rating tiers (violence / horror / sexual content / profanity), scores refusal vs. compliance | narrator, dialogue |
+| `content_rating` | Generates test prompts for each **enabled** category (from the canonical dimension set: violence / horror / sexual_content / profanity, `09`) at the world's `rating` intensity, scores refusal vs. compliance. `disabled` categories are not probed — the engine doesn't enforce suppression (that's moderation, D-5) | narrator, dialogue |
 | `instruction_following` | Style-pack adherence (tone, tense, POV) | narrator, dialogue |
 | `consistency` | Given seeded facts, does output contradict them | narrator |
 | `latency` | p50/p95 per role | informational |
@@ -77,7 +77,7 @@ Scoring (D-24): probe outputs are graded by the **judge role** against per-probe
 Context assembly for any beat combines:
 
 1. **Structured recall (primary):** direct state queries — present actors' profiles/beliefs, place state, active threads, claims linked to entities on stage. The knowledge graph answers "what is true" *precisely*; this always beats semantic search when refs exist.
-2. **Semantic recall (secondary):** pgvector search over embedded memories (chronicle entries, T3 actor journals, past scene synopses) for "what is *relevant*" — thematic echoes, old promises, foreshadowing.
+2. **Semantic recall (secondary):** pgvector search over embedded memories (chronicle entries, T3 actor journals, past scene synopses) for "what is *relevant*" — thematic echoes, old promises, foreshadowing. (The `embedder` role also maintains a *separate* corpus of entity name/alias strings for entity resolution — see `07` `entity_index` and `13`; same role, different index.)
 3. **Recency window:** last few beats verbatim.
 4. **Compression:** summarizer role periodically folds old beats into synopses (per campaign) and journal entries (per T3 actor); originals stay in the log — compression affects *recall*, never *truth*.
 

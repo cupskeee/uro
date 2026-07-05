@@ -11,7 +11,8 @@ class BeatState(BaseModel):
     # identity
     beat_id: ULID
     campaign_id: ULID
-    branch_head: CommitId              # the commit this beat builds on
+    branch_head: CommitId              # the commit this beat builds on; RE-ANCHORS if an
+                                       #   off-screen-sim sub-commit lands mid-beat (see below)
     dry_run: bool = False
     # input
     intent: Intent                     # {participant_id, pc_actor_id, text}
@@ -32,13 +33,13 @@ class BeatState(BaseModel):
 ```python
 class Stage(Protocol):
     name: str                                       # == stage_tag for metering
-    async def run(self, s: BeatState) -> BeatState  # pure w.r.t. world state; ONLY [6] commits
+    async def run(self, s: BeatState) -> BeatState  # no stage commits the beat's own events except [6]
 ```
 
 Stage graphs are assembled per mode (`05`). Rules:
 
-- **Atomicity:** nothing reaches the event store except through the commit stage, in one transaction with the outbox write. A failed beat commits nothing — streamed prose the player already saw simply never became canon (client marks the beat failed/retryable).
-- **Concurrency:** at most **one in-flight beat per campaign**, enforced by the engine after `TurnArbiter` admission (`08`). Different campaigns/branches are fully concurrent.
+- **Atomicity:** the beat's *own* events reach the store only through the commit stage [6], in one transaction with the outbox write. A failed beat commits nothing of its own — streamed prose the player already saw simply never became canon (client marks the beat failed/retryable). One carve-out: the Actor service's simulate-on-observation may write a **separate, preceding** commit mid-beat (`05`, `03`) — atomic in its own right, not the beat's events.
+- **Concurrency:** at most **one in-flight beat per campaign**, enforced by the engine after `TurnArbiter` admission (`08`). Different campaigns/branches are fully concurrent. This rule stops *other* writers moving the head — but the beat's own off-screen-sim sub-commit does move it, so the beat re-anchors `branch_head` onto that sub-commit before proceeding to [6].
 - **Plan validation (pre-narration, deterministic, no LLM):** between [2] and [3] the plan is checked against state and ruleset: referenced targets must exist, presupposed facts must not be `false`, and if the intent matches a ruleset-declared **trigger category** the plan must invoke that affordance (D-21). Violations re-ask the planner. This is the *only* point where replanning happens — nothing has streamed yet.
 - **Post-narration validation is downgrade-only:** problems found at [5] can only downgrade a proposal (claim → belief) or drop it with a logged warning. No replanning, no prose regeneration after streaming begins — the player has already read it.
 - **Time:** the planner proposes `time_cost` (in segments); the commit stage emits `TimeAdvanced` when > 0.
@@ -61,7 +62,7 @@ Enforcement:
 - **PC assertions are testimony**, exactly like NPC dialogue: "I tell them I'm the rightful king" may yield a claim at `truth=unknown` plus listener beliefs sourced to the PC — never `truth=true`.
 - **Provenance check:** a `truth=true` proposal must carry an evidence span from *narrator* output (not dialogue, not intent) and must not merely restate something a character asserted this beat.
 - **Consequence gating (D-21):** proposals touching protected state — item transfers into the party's possession, `truth=true` claims, faction-level edges, changes to T2+ actors — require an attached supporting `CheckResult`/`Effect` or an existing-state basis, else downgrade.
-- The narrator itself is injectable (players can say things engineered to steer it); provenance + consequence gating are why that only ever buys flavor, never canon.
+- The narrator itself is injectable (players can say things engineered to steer it); provenance + consequence gating are why that buys flavor and at most low-stakes, ungated state — never *protected* canon (`truth=true`, party loot, faction edges, T2+ actors). The bounded residue is honest: a phrasing that nudges a T1 extra's disposition can commit as an ordinary `ActorStateChanged`, i.e. low-stakes canon, because the trigger list has gaps (D-21) and gating only guards protected state. That is an accepted leak, not a hole the docs pretend closed.
 
 ## Structured output policy
 
@@ -88,7 +89,7 @@ Default sampling per role (deployment-overridable): narrator 0.9 · dialogue 0.8
 }
 ```
 
-`mechanics[].affordance` must name an affordance the bound ruleset declared (`06`) — unknown affordances fail validation, which is how the planner is fenced into the ruleset's vocabulary. Conversely, if the intent matches an affordance's declared **trigger category**, the plan must invoke it — enforced deterministically at plan validation (D-21). The rules cannot be bypassed by phrasing.
+`mechanics[].affordance` must name an affordance the bound ruleset declared (`06`) — unknown affordances fail validation, which is how the planner is fenced into the ruleset's vocabulary. Conversely, if the intent matches an affordance's declared **trigger category**, the plan must invoke it — enforced deterministically at plan validation (D-21). Caveat on the guarantee: plan validation is deterministic and sees only the planner's *own* structured paraphrase (`intent_class`/`targets`), not raw intent — so a misclassified action can dodge a trigger. Consequence gating is the independent backstop, but it only guards **protected state**. Net: *high-stakes* rules can't be bypassed by phrasing; low-stakes state the trigger list misses is a bounded, accepted leak (Trust model above, D-21) — not flavor, but not protected canon either.
 
 ## ProposedEvent v0 (extractor output)
 
@@ -96,13 +97,17 @@ Default sampling per role (deployment-overridable): narrator 0.9 · dialogue 0.8
 {
   "event_type": "ClaimRecorded",          // must be X-whitelisted (12-event-catalog.md)
   "payload": { ... },                     // must validate against that type's payload model
-  "confidence": 0.0-1.0,                  // < 0.5 → dropped, logged
+  "confidence": 0.0-1.0,                  // extractor's STATE-WORTHINESS confidence (drop gate); < 0.5 → dropped.
+                                          //   Distinct from any payload confidence — e.g. a BeliefChanged
+                                          //   payload's belief-strength, which is never gated by this field.
   "evidence": "verbatim span from the GENERATED prose that grounds this (never player text)",
   "resolution": { "ref": "actor:..." }    // *Created only: matched existing entity, or {"new": true}
 }
 ```
 
 Validation gauntlet, in order: emitter whitelist → payload schema → tier ceiling (ActorCreated ≤ T1, PlaceCreated = Site only) → **entity resolution** (`*Created` proposals matched against existing entities by name, alias, and embedding; a plausible match links instead of creating — the anti-duplicate contract, with `EntityMerged` (`12`) as the after-the-fact correction) → **provenance & consequence gating** (trust model above) → contradiction check against `truth=true` claims and hard state. Everything past this point is downgrade-or-drop, never replan.
+
+The embedding leg of entity resolution matches against a **dedicated entity index** — the embedded name/aliases/one-line descriptor of every existing entity — NOT the memory-recall corpus (`04`, `07`). The candidate's name is embedded on the fly and kNN'd against that index; only after the proposal is accepted is the new entity added to it. This is what lets resolution dedup even a world-pack-seeded entity that has never been narrated (so has zero memory chunks). Maintained by a side-effecting projector on `ActorCreated`/`PlaceCreated`/`FactionCreated`/`EntityAliasAdded`; forking copies the membership rows and never re-embeds (mirrors `memory_index`, `07`).
 
 ## Prompt template contracts
 
@@ -133,6 +138,6 @@ Placeholder targets (see `11` placeholder constants) — a design constraint, no
 | Schema invalid after re-asks | [5] | commit flavor-only, warn |
 | Contradiction unresolved | [5] | downgrade/drop proposal, warn |
 | Ruleset exception | [3] | beat fails (ruleset bugs must be loud, never narrated around) |
-| Commit conflict (branch head moved) | [6] | impossible by concurrency rule; assert & fail loudly |
+| Commit conflict (branch head moved by *another* writer) | [6] | impossible by concurrency rule; assert & fail loudly. The beat's *own* off-screen-sim sub-commit is expected head movement, not a conflict — the beat re-anchors onto it (see Concurrency) rather than failing |
 
 A failed beat returns `BeatFailure {stage, reason, retryable}` over the API; the CLI renders it and offers retry (which is a brand-new beat — there is no partial-beat resume).

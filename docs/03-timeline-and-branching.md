@@ -44,7 +44,12 @@ This scenario is the roadmap Phase 2 acceptance test (`10-roadmap.md`).
 
 ## History adaptation across the fork
 
-Physical/political changes must propagate into *future generation*, not just sit in the log (owner feedback on both World and History engines). Mechanically: at fork/continue time and after major events, the History service runs an **adaptation pass** — query claims/threads invalidated or newly implied by recent events ("Vel's market festival thread → dead"; "refugee crisis thread → spawned"), commit the adjustments as events. Generation then just reads current state; it doesn't need to know anything "changed."
+Physical/political changes must propagate into *future generation*, not just sit in the log (owner feedback on both World and History engines). Two distinct writes here, easy to conflate:
+
+1. **The direct consequence** of a player action — the meteor itself — is emitted by the History service as a **thread's consequence-on-resolution** (`02`, `12`): when the Saltborn ritual thread resolves, History commits `TerrainChanged`/`PlaceDestroyed(Vel)` with `caused_by=player_action`. This is the mid-play emitter path the meteor needs; it is *not* the extractor or pipeline (barred by the `12` whitelist), and it happens *during* Campaign A, before the marker.
+2. **The ripple** — at fork/continue time and after such major in-play events, the History service runs an **adaptation pass** (`AdaptationApplied`, `caused_by=history, pass=adaptation`): query claims/threads invalidated or newly implied ("Vel's market festival thread → dead"; "refugee crisis thread → spawned"), commit the adjustments, scoped to ~2 edge-hops (OQ-8).
+
+Generation then just reads current state; it doesn't need to know anything "changed."
 
 ## Replayability with different seeds
 
@@ -52,4 +57,4 @@ A world pack + a seed deterministically drives procedural steps (history seeding
 
 ## Storage sketch
 
-See `07-persistence-and-events.md` for DDL. Core tables: `events` (append-only), `commits`, `branches`, `markers`, `snapshots`, plus projection tables. Hash-chaining commits (`commit_hash = h(parent_hash, events)`) gives integrity cheaply and makes export packs verifiable. Fork cost = a branch ref + a copy-on-fork projection build from the nearest snapshot (`07`); embedding vectors are shared by content hash and never recomputed.
+See `07-persistence-and-events.md` for DDL. Core tables: `events` (append-only), `commits`, `branches`, `markers`, `snapshots`, plus projection tables. Hash-chaining commits (`commit_hash = h(parent_hash, events)`) gives integrity cheaply and makes export packs verifiable (world packs to genesis; snapshot-rooted branch packs from their trust-anchored root forward — `07`). Fork cost = a branch ref + a copy-on-fork projection build from the nearest snapshot (`07`); embedding vectors are shared by content hash and never recomputed.

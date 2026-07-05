@@ -22,6 +22,7 @@ class Ruleset(Protocol):
     # Encounter mode (combat)
     def start_encounter(self, ctx: EncounterCtx, rng: Rng) -> EncounterState
     def legal_actions(self, state: EncounterState, actor_id: str) -> list[ActionSpec]
+    def npc_action(self, state: EncounterState, actor_id: str, rng: Rng) -> Action   # monster/NPC chooser
     def resolve_action(self, state: EncounterState, action: Action, rng: Rng) -> (EncounterState, list[Effect])
     def is_over(self, state: EncounterState) -> EncounterOutcome | None
 ```
@@ -32,6 +33,7 @@ Contract notes:
 - **No LLM calls inside rulesets.** Rules are code. The pipeline narrates *around* mechanical results; the ruleset produces `CheckResult`/`Effect` data with human-readable trace fields ("rolled 16 + 3 vs DC 15") that the narrator role weaves into prose.
 - **Affordances are the coupling point** with generation: the planner is prompted with the ruleset's declared affordances (`persuade → CHA check`, `attack → encounter`, `sneak → DEX check`…) so it can *invoke* mechanics without *knowing* the math. Turn-based structure only ever enters through `start_encounter` — free-roam stays turnless (owner requirement).
 - **Triggers make affordances mandatory, not just available (D-21):** each affordance declares trigger categories — intent/risk classes that *must* invoke it (e.g. `persuade` triggers on any attempt to change an NPC's disposition or intent). Plan validation enforces triggers deterministically (`13-contracts.md`), and consequence gating backstops it at commit: protected-state changes without mechanics backing get downgraded. "I persuade the king to hand me the crown" cannot succeed by phrasing alone.
+- **Who chooses each turn's action (D-26):** the pipeline drives the initiative loop; on a PC's turn the action comes from the player (`encounter_action`, `08`); on an NPC's turn it comes from `npc_action`. Either way it runs through `resolve_action` and is recorded as `EncounterTurnTaken` (emitter R, `12`). NPC selection lives in the **ruleset as deterministic code**, not an LLM planner — because Phase 3 requires seeded-RNG, recorded-response replay, and dry-run (`10`, `05`), which a live LLM chooser would break. (The "no LLM in rulesets" rule alone wouldn't forbid a *planner*-side chooser; the determinism requirement is what settles it.)
 - Effects map to domain events (`ActorDamaged`, `ItemTransferred`, `EncounterEnded`) so mechanical outcomes are timeline citizens like everything else.
 - The world pack declares `ruleset = "id@version"` + config; a campaign snapshots the ruleset version at creation so worlds don't break under it.
 
@@ -44,6 +46,8 @@ A deliberately minimal, original d20-flavored system — enough to exercise ever
 - HP, simple AC, initiative = d20+DEX; encounter turns: move + action; attack = check vs. AC, damage dice by weapon tier.
 - Level 1–5 progression, flat proficiency bonus.
 - Original text/terminology (d20-*mechanics* are uncopyrightable; we still avoid replicating 5e's expression — if fuller D&D compatibility is ever wanted, the 5.1 SRD is CC-BY-4.0 and can become a *separate* `srd51` plugin with attribution).
+
+Caveat on generality: one built-in validates *playability*, not *game-agnosticism*. A port shaped against only Uro Basic will quietly inherit d20 assumptions (ability-score sheets, `CheckResult`/`EncounterState` shapes) until a structurally different ruleset is attempted — the real generality test, tracked as OQ-13. A narrate-only null ruleset does **not** count (it exercises no encounter path, exactly where d20 leaks hide).
 
 Uro Basic doubles as the reference implementation and the test fixture for the port.
 

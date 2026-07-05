@@ -64,7 +64,7 @@ uro campaign new ashfall --branch main --pc wizard.yaml
 uro play <campaign>                       # interactive loop (rich TUI-lite: streamed prose + status line)
 uro dry-run <campaign> "I kick the door"  # pipeline without commit; prints proposed events
 uro branch fork ashfall --at campaign-a-end --name aftermath
-uro log <world> [--branch B]              # chronicle view, git-log style
+uro log <world> [--branch B]              # chronicle view, git-log style (defaults to main; per-branch lineage, never a cross-branch merge — `02`)
 uro export world ashfall -o ashfall.uwp
 uro usage <campaign>
 ```

@@ -46,6 +46,8 @@ player intent
 
 Stages are composable units behind a common interface (`async run(BeatState) -> BeatState`; full contract, schemas, and failure semantics in `13-contracts.md`), assembled into a graph per mode — encounter beats skip scene dressing; downtime beats replace [2]–[4] with simulation passes. Between [2] and [3] sits **plan validation** — deterministic, no LLM: targets must exist, presupposed facts must not be false, ruleset trigger categories must be honored (D-21) — with a planner re-ask on failure; it is the only point where replanning is possible, because nothing has streamed yet. Streaming: [4] streams to the client while [5] runs on the buffered output, so perceived latency ≈ narration latency.
 
+[4] is itself a small fan-out: scene dressing (on entry), one dialogue call per speaking actor, and outcome prose. These sub-calls are **mutually independent** — each renders solely from `BeatState` (plan, mechanics, recall, recent_beats via the strict-undefined template contracts in `13`), never from a sibling call's output — which is exactly why multi-speaker dialogue calls run concurrently (`13` latency budget) and each chunk can stream as produced. The client-visible interleaving of concurrent chunks is a rendering choice, pinned when multi-speaker beats are built (Phase 3-era), not now (`05` is "not a fixed flow", OQ-2).
+
 ## Promotion rules (ephemeral vs. canonical)
 
 The report's key insight, kept and sharpened. Generated prose constantly invents things; only some become world truth:
@@ -61,7 +63,7 @@ The extractor proposes; the gauntlet (`13-contracts.md`) disposes: whitelist, sc
 
 ## Off-screen simulation (simulate-on-observation)
 
-When a place/actor is observed after a gap, the Actor service resolves what T3 agents' agendas produced in the interim (structured, cheap: agenda + elapsed time + world events → outcome events), commits it, *then* the beat proceeds against updated state. "The blacksmith's daughter has been missing since last season" costs nothing until someone walks into the smithy. Depth/cadence is OQ-4.
+When a place/actor is observed after a gap, the Actor service resolves what T3 agents' agendas produced in the interim (structured, cheap: agenda + elapsed time + world events → outcome events), commits it **as a separate, preceding commit** (`03`) — the beat then re-anchors `branch_head` onto it (`13`) and proceeds against updated state. "The blacksmith's daughter has been missing since last season" costs nothing until someone walks into the smithy. Depth/cadence is OQ-4.
 
 ## Dry-run mode (the "testing sandbox")
 

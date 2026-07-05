@@ -13,8 +13,8 @@ uro/
 │   │       ├── timeline/      # event store, snapshots, branching
 │   │       ├── engines/       # world, history, actor, narration services
 │   │       ├── pipeline/      # beat pipeline: stages, planner, canonicalizer
-│   │       ├── rulesets/      # ruleset port + built-in "Uro Basic"
-│   │       ├── providers/     # LLM provider port + adapters + auth strategies
+│   │       ├── rulesets/      # ruleset PORT (+ auth); built-in impl in rulesets/uro_basic/
+│   │       ├── providers/     # provider PORT + auth strategies; concrete adapters in providers/adapters/
 │   │       ├── memory/        # retrieval: embeddings, recall triggers
 │   │       ├── worldpack/     # world definition parsing, import, sufficiency check
 │   │       ├── ports/         # persistence & event-bus interfaces (no impl)
@@ -26,7 +26,7 @@ uro/
 ```
 
 - **Runtime:** Python 3.12+, FastAPI, Pydantic v2. Async throughout (the workload is I/O-bound LLM orchestration).
-- **Dependency rule (hexagonal):** `uro_core.domain`, `timeline`, `engines`, `pipeline` import **no** framework or driver code — no FastAPI, no SQLAlchemy/psycopg, no provider SDKs. They depend only on `ports/`. Adapters implement ports. `uro-server` and `uro-cli` wire adapters to the core. This is what keeps the engine embeddable and every infrastructure choice swappable.
+- **Dependency rule (hexagonal):** `uro_core.domain`, `timeline`, `engines`, `pipeline`, `memory` import **no** framework or driver code — no FastAPI, no SQLAlchemy/psycopg, no provider SDKs. They depend only on **port interfaces** (persistence/bus in `ports/`, the provider port in `providers/`, the ruleset port in `rulesets/`), never on concrete adapters (`adapters/`, `providers/adapters/`, `rulesets/uro_basic/`). Adapters implement ports. `uro-server` and `uro-cli` wire adapters to the core. This is what keeps the engine embeddable and every infrastructure choice swappable — and it's enforced in CI by import-linter (`14`, D-27), including the provider/ruleset sub-boundary that a leaf-library ban alone would miss.
 - **Preferred-language note:** C++/C# were considered and deferred for MVP velocity; the hexagonal boundary means a future port rewrites adapters and transport, not the design.
 
 ## Subsystem map
