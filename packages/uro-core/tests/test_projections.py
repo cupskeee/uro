@@ -39,6 +39,28 @@ async def test_actor_projection_and_lookup(store: PostgresEventStore) -> None:
     assert [a.actor_id for a in await store.list_actors(branch)] == ["a:mera"]
 
 
+async def test_find_actor_by_name_precedence_and_alias_casing(store: PostgresEventStore) -> None:
+    # Exact name match must beat a higher-tier alias match, and aliases resolve
+    # case-insensitively (review Phase-1.1).
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            actor_created(actor_id="a:mera", name="Mera", tier=1),
+            actor_created(actor_id="a:bob", name="Bob", tier=3, aliases=["Mera"]),
+        ],
+    )
+    # a:bob is higher tier and aliases 'Mera', but a:mera is the exact name match → wins.
+    assert (await store.find_actor_by_name(branch, "Mera")).actor_id == "a:mera"
+
+    await store.append_beat(
+        branch, [actor_created(actor_id="a:weck", name="Weck", tier=1, aliases=["The Old Fisher"])]
+    )
+    # alias stored mixed-case, queried lower-case → still resolves.
+    hit = await store.find_actor_by_name(branch, "the old fisher")
+    assert hit is not None and hit.actor_id == "a:weck"
+
+
 async def test_actor_promotion_updates_tier(store: PostgresEventStore) -> None:
     branch = await _branch(store)
     await store.append_beat(branch, [actor_created(actor_id="a:weck", name="Old Weck", tier=1)])

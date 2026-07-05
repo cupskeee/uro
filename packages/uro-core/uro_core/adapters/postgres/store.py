@@ -240,8 +240,10 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT actor_id, name, tier, role, aliases FROM proj_actors "
-                "WHERE branch_id = $1 AND (lower(name) = lower($2) OR $2 = ANY(aliases)) "
-                "ORDER BY tier DESC LIMIT 1",
+                "WHERE branch_id = $1 AND (lower(name) = lower($2) "
+                "  OR lower($2) = ANY(SELECT lower(a) FROM unnest(aliases) AS a)) "
+                # exact name beats an alias-only match; then tier; actor_id is a stable tiebreak.
+                "ORDER BY (lower(name) = lower($2)) DESC, tier DESC, actor_id ASC LIMIT 1",
                 branch_id,
                 name,
             )
@@ -270,7 +272,8 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT claim_id, statement, subject_refs, truth, origin FROM proj_claims "
-                "WHERE branch_id = $1 AND subject_refs @> ARRAY[$2]::text[]",
+                "WHERE branch_id = $1 AND subject_refs @> ARRAY[$2]::text[] "
+                "ORDER BY claim_id",  # deterministic — recall/replay must be reproducible
                 branch_id,
                 entity_ref,
             )
@@ -280,7 +283,8 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT actor_id, claim_id, confidence, learned_from FROM proj_beliefs "
-                "WHERE branch_id = $1 AND actor_id = $2",
+                "WHERE branch_id = $1 AND actor_id = $2 "
+                "ORDER BY claim_id",  # deterministic — recall/replay must be reproducible
                 branch_id,
                 actor_id,
             )

@@ -109,7 +109,7 @@ class ActorCreatedPayload(BaseModel):
     v: int = 1
     actor_id: str
     name: str
-    tier: int = 1  # T0 extra … T3 agent (docs/02); extractor creates ≤ T1
+    tier: int = Field(default=1, ge=0, le=3)  # T0 extra … T3 agent (docs/02)
     role: str = ""
     aliases: list[str] = Field(default_factory=list)
 
@@ -117,8 +117,8 @@ class ActorCreatedPayload(BaseModel):
 class ActorPromotedPayload(BaseModel):
     v: int = 1
     actor_id: str
-    from_tier: int
-    to_tier: int
+    from_tier: int = Field(ge=0, le=3)
+    to_tier: int = Field(ge=0, le=3)
     reason: str
 
 
@@ -142,7 +142,9 @@ class BeliefChangedPayload(BaseModel):
     v: int = 1
     actor_id: str
     claim_id: str
-    confidence: float  # 0..1, how strongly the actor holds the claim
+    # how strongly the actor holds the claim. Bounded at the sanctioned mint path so
+    # extractor-produced garbage (>1, <0, NaN, inf) is rejected before reaching state.
+    confidence: float = Field(ge=0.0, le=1.0)
     learned_from: str | None = None
 
 
