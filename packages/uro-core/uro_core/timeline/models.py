@@ -32,3 +32,29 @@ class Campaign(BaseModel):
     campaign_id: str
     world_id: str
     branch_id: str
+
+
+# --- Projection read-models (docs/02, 07). Materialized state at a branch head. ---
+
+
+class ActorView(BaseModel):
+    actor_id: str
+    name: str
+    tier: int
+    role: str
+    aliases: list[str]
+
+
+class ClaimView(BaseModel):
+    claim_id: str
+    statement: str
+    subject_refs: list[str]
+    truth: str  # true | false | unknown
+    origin: str
+
+
+class BeliefView(BaseModel):
+    actor_id: str
+    claim_id: str
+    confidence: float
+    learned_from: str | None

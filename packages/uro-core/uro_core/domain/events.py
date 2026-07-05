@@ -15,6 +15,7 @@ from uro_core.domain.ids import new_id
 
 Segment = Literal["morning", "afternoon", "evening", "night"]
 CausedByKind = Literal["player_action", "agenda", "history", "ruleset", "system"]
+Truth = Literal["true", "false", "unknown"]  # engine-level ground truth of a claim (docs/02)
 
 
 class WorldTime(BaseModel):
@@ -89,5 +90,138 @@ def beat_resolved(
             intent_text=intent_text,
             narration=narration,
             synopsis=synopsis,
+        ).model_dump(),
+    )
+
+
+# --- Epistemic layer: actors, claims, beliefs (docs/02, 12) ---
+#
+# Phase 1 subset of the catalog. These are the events the extractor proposes and
+# that drive the projections structured recall reads back. `_default_cause` keeps
+# constructors ergonomic while letting the pipeline pass a real player_action cause.
+
+
+def _default_cause(caused_by: CausedBy | None) -> CausedBy:
+    return caused_by or CausedBy(kind="system")
+
+
+class ActorCreatedPayload(BaseModel):
+    v: int = 1
+    actor_id: str
+    name: str
+    tier: int = 1  # T0 extra … T3 agent (docs/02); extractor creates ≤ T1
+    role: str = ""
+    aliases: list[str] = Field(default_factory=list)
+
+
+class ActorPromotedPayload(BaseModel):
+    v: int = 1
+    actor_id: str
+    from_tier: int
+    to_tier: int
+    reason: str
+
+
+class ClaimRecordedPayload(BaseModel):
+    v: int = 1
+    claim_id: str
+    statement: str
+    subject_refs: list[str] = Field(default_factory=list)
+    truth: Truth = "unknown"
+    origin: str = ""  # what produced it (event/actor ref, or "narration")
+
+
+class ClaimTruthChangedPayload(BaseModel):
+    v: int = 1
+    claim_id: str
+    truth: Truth
+    cause: str = ""
+
+
+class BeliefChangedPayload(BaseModel):
+    v: int = 1
+    actor_id: str
+    claim_id: str
+    confidence: float  # 0..1, how strongly the actor holds the claim
+    learned_from: str | None = None
+
+
+def actor_created(
+    *,
+    actor_id: str,
+    name: str,
+    tier: int = 1,
+    role: str = "",
+    aliases: list[str] | None = None,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ActorCreated",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=ActorCreatedPayload(
+            actor_id=actor_id, name=name, tier=tier, role=role, aliases=aliases or []
+        ).model_dump(),
+    )
+
+
+def actor_promoted(
+    *, actor_id: str, from_tier: int, to_tier: int, reason: str, caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ActorPromoted",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=ActorPromotedPayload(
+            actor_id=actor_id, from_tier=from_tier, to_tier=to_tier, reason=reason
+        ).model_dump(),
+    )
+
+
+def claim_recorded(
+    *,
+    claim_id: str,
+    statement: str,
+    subject_refs: list[str] | None = None,
+    truth: Truth = "unknown",
+    origin: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    refs = subject_refs or []
+    return DomainEvent(
+        event_type="ClaimRecorded",
+        entity_refs=[claim_id, *refs],
+        caused_by=_default_cause(caused_by),
+        payload=ClaimRecordedPayload(
+            claim_id=claim_id, statement=statement, subject_refs=refs, truth=truth, origin=origin
+        ).model_dump(),
+    )
+
+
+def claim_truth_changed(
+    *, claim_id: str, truth: Truth, cause: str = "", caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ClaimTruthChanged",
+        entity_refs=[claim_id],
+        caused_by=_default_cause(caused_by),
+        payload=ClaimTruthChangedPayload(claim_id=claim_id, truth=truth, cause=cause).model_dump(),
+    )
+
+
+def belief_changed(
+    *,
+    actor_id: str,
+    claim_id: str,
+    confidence: float,
+    learned_from: str | None = None,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="BeliefChanged",
+        entity_refs=[actor_id, claim_id],
+        caused_by=_default_cause(caused_by),
+        payload=BeliefChangedPayload(
+            actor_id=actor_id, claim_id=claim_id, confidence=confidence, learned_from=learned_from
         ).model_dump(),
     )

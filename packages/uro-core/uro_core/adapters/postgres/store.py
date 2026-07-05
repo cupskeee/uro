@@ -11,11 +11,19 @@ from pathlib import Path
 
 import asyncpg
 
+from uro_core.adapters.postgres.projector import apply_event
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent, world_genesis
 from uro_core.domain.hashing import compute_commit_hash
 from uro_core.domain.ids import new_id
 from uro_core.metering import LLMCall
-from uro_core.timeline.models import Campaign, Commit, World
+from uro_core.timeline.models import (
+    ActorView,
+    BeliefView,
+    Campaign,
+    ClaimView,
+    Commit,
+    World,
+)
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -157,6 +165,9 @@ class PostgresEventStore:
                 commit_hash,
             )
             await self._insert_events(conn, commit_id, events)
+            # Project in the SAME transaction — projections never drift from the log.
+            for event in events:
+                await apply_event(conn, branch_id, event)
             await conn.execute(
                 "UPDATE branches SET head_commit = $1 WHERE branch_id = $2",
                 commit_id,
@@ -212,6 +223,68 @@ class PostgresEventStore:
                 call.tokens_out,
                 call.latency_ms,
             )
+
+    # --- projection queries (ProjectionQueries port; docs/02, 07) ---
+
+    async def get_actor(self, branch_id: str, actor_id: str) -> ActorView | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT actor_id, name, tier, role, aliases FROM proj_actors "
+                "WHERE branch_id = $1 AND actor_id = $2",
+                branch_id,
+                actor_id,
+            )
+        return ActorView(**dict(row)) if row else None
+
+    async def find_actor_by_name(self, branch_id: str, name: str) -> ActorView | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT actor_id, name, tier, role, aliases FROM proj_actors "
+                "WHERE branch_id = $1 AND (lower(name) = lower($2) OR $2 = ANY(aliases)) "
+                "ORDER BY tier DESC LIMIT 1",
+                branch_id,
+                name,
+            )
+        return ActorView(**dict(row)) if row else None
+
+    async def list_actors(self, branch_id: str) -> list[ActorView]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT actor_id, name, tier, role, aliases FROM proj_actors "
+                "WHERE branch_id = $1 ORDER BY tier DESC, name ASC",
+                branch_id,
+            )
+        return [ActorView(**dict(r)) for r in rows]
+
+    async def get_claim(self, branch_id: str, claim_id: str) -> ClaimView | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT claim_id, statement, subject_refs, truth, origin FROM proj_claims "
+                "WHERE branch_id = $1 AND claim_id = $2",
+                branch_id,
+                claim_id,
+            )
+        return ClaimView(**dict(row)) if row else None
+
+    async def claims_about(self, branch_id: str, entity_ref: str) -> list[ClaimView]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT claim_id, statement, subject_refs, truth, origin FROM proj_claims "
+                "WHERE branch_id = $1 AND subject_refs @> ARRAY[$2]::text[]",
+                branch_id,
+                entity_ref,
+            )
+        return [ClaimView(**dict(r)) for r in rows]
+
+    async def beliefs_of(self, branch_id: str, actor_id: str) -> list[BeliefView]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT actor_id, claim_id, confidence, learned_from FROM proj_beliefs "
+                "WHERE branch_id = $1 AND actor_id = $2",
+                branch_id,
+                actor_id,
+            )
+        return [BeliefView(**dict(r)) for r in rows]
 
     # --- helpers ---
 
