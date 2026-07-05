@@ -41,6 +41,11 @@ module = [
 ]
 strict = true
 
+# Third-party without shipped type stubs.
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]
+ignore_missing_imports = true
+
 # ------------------------------------------------- import-linter (D-8, D-18)
 [tool.importlinter]
 root_packages = ["uro_core"]
