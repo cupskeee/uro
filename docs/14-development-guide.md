@@ -28,7 +28,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     environment: { POSTGRES_DB: uro, POSTGRES_USER: uro, POSTGRES_PASSWORD: uro }
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]   # host 5433 — leaves the default port free for other local Postgres instances
     volumes: [pgdata:/var/lib/postgresql/data]
 ```
 
@@ -54,7 +54,7 @@ Precedence (highest wins): **env vars (`URO_*`) → deployment `uro.toml` → wo
 
 ```toml
 # uro.toml (deployment config — NEVER committed with secrets; keys come from env/keyring)
-[database]  url = "postgresql://uro:uro@localhost/uro"
+[database]  url = "postgresql://uro:uro@localhost:5433/uro"
 [server]    mode = "local"          # local | token (08)
 [llm.providers.anthropic]  api_key_env = "ANTHROPIC_API_KEY"
 [llm.providers.local]      base_url = "http://localhost:11434/v1"

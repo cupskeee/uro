@@ -1,0 +1,39 @@
+# CI gate per docs/14: lint -> types -> import contracts -> tests (replay only).
+# CI never makes live LLM calls.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: uro
+          POSTGRES_USER: uro
+          POSTGRES_PASSWORD: uro
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U uro -d uro"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run lint-imports
+      - run: uv run pytest
+        env:
+          URO_DATABASE_URL: postgresql://uro:uro@localhost:5432/uro

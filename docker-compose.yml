@@ -1,0 +1,20 @@
+# Local infrastructure. Local IS Postgres — no SQLite mode (D-13). docs/14.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: uro
+      POSTGRES_USER: uro
+      POSTGRES_PASSWORD: uro
+    ports:
+      - "5433:5432" # host 5433: another Docker Postgres already owns 5432 on the dev machine
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uro -d uro"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

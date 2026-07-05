@@ -1,0 +1,69 @@
+# Workspace root — virtual (not itself a package). See docs/14-development-guide.md.
+[tool.uv.workspace]
+members = ["packages/uro-core", "packages/uro-server", "packages/uro-cli"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "import-linter>=2.1",
+    "coverage>=7.6",
+]
+
+# ---------------------------------------------------------------- ruff (D-18)
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+# ---------------------------------------------------------------- mypy (D-18)
+[tool.mypy]
+python_version = "3.12"
+files = [
+    "packages/uro-core/uro_core",
+    "packages/uro-server/uro_server",
+    "packages/uro-cli/uro_cli",
+]
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+# Strict on the core ring (docs/14); adapters stay lenient.
+[[tool.mypy.overrides]]
+module = [
+    "uro_core.domain.*",
+    "uro_core.timeline.*",
+    "uro_core.pipeline.*",
+]
+strict = true
+
+# ------------------------------------------------- import-linter (D-8, D-18)
+[tool.importlinter]
+root_packages = ["uro_core"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Core ring stays framework- and driver-free (hexagonal rule, docs/01)"
+type = "forbidden"
+source_modules = [
+    "uro_core.domain",
+    "uro_core.timeline",
+    "uro_core.engines",
+    "uro_core.pipeline",
+    "uro_core.memory",
+]
+forbidden_modules = [
+    "fastapi",
+    "asyncpg",
+    "httpx",
+    "uro_core.adapters",
+]
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["packages"]
+asyncio_mode = "auto"

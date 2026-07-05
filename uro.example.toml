@@ -1,0 +1,29 @@
+# Deployment configuration template — copy to uro.toml (gitignored) and edit.
+# Precedence: env vars (URO_*) > uro.toml > world-pack suggestions > engine defaults.
+# Secrets are REFERENCES (env var names / keychain), never values. docs/14, docs/04.
+
+[database]
+url = "postgresql://uro:uro@localhost:5433/uro" # 5433: see docker-compose.yml port note
+
+[server]
+mode = "local" # local | token (docs/08)
+
+[llm.providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+
+[llm.providers.openai]
+api_key_env = "OPENAI_API_KEY"
+
+[llm.providers.local]
+base_url = "http://localhost:11434/v1" # Ollama's OpenAI-compatible endpoint
+
+# Role bindings override world-pack suggestions (docs/04). One model for all
+# roles is a fine start; the indirection is what matters.
+[llm.roles]
+narrator = "local:qwen3:14b"
+dialogue = "local:qwen3:14b"
+planner = "local:qwen3:14b"
+extractor = "local:qwen3:14b"
+summarizer = "local:qwen3:14b"
+embedder = "local:nomic-embed-text"
+judge = "local:qwen3:14b" # prefer judge != judged when probing (D-24)
