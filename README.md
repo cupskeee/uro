@@ -25,7 +25,7 @@ Anything a *platform* would build: user accounts and social features, world/asse
 
 ## Status
 
-**Phase 0 + Phase 1 are code-complete** (13 commits, 71 tests). What runs today: the full beat pipeline — structured + semantic recall → narration → extraction → validation gauntlet → commit → projections — with a claim/belief epistemic layer (an NPC can lie without corrupting world truth), pgvector semantic memory, four LLM provider adapters (stub, OpenAI-compatible, Anthropic, with per-role routing), and a thesis harness (`--bare` ablation + `uro consistency`). The one thing *not* yet done is the live-model run — no API key was available in the build environment, so whether the narrator actually uses recalled facts to contradict a lie in prose is unproven. Signature feature next: **branching timelines** (Phase 2). See [10-roadmap.md](docs/10-roadmap.md).
+**Phase 0 + Phase 1 are code-complete** (13 commits, 71 tests). What runs today: the full beat pipeline — structured + semantic recall → narration → extraction → validation gauntlet → commit → projections — with a claim/belief epistemic layer (an NPC can lie without corrupting world truth), pgvector semantic memory, four LLM provider adapters (stub, OpenAI-compatible, Anthropic, with per-role routing), and a thesis harness (`--bare` ablation + `uro consistency`). The one thing *not* yet done is the live-model run — no API key was available in the build environment, so whether the narrator actually uses recalled facts to contradict a lie in prose is unproven. Runbook for that: [docs/live-run.md](docs/live-run.md). Signature feature next: **branching timelines** (Phase 2). See [10-roadmap.md](docs/10-roadmap.md).
 
 ## Quickstart
 

@@ -39,4 +39,4 @@ Build one coherent, tightly-coupled slice **directly** (don't fan out — layers
 
 ## Status (2026-07-06)
 
-Phase 0 (walking skeleton) + Phase 1 (state engine: recall → narrate → extract → gauntlet → commit → project; claim/belief epistemic layer; pgvector semantic memory; 4 provider adapters; thesis harness) are **code-complete, 71 tests green, 13 commits**. Next: the live thesis run (needs a key), then Phase 2 (branching timelines — the signature feature).
+Phase 0 (walking skeleton) + Phase 1 (state engine: recall → narrate → extract → gauntlet → commit → project; claim/belief epistemic layer; pgvector semantic memory; 4 provider adapters; thesis harness) are **code-complete, 71 tests green**. Next: the live thesis run — the owner chose the **OpenAI** path; step-by-step runbook is `docs/live-run.md`. After that, Phase 2 (branching timelines — the signature feature).
