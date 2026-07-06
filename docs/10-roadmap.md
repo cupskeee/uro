@@ -23,7 +23,7 @@ Solo-dev PoC roadmap. No calendar estimates (the report's quarter/budget tables 
 - Full entity projections (actors, places, claims, edges, beliefs), actor tiers T0–T2. *(inc 1: actors/claims/beliefs done; places/edges when needed.)*
 - Extractor stage + validation gauntlet (whitelist/tier/contradiction), promotion rules. *(inc 2 done.)* **The LLM planner is deferred to Phase 3** (D-28) — Phase 1 does deterministic entity-linking for recall, since there are no mechanics affordances to route yet.
 - Retrieval: structured recall *(inc 2 done)* + pgvector semantic recall *(inc 3 done)* + summarizer compression *(deferred — token-efficiency optimization, not needed for the acceptance test; lands with belief-strength/journal work)*.
-- `anthropic` adapter; multi-role model bindings; live-model acceptance run + thesis harness *(inc 4)*.
+- `anthropic` adapter + multi-role model bindings + thesis harness (ablation `--bare`, `uro consistency`) *(inc 4 done)*. **The live-model acceptance run + human-judged ablation is deferred pending an API key** — all engine code ships; only the paid run remains (commands above).
 
 **Acceptance:** an NPC lies to the player; ten beats later, a *different* NPC contradicts the lie from `truth=true` state — and a claim first mentioned ~50 beats ago resurfaces correctly via recall.
 
@@ -45,8 +45,20 @@ Solo-dev PoC roadmap. No calendar estimates (the report's quarter/budget tables 
 
 The phases prove the *machine* works; nothing in them proves the *bet* — that state-tracked narration beats a long-context chat log. Two checks, cheap and mandatory (reinstated from the research report's experiments section, which these docs originally deleted):
 
-- **T1 — Ablation.** The same scenario, world, and seed played two ways: (a) the full engine; (b) the same narrator model with a raw rolling transcript — no state, no recall, no extraction. Blind-compare transcripts (yourself + 2–3 volunteers) for continuity errors and preference at 30+ beats. **Kill criterion:** if (b) is indistinguishable, stop building and rethink — that's cheaper to learn at Phase 1 than at Phase 5.
-- **T2 — Fact-consistency metric.** Percent of narration-asserted, state-checkable claims per beat that agree with projections (computed by cross-checking extractor output against state; logged continuously from Phase 1). Target ≥90% (placeholder, `11`); a downward trend after any pipeline or model change is treated as a regression gate.
+- **T1 — Ablation.** The same scenario, world, and seed played two ways: (a) the full engine; (b) the same narrator model with a raw rolling transcript — no state, no recall, no extraction. Blind-compare transcripts (yourself + 2–3 volunteers) for continuity errors and preference at 30+ beats. **Kill criterion:** if (b) is indistinguishable, stop building and rethink — that's cheaper to learn at Phase 1 than at Phase 5. *Harness built (inc 4): `uro play <full-campaign>` vs `uro play <bare-campaign> --bare` is the A/B — the `--bare` flag is the exact ablation (no structured/semantic recall, no extraction, no memory).*
+- **T2 — Fact-consistency metric.** Percent of narration-asserted, state-checkable claims per beat that agree with projections (computed by cross-checking extractor output against state; logged continuously from Phase 1). Target ≥90% (placeholder, `11`); a downward trend after any pipeline or model change is treated as a regression gate. *Built (inc 4): `uro consistency <campaign>` = narrator-origin claims that survived as `truth=true` / all narrator-origin claims.*
+
+**Running the live experiment (needs an API key — not runnable in CI).** Bind a real model and play both arms; requires `ANTHROPIC_API_KEY` (or OpenAI/Ollama):
+
+```
+uro world new "Ablation A"   # → campaign A (full)
+uro world new "Ablation B"   # → campaign B (bare)
+uro play <A> --provider anthropic
+uro play <B> --provider anthropic --bare
+uro consistency <A>          # T2 on the full arm
+```
+
+Multi-model per-role bindings go in `uro.toml` (`[llm.roles] narrator = "anthropic:claude-sonnet-5"`, `extractor = "openai:gpt-4o-mini"`, `embedder = "openai:text-embedding-3-small"`); the `--provider` flag is the default for unpinned roles. The engine code for all of this ships in inc 4; only the human-judged comparison and the token spend are deferred to whoever has a key.
 
 ## Phase 3 — Mechanics
 

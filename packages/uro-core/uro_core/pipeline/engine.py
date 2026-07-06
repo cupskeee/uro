@@ -57,11 +57,15 @@ class Engine:
         *,
         recency: int = 8,
         semantic_k: int = 4,
+        bare: bool = False,
     ) -> None:
         self._store = store
         self._router = router
         self._recency = recency
         self._semantic_k = semantic_k
+        # bare = ablation baseline (thesis T1): a raw-transcript GM — no structured/
+        # semantic recall, no extraction, no memory. Just the narrator over recent beats.
+        self._bare = bare
 
     async def _recall(self, branch_id: str, intent_text: str) -> RecallBundle:
         """Structured recall + semantic recall of older beats (docs/04).
@@ -70,6 +74,9 @@ class Engine:
         or vector-search failure (provider down, a mismatched embedder dimension on the
         branch) degrades to structured-only, never crashes the beat.
         """
+        if self._bare:  # ablation: transcript only, no state
+            recent = await self._store.recent_beats(branch_id, self._recency)
+            return RecallBundle(recent_beats=recent, actors=[], claims=[], beliefs=[])
         recall = await assemble_recall(self._store, branch_id, intent_text, self._recency)
         recent_texts = {b.narration for b in recall.recent_beats}
         started = time.perf_counter()
@@ -139,7 +146,8 @@ class Engine:
             raise EmptyNarrationError(
                 f"provider produced no narration for a beat by {participant_id}"
             )
-        extracted = await self._extract(campaign.branch_id, recall, narration)
+        # Bare (ablation) mode records only the transcript — no extraction, no memory.
+        extracted = [] if self._bare else await self._extract(campaign.branch_id, recall, narration)
         beat_id = new_id()
         events: list[DomainEvent] = [
             beat_resolved(
@@ -151,9 +159,10 @@ class Engine:
             *extracted,
         ]
         commit = await self._store.append_beat(campaign.branch_id, events)
-        await self._remember(
-            campaign.branch_id, commit.commit_id, narration, [a.actor_id for a in recall.actors]
-        )
+        if not self._bare:
+            await self._remember(
+                campaign.branch_id, commit.commit_id, narration, [a.actor_id for a in recall.actors]
+            )
         return BeatResult(
             beat_id=beat_id,
             narration=narration,

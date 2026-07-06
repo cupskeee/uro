@@ -34,6 +34,15 @@ class ProjectionQueries(Protocol):
 
     async def beliefs_of(self, branch_id: str, actor_id: str) -> list[BeliefView]: ...
 
+    async def fact_consistency(self, branch_id: str) -> tuple[int, int]:
+        """Thesis metric T2 (docs/10): (consistent, total) narrator-asserted claims.
+
+        A narrator claim that survives as `truth=true` is consistent; one downgraded to
+        `unknown` (it contradicted established truth) is not. Ratio = the narrator's
+        fact-consistency against state — the number the engine's whole bet turns on.
+        """
+        ...
+
 
 class EngineStore(EventStore, ProjectionQueries, VectorIndex, Protocol):
     """The read+write surface the engine needs: timeline (EventStore) + projection

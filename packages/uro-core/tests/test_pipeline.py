@@ -171,3 +171,38 @@ async def test_engine_extracts_state_and_recall_resurfaces_it(store: PostgresEve
     # A later beat mentioning the Duke recalls the established fact.
     recall = await assemble_recall(store, branch, "what do I know about the Duke?", 8)
     assert any(c.statement == "The Duke disbanded his army." for c in recall.claims)
+
+
+async def test_fact_consistency_metric(store: PostgresEventStore) -> None:
+    # Thesis metric T2: narrator claims surviving as truth=true are consistent; those
+    # downgraded to unknown are not; dialogue (testimony) claims are excluded.
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            claim_recorded(claim_id="c1", statement="A", truth="true", origin="narrator"),
+            claim_recorded(claim_id="c2", statement="B", truth="true", origin="narrator"),
+            claim_recorded(claim_id="c3", statement="C", truth="unknown", origin="narrator"),
+            claim_recorded(claim_id="c4", statement="D", truth="unknown", origin="dialogue"),
+        ],
+    )
+    consistent, total = await store.fact_consistency(branch)
+    assert (consistent, total) == (2, 3)  # dialogue excluded; one narrator claim downgraded
+
+
+async def test_bare_mode_is_a_true_ablation(store: PostgresEventStore) -> None:
+    # The T1 baseline: same scripted narration + extraction, but bare mode records ONLY
+    # the transcript — no state, no memory — so it can be A/B'd against the full engine.
+    world = await store.create_world(f"test-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    provider = ScriptedProvider(
+        narration="Flora reveals a hidden passage.",
+        completions=['{"actors":[{"name":"Flora"}],"claims":[{"statement":"a passage exists"}]}'],
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=provider), bare=True)
+    result = await engine.run_beat(campaign, "player-1", "I ask Flora")
+
+    assert result.extracted == 0  # bare → no extraction, though the script would have made 2
+    assert await store.list_actors(campaign.branch_id) == []  # no state built
+    hits = await store.search(campaign.branch_id, hashing_embedding("hidden passage"), k=5)
+    assert hits == []  # no memory indexed

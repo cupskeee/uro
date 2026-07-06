@@ -78,8 +78,11 @@ def world_new(name: str) -> None:
 @app.command()
 def play(
     campaign_id: str,
-    provider: str = typer.Option("stub", help="stub | local | openai"),
-    model: str = typer.Option(None, help="model id for local/openai providers"),
+    provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
+    model: str = typer.Option(None, help="model id for local/openai/anthropic providers"),
+    bare: bool = typer.Option(
+        False, help="ablation: raw-transcript GM (no state/recall/extraction)"
+    ),
 ) -> None:
     """Interactive play loop. Type an action; '/quit' to leave. State persists to Postgres."""
 
@@ -91,7 +94,7 @@ def play(
             if campaign is None:
                 typer.echo(f"no such campaign: {campaign_id}", err=True)
                 raise typer.Exit(1)
-            engine = Engine(store, build_router(provider, model))
+            engine = Engine(store, build_router(provider, model), bare=bare)
 
             history = await store.recent_beats(campaign.branch_id, 3)
             if history:
@@ -121,5 +124,29 @@ def play(
                     typer.echo(f"beat failed ({exc}); nothing was saved — try again.", err=True)
         finally:
             await store.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def consistency(campaign_id: str) -> None:
+    """Report the narrator's fact-consistency against state (thesis metric T2)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await store.connect()
+        try:
+            campaign = await store.get_campaign(campaign_id)
+            if campaign is None:
+                typer.echo(f"no such campaign: {campaign_id}", err=True)
+                raise typer.Exit(1)
+            consistent, total = await store.fact_consistency(campaign.branch_id)
+        finally:
+            await store.close()
+        ratio = consistent / total if total else 1.0
+        typer.echo(
+            f"fact-consistency: {consistent}/{total} narrator-asserted claims consistent "
+            f"with state ({ratio:.0%})"
+        )
 
     asyncio.run(_run())

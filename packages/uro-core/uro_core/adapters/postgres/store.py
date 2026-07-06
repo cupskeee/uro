@@ -307,6 +307,15 @@ class PostgresEventStore:
             )
         return [BeliefView(**dict(r)) for r in rows]
 
+    async def fact_consistency(self, branch_id: str) -> tuple[int, int]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT count(*) FILTER (WHERE truth = 'true') AS consistent, count(*) AS total "
+                "FROM proj_claims WHERE branch_id = $1 AND origin = 'narrator'",
+                branch_id,
+            )
+        return (row["consistent"], row["total"])
+
     # --- semantic memory (VectorIndex port; docs/04, 07) ---
 
     async def add_memory(
