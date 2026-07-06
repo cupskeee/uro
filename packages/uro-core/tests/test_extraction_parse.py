@@ -31,3 +31,9 @@ def test_unknown_event_kinds_are_not_representable() -> None:
     ex = parse_extraction('{"actors":[],"claims":[],"damage":[{"actor":"x","amount":5}]}')
     assert ex is not None  # extra keys ignored
     assert ex.actors == [] and ex.claims == []  # nothing mechanical crossed the boundary
+
+
+def test_parse_survives_pathological_nesting() -> None:
+    # Deeply nested input can raise RecursionError in json.loads; parse must return None,
+    # never propagate and abort the beat (prose is never lost — review Phase-1.2).
+    assert parse_extraction("[" * 2000 + "]" * 2000) is None

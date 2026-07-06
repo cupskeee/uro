@@ -124,13 +124,16 @@ class Engine:
         lost to keep state)."""
         messages = build_extractor_messages(recall, narration)
         started = time.perf_counter()
+        raw: str | None = None
         try:
             raw = await self._router.complete(
                 "extractor", messages, json_mode=True, temperature=0.1
             )
         except ProviderError:
+            raw = None
+        await self._meter("extractor", messages, started)  # meter even a failed call
+        if raw is None:
             return []
-        await self._meter("extractor", messages, started)
         extraction = parse_extraction(raw)
         if extraction is None:
             return []

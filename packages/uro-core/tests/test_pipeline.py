@@ -107,6 +107,29 @@ async def test_contradiction_downgrades_a_would_be_fact(store: PostgresEventStor
     assert claim.payload["truth"] == "unknown"  # downgraded — can't hold two contradictory truths
 
 
+async def test_dialogue_claim_about_speaker_links_to_actor_id(store: PostgresEventStore) -> None:
+    # A speaker not pre-listed as an actor, asserting something about themselves: the
+    # claim subject and the belief must resolve to the SAME minted actor_id, not diverge
+    # into a name-token vs a:uuid (review Phase-1.2).
+    branch = await _branch(store)
+    ex = Extraction(
+        claims=[
+            ProposedClaim(
+                statement="I poisoned the ale.",
+                about=["Flora"],
+                provenance="dialogue",
+                speaker="Flora",
+            )
+        ]
+    )
+    events = await run_gauntlet(store, branch, ex)
+    actor_ref = _of_type(events, "ActorCreated")[0].payload["actor_id"]
+    claim = _of_type(events, "ClaimRecorded")[0]
+    belief = _of_type(events, "BeliefChanged")[0]
+    assert claim.payload["subject_refs"] == [actor_ref]  # linked to the actor, not name:flora
+    assert belief.payload["actor_id"] == actor_ref
+
+
 async def test_entity_resolution_deduplicates_actors(store: PostgresEventStore) -> None:
     branch = await _branch(store)
     await store.append_beat(branch, [actor_created(actor_id="a:weck", name="Weck", tier=1)])

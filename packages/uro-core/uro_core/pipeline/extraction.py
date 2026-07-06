@@ -1,19 +1,27 @@
 """Extractor + validation gauntlet (docs/05, 12, 13).
 
 The extractor turns generated prose into *proposed* world state; the gauntlet turns
-proposals into committed events — or drops them. The trust model is enforced BY
-CONSTRUCTION here (docs/13):
+proposals into committed events — or drops them.
 
-- Whitelist: the schema only permits actors and claims, so the extractor is
+Enforced by construction (structural — cannot be bypassed):
+- Whitelist: the schema permits only actors and claims, so the extractor is
   structurally incapable of proposing damage/death/terrain events.
 - Tier ceiling: the gauntlet always creates actors at T1.
+- Player text isolation: the extractor is fed generated prose only, never the
+  player's intent text (see engine._extract) — so a player cannot directly assert
+  a claim into the extractor.
+
+Enforced by policy (correct as far as the extractor classifies honestly):
 - Provenance: narrator-asserted → `truth=true`; a character's speech → `truth=unknown`
   plus a belief for the speaker (an NPC can lie without corrupting world truth).
-- Contradiction: a proposed `truth=true` claim that contradicts an existing
-  `truth=true` claim is downgraded to `unknown`.
+- Contradiction: a proposed `truth=true` claim the extractor flags as contradicting
+  an existing `truth=true` claim is downgraded to `unknown`.
 
-The extractor is fed generated prose only — never the player's intent text — so
-player assertions can never become evidence.
+NOT yet implemented (docs/13, deferred): evidence-span/consequence gating and the
+"a truth=true claim must not merely restate a character's assertion" guard. So
+`truth=true` currently rests on the extractor's self-declared provenance label; a
+narrator that echoes a player's words is a residual surface, mitigated only by the
+narrator being the trusted tier. Do not read this as a hard security boundary.
 """
 
 from __future__ import annotations
@@ -21,7 +29,7 @@ from __future__ import annotations
 import json
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from uro_core.domain.events import (
     DomainEvent,
@@ -95,9 +103,11 @@ def parse_extraction(raw: str) -> Extraction | None:
     for candidate in (text, _slice_json_object(text)):
         if candidate is None:
             continue
+        # Best-effort parse: a bad extraction must never crash the beat and lose the
+        # narration (JSONDecodeError, ValidationError, RecursionError on deep nesting, …).
         try:
             return Extraction.model_validate(json.loads(candidate))
-        except (json.JSONDecodeError, ValidationError):
+        except Exception:
             continue
     return None
 
@@ -133,6 +143,12 @@ async def run_gauntlet(
 
     for pa in extraction.actors:
         await resolve(pa.name, create=True, role=pa.role)
+
+    # Pre-mint dialogue speakers so a claim *about* a speaker (resolved create=False
+    # below) links to the same actor_id the belief uses, not a divergent name-token.
+    for pc in extraction.claims:
+        if pc.provenance == "dialogue" and pc.speaker and pc.speaker.strip():
+            await resolve(pc.speaker, create=True)
 
     for pc in extraction.claims:
         statement = pc.statement.strip()
