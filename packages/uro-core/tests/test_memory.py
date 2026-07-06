@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.ids import new_id
+from uro_core.errors import ProviderError
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.stub import hashing_embedding
 from uro_core.providers.base import CompletionRequest
@@ -33,6 +34,16 @@ class ScriptedProvider:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [hashing_embedding(t) for t in texts]
+
+
+class _WrongDimProvider(ScriptedProvider):
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.1] * 8 for _ in texts]  # 8-dim vs stored 256-dim → search dim-mismatch
+
+
+class _RaisingEmbedProvider(ScriptedProvider):
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        raise ProviderError("embedder is down")
 
 
 async def _branch(store: PostgresEventStore) -> str:
@@ -153,3 +164,72 @@ async def test_recall_resurfaces_an_old_memory_out_of_window(store: PostgresEven
     )
     recall = await engine._recall(branch, "remind me about the oracle's flood prophecy")
     assert old in recall.memories
+
+
+def _engine(store: PostgresEventStore, provider: ScriptedProvider) -> Engine:
+    return Engine(store, ProviderRouter(bindings={}, default=provider))
+
+
+async def test_recall_skips_zero_norm_query(store: PostgresEventStore) -> None:
+    # A punctuation-only intent embeds to a zero vector; recall must return nothing
+    # rather than let a NaN cosine inject arbitrary memories (review Phase-1.3).
+    world = await store.create_world(f"test-{new_id()}")
+    branch = world.main_branch_id
+    m = "The oracle spoke of a coming flood."
+    await store.add_memory(
+        branch_id=branch,
+        commit_id="c",
+        kind="beat",
+        text=m,
+        vector=hashing_embedding(m),
+        entity_refs=[],
+    )
+    engine = _engine(store, ScriptedProvider(completions=['{"actors":[],"claims":[]}']))
+    recall = await engine._recall(branch, "???")  # no [a-z0-9] tokens → zero vector
+    assert recall.memories == []
+
+
+async def test_beat_survives_search_dimension_mismatch(store: PostgresEventStore) -> None:
+    # A memory stored at 256-dim + an embedder producing 8-dim → the vector search errors;
+    # the beat must degrade to structured-only recall, not crash (review Phase-1.3).
+    world = await store.create_world(f"test-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    m = "The blacksmith forged a silver key."
+    await store.add_memory(
+        branch_id=campaign.branch_id,
+        commit_id="c",
+        kind="beat",
+        text=m,
+        vector=hashing_embedding(m),
+        entity_refs=[],
+    )
+    engine = _engine(store, _WrongDimProvider(narration="A quiet night falls."))
+    result = await engine.run_beat(campaign, "player-1", "I look around")  # must not raise
+    assert result.commit_id
+
+
+async def test_beat_commits_even_if_embedder_raises(store: PostgresEventStore) -> None:
+    world = await store.create_world(f"test-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    engine = _engine(store, _RaisingEmbedProvider(narration="The cat stirs."))
+    result = await engine.run_beat(campaign, "player-1", "I wait by the fire")
+    assert result.commit_id  # beat committed despite embed failures in recall AND memory-write
+    assert len(await store.recent_beats(campaign.branch_id, 5)) == 1
+
+
+async def test_recall_deduplicates_identical_memories(store: PostgresEventStore) -> None:
+    world = await store.create_world(f"test-{new_id()}")
+    branch = world.main_branch_id
+    m = "A distinctive omen concerning the red comet."
+    for cid in ("c1", "c2"):
+        await store.add_memory(
+            branch_id=branch,
+            commit_id=cid,
+            kind="beat",
+            text=m,
+            vector=hashing_embedding(m),
+            entity_refs=[],
+        )
+    engine = _engine(store, ScriptedProvider(completions=['{"actors":[],"claims":[]}']))
+    recall = await engine._recall(branch, "tell me about the red comet omen")
+    assert recall.memories.count(m) == 1  # two membership rows, one recall line

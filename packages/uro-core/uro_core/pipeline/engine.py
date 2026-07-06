@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 
@@ -30,6 +31,8 @@ from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
 from uro_core.providers.router import ProviderRouter
 from uro_core.timeline.models import Campaign
+
+logger = logging.getLogger(__name__)
 
 
 class BeatResult(BaseModel):
@@ -61,18 +64,34 @@ class Engine:
         self._semantic_k = semantic_k
 
     async def _recall(self, branch_id: str, intent_text: str) -> RecallBundle:
-        """Structured recall + semantic recall of older beats (docs/04)."""
+        """Structured recall + semantic recall of older beats (docs/04).
+
+        Structured recall always stands; semantic recall is best-effort aux — an embed
+        or vector-search failure (provider down, a mismatched embedder dimension on the
+        branch) degrades to structured-only, never crashes the beat.
+        """
         recall = await assemble_recall(self._store, branch_id, intent_text, self._recency)
         recent_texts = {b.narration for b in recall.recent_beats}
         started = time.perf_counter()
         try:
             vectors = await self._router.embed("embedder", [intent_text])
-        except ProviderError:
-            return recall  # semantic recall is best-effort aux; structured recall stands
-        await self._meter("embedder", [Message(role="user", content=intent_text)], started)
-        hits = await self._store.search(branch_id, vectors[0], self._semantic_k)
-        # Drop memories already in the recency window — semantic recall is for OLD beats.
-        recall.memories = [h.text for h in hits if h.text not in recent_texts]
+            await self._meter("embedder", [Message(role="user", content=intent_text)], started)
+            vector = vectors[0] if vectors else None
+            if not vector or not any(
+                vector
+            ):  # empty response or zero-norm (no words) → recall nothing
+                return recall
+            hits = await self._store.search(branch_id, vector, self._semantic_k)
+        except Exception as exc:  # best-effort; structured recall stands
+            logger.warning("semantic recall failed, using structured recall only: %s", exc)
+            return recall
+        # Drop recency-window overlaps and byte-identical dupes; semantic recall is for OLD beats.
+        seen: set[str] = set()
+        for hit in hits:
+            if hit.text in recent_texts or hit.text in seen:
+                continue
+            seen.add(hit.text)
+            recall.memories.append(hit.text)
         return recall
 
     async def run_beat(
@@ -147,23 +166,27 @@ class Engine:
     ) -> None:
         """Embed the beat's narration and index it for later semantic recall.
 
-        Post-commit and best-effort: the memory index is a rebuildable aux cache, so
-        an embedding failure never rolls back or fails a committed beat.
+        Post-commit and fully best-effort: the beat is ALREADY committed, so nothing
+        here — a failed embed, an empty vector, or a memory-write DB error — may raise
+        out and fail a beat that persisted. The memory index is a rebuildable aux cache.
         """
         started = time.perf_counter()
         try:
             vectors = await self._router.embed("embedder", [text])
-        except ProviderError:
-            return
-        await self._meter("embedder", [Message(role="user", content=text)], started)
-        await self._store.add_memory(
-            branch_id=branch_id,
-            commit_id=commit_id,
-            kind="beat",
-            text=text,
-            vector=vectors[0],
-            entity_refs=entity_refs,
-        )
+            await self._meter("embedder", [Message(role="user", content=text)], started)
+            vector = vectors[0] if vectors else None
+            if not vector or not any(vector):  # empty/zero-norm → nothing worth indexing
+                return
+            await self._store.add_memory(
+                branch_id=branch_id,
+                commit_id=commit_id,
+                kind="beat",
+                text=text,
+                vector=vector,
+                entity_refs=entity_refs,
+            )
+        except Exception as exc:  # never fail a committed beat
+            logger.warning("memory write failed for a committed beat: %s", exc)
 
     async def _extract(
         self, branch_id: str, recall: RecallBundle, narration: str
@@ -189,9 +212,13 @@ class Engine:
         return await run_gauntlet(self._store, branch_id, extraction)
 
     async def _meter(self, stage_tag: str, messages: list[Message], started: float) -> None:
-        latency_ms = int((time.perf_counter() - started) * 1000)
-        await self._store.record_llm_call(
-            LLMCall(
-                stage_tag=stage_tag, prompt_hash=_hash_messages(messages), latency_ms=latency_ms
+        # Metering is best-effort observability — it must never break a beat.
+        try:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            await self._store.record_llm_call(
+                LLMCall(
+                    stage_tag=stage_tag, prompt_hash=_hash_messages(messages), latency_ms=latency_ms
+                )
             )
-        )
+        except Exception as exc:
+            logger.warning("metering failed for stage %s: %s", stage_tag, exc)
