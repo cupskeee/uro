@@ -27,6 +27,7 @@ class CompletionRequest(BaseModel):
     stage_tag: str  # engine role (narrator, dialogue, …) — for metering (docs/04)
     temperature: float = 0.9
     max_tokens: int | None = None
+    json_mode: bool = False  # request a JSON object response (planner/extractor, docs/13)
 
 
 class LLMProvider(Protocol):
@@ -36,4 +37,8 @@ class LLMProvider(Protocol):
         Declared as a plain `def` returning an async iterator — that is the type of
         an async-generator method, which is how adapters implement it.
         """
+        ...
+
+    async def complete(self, req: CompletionRequest) -> str:
+        """Return a full (non-streamed) completion — used by the extractor/planner."""
         ...

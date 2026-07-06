@@ -77,3 +77,34 @@ class OpenAICompatProvider:
                         yield piece
         except httpx.HTTPError as exc:
             raise ProviderError(f"provider request failed: {exc}") from exc
+
+    async def complete(self, req: CompletionRequest) -> str:
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        body: dict[str, object] = {
+            "model": self._model,
+            "messages": [m.model_dump() for m in req.messages],
+            "temperature": req.temperature,
+            "stream": False,
+        }
+        if req.json_mode:
+            body["response_format"] = {"type": "json_object"}
+        if req.max_tokens is not None:
+            body["max_tokens"] = req.max_tokens
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout, transport=self._transport
+            ) as client:
+                resp = await client.post(
+                    f"{self._base_url}/chat/completions", headers=headers, json=body
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"provider request failed: {exc}") from exc
+        choices = data.get("choices") or []
+        if not choices:
+            raise ProviderError("provider returned no choices")
+        return choices[0].get("message", {}).get("content") or ""

@@ -42,3 +42,22 @@ class ProviderRouter:
         )
         async for chunk in provider.stream(req):
             yield chunk
+
+    async def complete(
+        self,
+        role: str,
+        messages: list[Message],
+        *,
+        json_mode: bool = False,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+    ) -> str:
+        provider = self._provider_for(role)
+        req = CompletionRequest(
+            messages=messages,
+            stage_tag=role,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=json_mode,
+        )
+        return await provider.complete(req)

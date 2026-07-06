@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from uro_core.ports.event_store import EventStore
 from uro_core.timeline.models import ActorView, BeliefView, ClaimView
 
 
@@ -24,8 +25,15 @@ class ProjectionQueries(Protocol):
 
     async def get_claim(self, branch_id: str, claim_id: str) -> ClaimView | None: ...
 
+    async def list_claims(self, branch_id: str) -> list[ClaimView]: ...
+
     async def claims_about(self, branch_id: str, entity_ref: str) -> list[ClaimView]:
         """Claims whose subject_refs include the entity — the spine of structured recall."""
         ...
 
     async def beliefs_of(self, branch_id: str, actor_id: str) -> list[BeliefView]: ...
+
+
+class EngineStore(EventStore, ProjectionQueries, Protocol):
+    """The read+write surface the engine needs: timeline (EventStore) + projection
+    queries. The Postgres store satisfies it structurally; Phase 1 has one store."""

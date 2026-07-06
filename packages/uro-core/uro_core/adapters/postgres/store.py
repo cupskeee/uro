@@ -268,6 +268,15 @@ class PostgresEventStore:
             )
         return ClaimView(**dict(row)) if row else None
 
+    async def list_claims(self, branch_id: str) -> list[ClaimView]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT claim_id, statement, subject_refs, truth, origin FROM proj_claims "
+                "WHERE branch_id = $1 ORDER BY claim_id",
+                branch_id,
+            )
+        return [ClaimView(**dict(r)) for r in rows]
+
     async def claims_about(self, branch_id: str, entity_ref: str) -> list[ClaimView]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(

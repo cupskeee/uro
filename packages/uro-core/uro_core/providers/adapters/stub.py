@@ -26,3 +26,8 @@ class StubProvider:
         ]
         for sentence in sentences:
             yield sentence + " "
+
+    async def complete(self, req: CompletionRequest) -> str:
+        # The stub extracts nothing — `uro play --provider stub` narrates without
+        # building state, so the offline dev loop still works end-to-end.
+        return '{"actors": [], "claims": []}'

@@ -1,9 +1,10 @@
-"""Phase 0 degenerate beat pipeline (docs/05, 10).
+"""Phase 1 beat pipeline (docs/05, 10).
 
-context (recency only) → narrate → commit raw beat log. No planner, no extraction,
-no mechanics — those arrive in Phase 1+. The point of this slice is to prove the
-shape end-to-end: a beat reads prior beats *from the event log* and appends one
-`BeatResolved` commit, so a resumed session continues from Postgres, not memory.
+context (recency + structured recall) → narrate → extract → gauntlet → commit. The
+planner and mechanics stages are still ahead (Phase 3, D-28); the epistemic loop is
+here: recall feeds established facts to the narrator so characters can contradict
+lies, and the extractor turns the resulting prose into committed state through the
+validation gauntlet.
 """
 
 from __future__ import annotations
@@ -15,26 +16,27 @@ from collections.abc import AsyncIterator
 
 from pydantic import BaseModel
 
-from uro_core.domain.events import beat_resolved
+from uro_core.domain.events import DomainEvent, beat_resolved
 from uro_core.domain.ids import new_id
-from uro_core.errors import EmptyNarrationError
+from uro_core.errors import EmptyNarrationError, ProviderError
 from uro_core.metering import LLMCall
-from uro_core.ports.event_store import EventStore
+from uro_core.pipeline.extraction import (
+    build_extractor_messages,
+    parse_extraction,
+    run_gauntlet,
+)
+from uro_core.pipeline.recall import RecallBundle, assemble_recall, build_narrator_messages
+from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
 from uro_core.providers.router import ProviderRouter
 from uro_core.timeline.models import Campaign
-
-_SYSTEM_PROMPT = (
-    "You are the narrator of a text RPG set in a tavern. Continue the scene in two to "
-    "four sentences of vivid second-person prose. Never speak or decide for the player; "
-    "narrate only what they perceive and how the world responds."
-)
 
 
 class BeatResult(BaseModel):
     beat_id: str
     narration: str
     commit_id: str
+    extracted: int = 0  # number of state events canonicalized from the prose
 
 
 def _hash_messages(messages: list[Message]) -> str:
@@ -45,51 +47,94 @@ def _hash_messages(messages: list[Message]) -> str:
 class Engine:
     """Embeddable engine entry point. Wired with concrete adapters by the CLI/server."""
 
-    def __init__(self, store: EventStore, router: ProviderRouter, *, recency: int = 8) -> None:
+    def __init__(self, store: EngineStore, router: ProviderRouter, *, recency: int = 8) -> None:
         self._store = store
         self._router = router
         self._recency = recency
 
-    async def _build_messages(self, branch_id: str, intent_text: str) -> list[Message]:
-        history = await self._store.recent_beats(branch_id, self._recency)
-        messages = [Message(role="system", content=_SYSTEM_PROMPT)]
-        for beat in history:
-            # Defensive: never re-emit an empty turn (a past bad row must not wedge
-            # the reconstructed prompt against strict providers).
-            if not beat.intent_text or not beat.narration:
-                continue
-            messages.append(Message(role="user", content=beat.intent_text))
-            messages.append(Message(role="assistant", content=beat.narration))
-        messages.append(Message(role="user", content=intent_text))
-        return messages
-
     async def run_beat(
         self, campaign: Campaign, participant_id: str, intent_text: str
     ) -> BeatResult:
-        """Resolve one beat and commit it. Returns the full narration."""
-        messages = await self._build_messages(campaign.branch_id, intent_text)
+        """Resolve one beat and commit it (narration + extracted state)."""
+        recall = await assemble_recall(self._store, campaign.branch_id, intent_text, self._recency)
+        messages = build_narrator_messages(recall, intent_text)
         started = time.perf_counter()
         chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
         await self._meter("narrator", messages, started)
-        return await self._commit(campaign, participant_id, intent_text, "".join(chunks).strip())
+        narration = "".join(chunks).strip()
+        return await self._finish(campaign, participant_id, intent_text, narration, recall)
 
     async def run_beat_stream(
         self, campaign: Campaign, participant_id: str, intent_text: str
     ) -> AsyncIterator[str]:
-        """Stream narration chunks to the caller, then commit once the stream ends.
+        """Stream narration to the caller, then extract + commit once the stream ends.
 
         A beat commits only after the stream completes. If the consumer stops early
         (e.g. Ctrl-C mid-stream) the commit is intentionally skipped: nothing partial
         enters the append-only log, so a resumed session simply never saw that beat.
         """
-        messages = await self._build_messages(campaign.branch_id, intent_text)
+        recall = await assemble_recall(self._store, campaign.branch_id, intent_text, self._recency)
+        messages = build_narrator_messages(recall, intent_text)
         started = time.perf_counter()
         collected: list[str] = []
         async for chunk in self._router.stream("narrator", messages):
             collected.append(chunk)
             yield chunk
         await self._meter("narrator", messages, started)
-        await self._commit(campaign, participant_id, intent_text, "".join(collected).strip())
+        await self._finish(
+            campaign, participant_id, intent_text, "".join(collected).strip(), recall
+        )
+
+    async def _finish(
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        intent_text: str,
+        narration: str,
+        recall: RecallBundle,
+    ) -> BeatResult:
+        if not narration:
+            raise EmptyNarrationError(
+                f"provider produced no narration for a beat by {participant_id}"
+            )
+        extracted = await self._extract(campaign.branch_id, recall, narration)
+        beat_id = new_id()
+        events: list[DomainEvent] = [
+            beat_resolved(
+                beat_id=beat_id,
+                participant_id=participant_id,
+                intent_text=intent_text,
+                narration=narration,
+            ),
+            *extracted,
+        ]
+        commit = await self._store.append_beat(campaign.branch_id, events)
+        return BeatResult(
+            beat_id=beat_id,
+            narration=narration,
+            commit_id=commit.commit_id,
+            extracted=len(extracted),
+        )
+
+    async def _extract(
+        self, branch_id: str, recall: RecallBundle, narration: str
+    ) -> list[DomainEvent]:
+        """Extract state from prose through the gauntlet. Failure → narration-only beat
+        (docs/13: state integrity is never sacrificed to keep prose, and prose is never
+        lost to keep state)."""
+        messages = build_extractor_messages(recall, narration)
+        started = time.perf_counter()
+        try:
+            raw = await self._router.complete(
+                "extractor", messages, json_mode=True, temperature=0.1
+            )
+        except ProviderError:
+            return []
+        await self._meter("extractor", messages, started)
+        extraction = parse_extraction(raw)
+        if extraction is None:
+            return []
+        return await run_gauntlet(self._store, branch_id, extraction)
 
     async def _meter(self, stage_tag: str, messages: list[Message], started: float) -> None:
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -98,22 +143,3 @@ class Engine:
                 stage_tag=stage_tag, prompt_hash=_hash_messages(messages), latency_ms=latency_ms
             )
         )
-
-    async def _commit(
-        self, campaign: Campaign, participant_id: str, intent_text: str, narration: str
-    ) -> BeatResult:
-        if not narration:
-            # An empty completion must never become a permanent no-op beat that
-            # poisons the resume prompt. Surface it; the caller can retry.
-            raise EmptyNarrationError(
-                f"provider produced no narration for a beat by {participant_id}"
-            )
-        beat_id = new_id()
-        event = beat_resolved(
-            beat_id=beat_id,
-            participant_id=participant_id,
-            intent_text=intent_text,
-            narration=narration,
-        )
-        commit = await self._store.append_beat(campaign.branch_id, [event])
-        return BeatResult(beat_id=beat_id, narration=narration, commit_id=commit.commit_id)
