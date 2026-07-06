@@ -207,16 +207,22 @@ class Engine:
         started = time.perf_counter()
         raw: str | None = None
         try:
+            # Generous cap: extraction JSON can be dense; a truncated response parses to
+            # nothing and silently drops state (worse than a slow beat).
             raw = await self._router.complete(
-                "extractor", messages, json_mode=True, temperature=0.1
+                "extractor", messages, json_mode=True, temperature=0.1, max_tokens=4096
             )
-        except ProviderError:
+        except ProviderError as exc:
+            logger.warning("extractor call failed; committing narration-only beat: %s", exc)
             raw = None
         await self._meter("extractor", messages, started)  # meter even a failed call
         if raw is None:
             return []
         extraction = parse_extraction(raw)
         if extraction is None:
+            logger.warning(
+                "extractor output was not parseable JSON; committing narration-only beat"
+            )
             return []
         return await run_gauntlet(self._store, branch_id, extraction)
 

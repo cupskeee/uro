@@ -76,3 +76,19 @@ async def test_embed_raises() -> None:
     provider = _provider(lambda request: httpx.Response(200, json={}))
     with pytest.raises(ProviderError):
         await provider.embed(["anything"])
+
+
+async def test_complete_raises_on_max_tokens_truncation() -> None:
+    # A truncated (stop_reason=max_tokens) response returns HTTP 200 with partial JSON;
+    # complete() must fail loudly so the extractor degrades instead of parsing garbage.
+    data = {"stop_reason": "max_tokens", "content": [{"type": "text", "text": '"actors":['}]}
+    provider = _provider(lambda request: httpx.Response(200, json=data))
+    with pytest.raises(ProviderError, match="max_tokens"):
+        await provider.complete(_req(json_mode=True))
+
+
+async def test_complete_raises_on_non_json_body() -> None:
+    # A gateway/proxy 200 with an HTML body must degrade to ProviderError, not crash.
+    provider = _provider(lambda request: httpx.Response(200, text="<html>gateway</html>"))
+    with pytest.raises(ProviderError):
+        await provider.complete(_req())

@@ -22,6 +22,15 @@ app.add_typer(world_app, name="world")
 PARTICIPANT = "player-1"  # Phase 0 is single-player; participants arrive in Phase 5.
 
 
+def _run_async(coro_factory) -> None:  # type: ignore[no-untyped-def]
+    """Run an async command, turning config/credential errors into a clean message."""
+    try:
+        asyncio.run(coro_factory())
+    except (RuntimeError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
 @app.callback()
 def main() -> None:
     """Uro Engine — play, dry-run, and dev tools against the engine."""
@@ -53,7 +62,7 @@ def db_migrate() -> None:
         else:
             typer.echo("already up to date")
 
-    asyncio.run(_run())
+    _run_async(_run)
 
 
 @world_app.command("new")
@@ -72,7 +81,7 @@ def world_new(name: str) -> None:
         typer.echo(f"campaign: {campaign.campaign_id}")
         typer.echo(f"\nplay it:  uro play {campaign.campaign_id}")
 
-    asyncio.run(_run())
+    _run_async(_run)
 
 
 @app.command()
@@ -81,7 +90,9 @@ def play(
     provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
     model: str = typer.Option(None, help="model id for local/openai/anthropic providers"),
     bare: bool = typer.Option(
-        False, help="ablation: raw-transcript GM (no state/recall/extraction)"
+        False,
+        help="ablation (T1): raw-transcript GM, no state/recall/extraction. Use a FRESH "
+        "campaign — mixing bare and full beats on one corrupts the A/B comparison.",
     ),
 ) -> None:
     """Interactive play loop. Type an action; '/quit' to leave. State persists to Postgres."""
@@ -125,12 +136,18 @@ def play(
         finally:
             await store.close()
 
-    asyncio.run(_run())
+    _run_async(_run)
 
 
 @app.command()
 def consistency(campaign_id: str) -> None:
-    """Report the narrator's fact-consistency against state (thesis metric T2)."""
+    """Report the narrator contradiction-survival rate (thesis proxy metric T2).
+
+    Counts narrator-asserted claims that survived the extractor's contradiction gauntlet
+    (i.e. were not flagged as contradicting recalled state). This is a PROXY — it only
+    catches contradictions the extractor self-flagged, not all narration-vs-truth
+    disagreement — best read as a regression trend, not ground-truth verification.
+    """
 
     async def _run() -> None:
         store = build_store()
@@ -145,8 +162,8 @@ def consistency(campaign_id: str) -> None:
             await store.close()
         ratio = consistent / total if total else 1.0
         typer.echo(
-            f"fact-consistency: {consistent}/{total} narrator-asserted claims consistent "
-            f"with state ({ratio:.0%})"
+            f"T2 (proxy): {consistent}/{total} narrator claims survived the contradiction "
+            f"gauntlet ({ratio:.0%}) — regression trend, not ground-truth verification"
         )
 
-    asyncio.run(_run())
+    _run_async(_run)

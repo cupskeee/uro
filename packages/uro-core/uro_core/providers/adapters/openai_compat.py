@@ -104,10 +104,15 @@ class OpenAICompatProvider:
                 data = resp.json()
         except httpx.HTTPError as exc:
             raise ProviderError(f"provider request failed: {exc}") from exc
-        choices = data.get("choices") or []
-        if not choices:
-            raise ProviderError("provider returned no choices")
-        return choices[0].get("message", {}).get("content") or ""
+        except (ValueError, TypeError) as exc:  # a 200 with a non-JSON body
+            raise ProviderError(f"provider returned an unparseable body: {exc}") from exc
+        try:
+            choices = data.get("choices") or []
+            if not choices:
+                raise ProviderError("provider returned no choices")
+            return choices[0].get("message", {}).get("content") or ""
+        except (AttributeError, TypeError, KeyError) as exc:
+            raise ProviderError(f"provider returned an unexpected body shape: {exc}") from exc
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         headers = {"Content-Type": "application/json"}

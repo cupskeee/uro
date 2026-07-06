@@ -8,22 +8,19 @@ url = "postgresql://uro:uro@localhost:5433/uro" # 5433: see docker-compose.yml p
 [server]
 mode = "local" # local | token (docs/08)
 
-[llm.providers.anthropic]
-api_key_env = "ANTHROPIC_API_KEY"
-
-[llm.providers.openai]
-api_key_env = "OPENAI_API_KEY"
-
-[llm.providers.local]
-base_url = "http://localhost:11434/v1" # Ollama's OpenAI-compatible endpoint
-
-# Role bindings override world-pack suggestions (docs/04). One model for all
-# roles is a fine start; the indirection is what matters.
+# --- LLM role bindings (read by the CLI wiring) ---
+# Each role -> "kind:model" (or bare "kind"). Kinds: stub | local | openai | anthropic.
+# `uro play --provider X` is the default for any role NOT pinned here.
+# Secrets come from ENV, not this file: ANTHROPIC_API_KEY, OPENAI_API_KEY; the local
+# (Ollama) base url from URO_LOCAL_BASE_URL; a fallback embed model from URO_EMBED_MODEL.
 [llm.roles]
-narrator = "local:qwen3:14b"
-dialogue = "local:qwen3:14b"
-planner = "local:qwen3:14b"
-extractor = "local:qwen3:14b"
-summarizer = "local:qwen3:14b"
-embedder = "local:nomic-embed-text"
-judge = "local:qwen3:14b" # prefer judge != judged when probing (D-24)
+narrator = "anthropic:claude-sonnet-5"
+dialogue = "anthropic:claude-sonnet-5"
+extractor = "openai:gpt-4o-mini"            # cheaper model for high-volume structured output
+summarizer = "openai:gpt-4o-mini"
+embedder = "openai:text-embedding-3-small"  # MUST be an embedding model, not a chat model
+# planner / judge arrive with later phases (D-28, D-24).
+
+# NOTE: a [llm.providers] section for per-provider api_key_env / base_url is reserved for
+# the Phase 5 server config; the Phase 1 CLI does not read it yet — keys and base urls
+# come from the env vars named above.

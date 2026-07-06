@@ -9,6 +9,7 @@ provider to the `embedder` role instead.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 
 import httpx
@@ -17,6 +18,8 @@ from uro_core.errors import ProviderError
 from uro_core.providers.base import CompletionRequest, Message
 
 _VERSION = "2023-06-01"
+
+logger = logging.getLogger(__name__)
 
 
 def _split(messages: list[Message]) -> tuple[str | None, list[dict[str, str]]]:
@@ -93,6 +96,10 @@ class AnthropicProvider:
                         delta = event.get("delta") or {}
                         if delta.get("type") == "text_delta" and delta.get("text"):
                             yield delta["text"]
+                    elif kind == "message_delta":
+                        # carries stop_reason; a max_tokens cutoff is a normal 200 stream.
+                        if (event.get("delta") or {}).get("stop_reason") == "max_tokens":
+                            logger.warning("anthropic narration truncated at max_tokens")
                     elif kind == "message_stop":
                         break
                     elif kind == "error":
@@ -121,8 +128,16 @@ class AnthropicProvider:
                 data = resp.json()
         except httpx.HTTPError as exc:
             raise ProviderError(f"anthropic request failed: {exc}") from exc
-        blocks = data.get("content") or []
-        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        except (ValueError, TypeError) as exc:  # a 200 with a non-JSON body
+            raise ProviderError(f"anthropic returned an unparseable body: {exc}") from exc
+        if data.get("stop_reason") == "max_tokens":
+            # truncated output → likely invalid JSON; fail loudly so the caller degrades.
+            raise ProviderError("anthropic response hit max_tokens (output truncated)")
+        try:
+            blocks = data.get("content") or []
+            text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        except (AttributeError, TypeError, KeyError) as exc:
+            raise ProviderError(f"anthropic returned an unexpected body shape: {exc}") from exc
         return prefill + text
 
     async def embed(self, texts: list[str]) -> list[list[float]]:

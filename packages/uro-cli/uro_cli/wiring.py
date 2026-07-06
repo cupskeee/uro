@@ -10,6 +10,7 @@ extractor = "openai:gpt-4o-mini", embedder = "openai:text-embedding-3-small"); t
 
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from pathlib import Path
@@ -24,6 +25,8 @@ from uro_core.providers.router import ProviderRouter
 
 DEFAULT_DSN = "postgresql://uro:uro@localhost:5433/uro"
 
+logger = logging.getLogger(__name__)
+
 
 def db_dsn() -> str:
     return os.environ.get("URO_DATABASE_URL", DEFAULT_DSN)
@@ -34,8 +37,16 @@ def build_store() -> PostgresEventStore:
 
 
 def _config() -> dict[str, Any]:
-    path = Path(os.environ.get("URO_CONFIG", "uro.toml"))
-    return tomllib.loads(path.read_text()) if path.is_file() else {}
+    explicit = os.environ.get("URO_CONFIG")
+    path = Path(explicit) if explicit else Path("uro.toml")
+    if not path.is_file():
+        if explicit:  # explicitly set but not a file → loud, not silently ignored
+            raise RuntimeError(f"URO_CONFIG={path} is not a file")
+        return {}
+    try:
+        return tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as exc:
+        raise RuntimeError(f"malformed config {path}: {exc}") from exc
 
 
 def load_role_specs() -> dict[str, str]:
@@ -94,12 +105,21 @@ def build_embedder(kind: str) -> LLMProvider | None:
 
 
 def build_router(kind: str, model: str | None) -> ProviderRouter:
+    # The default provider is required (it narrates + backs unpinned roles). A *pinned*
+    # role whose provider can't be built (e.g. an unused role missing its key) is skipped
+    # with a warning and falls back to the default, rather than bricking the whole router.
     default = build_provider(kind, model)
-    bindings: dict[str, LLMProvider] = {
-        role: provider_from_spec(spec) for role, spec in load_role_specs().items()
-    }
+    bindings: dict[str, LLMProvider] = {}
+    for role, spec in load_role_specs().items():
+        try:
+            bindings[role] = provider_from_spec(spec)
+        except (RuntimeError, ValueError) as exc:
+            logger.warning("role %r (%s) unavailable, using default: %s", role, spec, exc)
     if "embedder" not in bindings:
-        embedder = build_embedder(kind)
+        try:
+            embedder = build_embedder(kind)
+        except (RuntimeError, ValueError):
+            embedder = None
         if embedder is not None:
             bindings["embedder"] = embedder
     return ProviderRouter(bindings=bindings, default=default)

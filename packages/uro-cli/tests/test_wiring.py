@@ -46,3 +46,24 @@ def test_role_config_binds_roles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     monkeypatch.setenv("URO_CONFIG", str(cfg))
     router = build_router("stub", None)
     assert isinstance(router._bindings["narrator"], AnthropicProvider)  # role override applied
+
+
+def test_build_router_tolerates_an_unbuildable_role(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A pinned role whose key is missing must be skipped (fall back to default), not
+    # crash the whole router — else an unused/optional role bricks play (review inc 4).
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = tmp_path / "uro.toml"
+    cfg.write_text('[llm.roles]\nextractor = "openai:gpt-4o-mini"\n')
+    monkeypatch.setenv("URO_CONFIG", str(cfg))
+    router = build_router("stub", None)  # no OpenAI key → extractor binding skipped
+    assert "extractor" not in router._bindings  # fell back to the default provider
+
+
+def test_config_errors_loudly_on_a_missing_explicit_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("URO_CONFIG", "/no/such/uro.toml")
+    with pytest.raises(RuntimeError):
+        load_role_specs()
