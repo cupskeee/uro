@@ -58,3 +58,11 @@ class BeliefView(BaseModel):
     claim_id: str
     confidence: float
     learned_from: str | None
+
+
+class MemoryHit(BaseModel):
+    text: str
+    kind: str
+    commit_id: str
+    entity_refs: list[str]
+    distance: float  # cosine distance to the query (lower = more similar)

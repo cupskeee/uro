@@ -42,3 +42,7 @@ class LLMProvider(Protocol):
     async def complete(self, req: CompletionRequest) -> str:
         """Return a full (non-streamed) completion — used by the extractor/planner."""
         ...
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per input text (semantic recall, docs/04)."""
+        ...

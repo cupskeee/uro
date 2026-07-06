@@ -108,3 +108,20 @@ class OpenAICompatProvider:
         if not choices:
             raise ProviderError("provider returned no choices")
         return choices[0].get("message", {}).get("content") or ""
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        body = {"model": self._model, "input": texts}
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout, transport=self._transport
+            ) as client:
+                resp = await client.post(f"{self._base_url}/embeddings", headers=headers, json=body)
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"embedding request failed: {exc}") from exc
+        rows = data.get("data") or []
+        return [row["embedding"] for row in rows]

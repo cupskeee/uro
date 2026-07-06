@@ -47,16 +47,39 @@ def _hash_messages(messages: list[Message]) -> str:
 class Engine:
     """Embeddable engine entry point. Wired with concrete adapters by the CLI/server."""
 
-    def __init__(self, store: EngineStore, router: ProviderRouter, *, recency: int = 8) -> None:
+    def __init__(
+        self,
+        store: EngineStore,
+        router: ProviderRouter,
+        *,
+        recency: int = 8,
+        semantic_k: int = 4,
+    ) -> None:
         self._store = store
         self._router = router
         self._recency = recency
+        self._semantic_k = semantic_k
+
+    async def _recall(self, branch_id: str, intent_text: str) -> RecallBundle:
+        """Structured recall + semantic recall of older beats (docs/04)."""
+        recall = await assemble_recall(self._store, branch_id, intent_text, self._recency)
+        recent_texts = {b.narration for b in recall.recent_beats}
+        started = time.perf_counter()
+        try:
+            vectors = await self._router.embed("embedder", [intent_text])
+        except ProviderError:
+            return recall  # semantic recall is best-effort aux; structured recall stands
+        await self._meter("embedder", [Message(role="user", content=intent_text)], started)
+        hits = await self._store.search(branch_id, vectors[0], self._semantic_k)
+        # Drop memories already in the recency window — semantic recall is for OLD beats.
+        recall.memories = [h.text for h in hits if h.text not in recent_texts]
+        return recall
 
     async def run_beat(
         self, campaign: Campaign, participant_id: str, intent_text: str
     ) -> BeatResult:
         """Resolve one beat and commit it (narration + extracted state)."""
-        recall = await assemble_recall(self._store, campaign.branch_id, intent_text, self._recency)
+        recall = await self._recall(campaign.branch_id, intent_text)
         messages = build_narrator_messages(recall, intent_text)
         started = time.perf_counter()
         chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
@@ -73,7 +96,7 @@ class Engine:
         (e.g. Ctrl-C mid-stream) the commit is intentionally skipped: nothing partial
         enters the append-only log, so a resumed session simply never saw that beat.
         """
-        recall = await assemble_recall(self._store, campaign.branch_id, intent_text, self._recency)
+        recall = await self._recall(campaign.branch_id, intent_text)
         messages = build_narrator_messages(recall, intent_text)
         started = time.perf_counter()
         collected: list[str] = []
@@ -109,11 +132,37 @@ class Engine:
             *extracted,
         ]
         commit = await self._store.append_beat(campaign.branch_id, events)
+        await self._remember(
+            campaign.branch_id, commit.commit_id, narration, [a.actor_id for a in recall.actors]
+        )
         return BeatResult(
             beat_id=beat_id,
             narration=narration,
             commit_id=commit.commit_id,
             extracted=len(extracted),
+        )
+
+    async def _remember(
+        self, branch_id: str, commit_id: str, text: str, entity_refs: list[str]
+    ) -> None:
+        """Embed the beat's narration and index it for later semantic recall.
+
+        Post-commit and best-effort: the memory index is a rebuildable aux cache, so
+        an embedding failure never rolls back or fails a committed beat.
+        """
+        started = time.perf_counter()
+        try:
+            vectors = await self._router.embed("embedder", [text])
+        except ProviderError:
+            return
+        await self._meter("embedder", [Message(role="user", content=text)], started)
+        await self._store.add_memory(
+            branch_id=branch_id,
+            commit_id=commit_id,
+            kind="beat",
+            text=text,
+            vector=vectors[0],
+            entity_refs=entity_refs,
         )
 
     async def _extract(

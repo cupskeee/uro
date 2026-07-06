@@ -70,3 +70,15 @@ def test_narrator_prompt_surfaces_present_beliefs() -> None:
     )
     blob = "\n".join(m.content for m in build_narrator_messages(recall, "I ask about the Duke"))
     assert "Flora believes: The Duke plans war." in blob  # beliefs are live, not dead recall
+
+
+def test_narrator_prompt_surfaces_recalled_memories() -> None:
+    recall = RecallBundle(
+        recent_beats=[],
+        actors=[],
+        claims=[],
+        beliefs=[],
+        memories=["The oracle warned of a great flood."],
+    )
+    blob = "\n".join(m.content for m in build_narrator_messages(recall, "what now?"))
+    assert "The oracle warned of a great flood." in blob

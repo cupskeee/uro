@@ -6,6 +6,7 @@ adapters ring — the core never imports this module (import-linter, docs/14).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,8 +23,15 @@ from uro_core.timeline.models import (
     Campaign,
     ClaimView,
     Commit,
+    MemoryHit,
     World,
 )
+
+
+def _vector_literal(vector: list[float]) -> str:
+    """pgvector text form: '[0.1,0.2,...]' — passed as text and cast ::vector in SQL."""
+    return "[" + ",".join(f"{x:.6f}" for x in vector) + "]"
+
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -298,6 +306,53 @@ class PostgresEventStore:
                 actor_id,
             )
         return [BeliefView(**dict(r)) for r in rows]
+
+    # --- semantic memory (VectorIndex port; docs/04, 07) ---
+
+    async def add_memory(
+        self,
+        *,
+        branch_id: str,
+        commit_id: str,
+        kind: str,
+        text: str,
+        vector: list[float],
+        entity_refs: list[str],
+    ) -> None:
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        async with self.pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                "INSERT INTO embeddings (content_hash, vector) VALUES ($1, $2::vector) "
+                "ON CONFLICT (content_hash) DO NOTHING",  # a vector lives once
+                content_hash,
+                _vector_literal(vector),
+            )
+            await conn.execute(
+                "INSERT INTO memory_index "
+                "(memory_id, branch_id, content_hash, kind, text, entity_refs, commit_id) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                new_id(),
+                branch_id,
+                content_hash,
+                kind,
+                text,
+                entity_refs,
+                commit_id,
+            )
+
+    async def search(self, branch_id: str, vector: list[float], k: int) -> list[MemoryHit]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT m.text, m.kind, m.commit_id, m.entity_refs, "
+                "       (e.vector <=> $2::vector) AS distance "
+                "FROM memory_index m JOIN embeddings e ON e.content_hash = m.content_hash "
+                "WHERE m.branch_id = $1 "
+                "ORDER BY distance ASC, m.memory_id ASC LIMIT $3",  # memory_id: stable tiebreak
+                branch_id,
+                _vector_literal(vector),
+                k,
+            )
+        return [MemoryHit(**dict(r)) for r in rows]
 
     # --- helpers ---
 

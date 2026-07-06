@@ -61,3 +61,6 @@ class ProviderRouter:
             json_mode=json_mode,
         )
         return await provider.complete(req)
+
+    async def embed(self, role: str, texts: list[str]) -> list[list[float]]:
+        return await self._provider_for(role).embed(texts)

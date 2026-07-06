@@ -22,8 +22,8 @@ Solo-dev PoC roadmap. No calendar estimates (the report's quarter/budget tables 
 
 - Full entity projections (actors, places, claims, edges, beliefs), actor tiers T0–T2. *(inc 1: actors/claims/beliefs done; places/edges when needed.)*
 - Extractor stage + validation gauntlet (whitelist/tier/contradiction), promotion rules. *(inc 2 done.)* **The LLM planner is deferred to Phase 3** (D-28) — Phase 1 does deterministic entity-linking for recall, since there are no mechanics affordances to route yet.
-- Retrieval: structured recall *(inc 2 done)* + pgvector semantic recall + summarizer compression *(inc 3)*.
-- `anthropic` adapter; multi-role model bindings *(inc 4)*.
+- Retrieval: structured recall *(inc 2 done)* + pgvector semantic recall *(inc 3 done)* + summarizer compression *(deferred — token-efficiency optimization, not needed for the acceptance test; lands with belief-strength/journal work)*.
+- `anthropic` adapter; multi-role model bindings; live-model acceptance run + thesis harness *(inc 4)*.
 
 **Acceptance:** an NPC lies to the player; ten beats later, a *different* NPC contradicts the lie from `truth=true` state — and a claim first mentioned ~50 beats ago resurfaces correctly via recall.
 

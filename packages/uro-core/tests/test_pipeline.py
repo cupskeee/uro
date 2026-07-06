@@ -17,6 +17,7 @@ from uro_core.pipeline.extraction import (
     run_gauntlet,
 )
 from uro_core.pipeline.recall import assemble_recall
+from uro_core.providers.adapters.stub import hashing_embedding
 from uro_core.providers.base import CompletionRequest
 from uro_core.providers.router import ProviderRouter
 
@@ -35,6 +36,9 @@ class ScriptedProvider:
 
     async def complete(self, req: CompletionRequest) -> str:
         return self._completions.pop(0) if self._completions else '{"actors": [], "claims": []}'
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [hashing_embedding(t) for t in texts]
 
 
 async def _branch(store: PostgresEventStore) -> str:

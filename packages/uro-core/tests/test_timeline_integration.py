@@ -29,6 +29,12 @@ class _SilentProvider:
         return
         yield ""  # pragma: no cover - marks this an async generator
 
+    async def complete(self, req: CompletionRequest) -> str:
+        return '{"actors": [], "claims": []}'
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * 8 for _ in texts]
+
 
 async def test_beats_persist_and_a_fresh_store_resumes(store: PostgresEventStore) -> None:
     world = await store.create_world(f"test-{new_id()}")

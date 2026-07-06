@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from uro_core.ports.event_store import EventStore
+from uro_core.ports.vector import VectorIndex
 from uro_core.timeline.models import ActorView, BeliefView, ClaimView
 
 
@@ -34,6 +35,7 @@ class ProjectionQueries(Protocol):
     async def beliefs_of(self, branch_id: str, actor_id: str) -> list[BeliefView]: ...
 
 
-class EngineStore(EventStore, ProjectionQueries, Protocol):
+class EngineStore(EventStore, ProjectionQueries, VectorIndex, Protocol):
     """The read+write surface the engine needs: timeline (EventStore) + projection
-    queries. The Postgres store satisfies it structurally; Phase 1 has one store."""
+    queries + semantic memory (VectorIndex). The Postgres store satisfies it
+    structurally; Phase 1 has one store."""

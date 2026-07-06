@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from uro_core.domain.events import BeatResolvedPayload
 from uro_core.ports.projections import EngineStore
@@ -36,6 +36,7 @@ class RecallBundle(BaseModel):
     actors: list[ActorView]  # on-stage figures
     claims: list[ClaimView]  # relevant claims, truth-annotated
     beliefs: list[BeliefView]  # beliefs held by on-stage figures
+    memories: list[str] = Field(default_factory=list)  # semantic recall of older beats (docs/04)
 
 
 def _name_token(name: str) -> str:
@@ -99,6 +100,11 @@ def build_narrator_messages(recall: RecallBundle, intent_text: str) -> list[Mess
     ]
 
     context_lines = []
+    if recall.memories:
+        context_lines.append(
+            "YOU RECALL (from earlier in the campaign):\n"
+            + "\n".join(f"- {m}" for m in recall.memories)
+        )
     if facts:
         context_lines.append("ESTABLISHED FACTS (true):\n" + "\n".join(f"- {f}" for f in facts))
     if rumors:
