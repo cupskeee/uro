@@ -23,6 +23,27 @@ Anything a *platform* would build: user accounts and social features, world/asse
 | `git archive` | releases, packages | | world/campaign export packs | sharing libraries, marketplaces |
 | hooks | CI/CD | | dry-run mode, event stream (outbox) | creator tooling, moderation |
 
+## Status
+
+**Phase 0 + Phase 1 are code-complete** (13 commits, 71 tests). What runs today: the full beat pipeline — structured + semantic recall → narration → extraction → validation gauntlet → commit → projections — with a claim/belief epistemic layer (an NPC can lie without corrupting world truth), pgvector semantic memory, four LLM provider adapters (stub, OpenAI-compatible, Anthropic, with per-role routing), and a thesis harness (`--bare` ablation + `uro consistency`). The one thing *not* yet done is the live-model run — no API key was available in the build environment, so whether the narrator actually uses recalled facts to contradict a lie in prose is unproven. Signature feature next: **branching timelines** (Phase 2). See [10-roadmap.md](docs/10-roadmap.md).
+
+## Quickstart
+
+Prerequisites: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Docker, and [`just`](https://github.com/casey/just) (optional).
+
+```sh
+uv sync --all-packages          # install the workspace
+docker compose up -d --wait     # Postgres + pgvector (host port 5433)
+uv run uro db migrate           # apply migrations
+just test                       # lint + types + import-linter + tests (needs the DB up)
+
+uv run uro world new "Ashfall"  # prints a campaign id
+uv run uro play <campaign>      # play offline with the deterministic stub…
+uv run uro play <campaign> --provider anthropic   # …or a real model (needs ANTHROPIC_API_KEY)
+```
+
+Per-role model bindings go in `uro.toml` (`[llm.roles]`, see `uro.example.toml`); secrets stay in env vars. Contributing conventions and the build rhythm live in [CLAUDE.md](CLAUDE.md); the developer guide is [14-development-guide.md](docs/14-development-guide.md).
+
 ## Documentation map
 
 **Reading order:** `00`–`11` are the design (read in order); `12`–`15` are the developer-facing contracts and guides (read before writing code); `glossary.md` pins the vocabulary; `decisions.md` records why things are the way they are. The fastest way to grok the whole system is [15-walkthroughs.md](docs/15-walkthroughs.md).
