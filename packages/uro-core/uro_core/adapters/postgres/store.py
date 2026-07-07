@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import asyncpg
 
@@ -28,6 +29,7 @@ from uro_core.domain.events import (
     history_cause,
     pc_bound,
     pc_released,
+    sheet_updated,
     time_advanced,
     world_genesis,
 )
@@ -214,12 +216,16 @@ class PostgresEventStore:
         adopt_actor_id: str | None = None,
         new_pc_name: str | None = None,
         new_pc_id: str | None = None,
+        pc_sheet: dict[str, Any] | None = None,
+        ruleset_id: str = "",
         seed: int = 0,
     ) -> Campaign:
         """Create a campaign on a branch and bind its PC — either ADOPT an existing world
         actor (the meteor 'continue': play the one who caused it) or CREATE a fresh PC.
-        Emits CampaignStarted + (ActorCreated if fresh) + PCBound in one commit, so PC-ness
-        is event-sourced and reproduced by materialization on any future fork."""
+        Emits CampaignStarted + (ActorCreated if fresh) + PCBound (+ SheetUpdated if a
+        ruleset-built `pc_sheet` is supplied) in one commit, so PC-ness and the character
+        sheet are event-sourced and reproduced by materialization on any future fork. The
+        caller (which holds the ruleset) builds the sheet; the store never interprets it."""
         if (adopt_actor_id is None) == (new_pc_name is None):
             raise ValueError("start_campaign needs exactly one of adopt_actor_id / new_pc_name")
         campaign_id = new_id()
@@ -239,6 +245,10 @@ class PostgresEventStore:
         events.append(
             pc_bound(actor_id=pc_actor_id, participant_id=participant_id, campaign_id=campaign_id)
         )
+        if pc_sheet is not None:
+            events.append(
+                sheet_updated(actor_id=pc_actor_id, sheet=pc_sheet, ruleset_id=ruleset_id)
+            )
         async with self.pool.acquire() as conn, conn.transaction():
             branch = await conn.fetchrow(
                 "SELECT world_id FROM branches WHERE branch_id = $1", branch_id
@@ -365,6 +375,18 @@ class PostgresEventStore:
                 branch_id,
             )
         return [r["actor_id"] for r in rows]
+
+    async def campaign_pc(self, campaign_id: str) -> str | None:
+        """The (first active) PC actor bound to a campaign — the actor a free-roam check acts
+        as, and whose sheet the mechanics gate reads."""
+        async with self.pool.acquire() as conn:
+            actor_id = await conn.fetchval(
+                "SELECT p.actor_id FROM proj_pcs p "
+                "JOIN campaigns c ON c.campaign_id = p.campaign_id AND c.branch_id = p.branch_id "
+                "WHERE p.campaign_id = $1 AND p.active ORDER BY p.actor_id LIMIT 1",
+                campaign_id,
+            )
+        return str(actor_id) if actor_id is not None else None
 
     async def current_world_time(self, branch_id: str) -> int:
         """The branch's latest in-fiction day (max over its ancestry; 0 if unset)."""
@@ -650,6 +672,18 @@ class PostgresEventStore:
                 branch_id,
             )
         return [PlaceView(**dict(r)) for r in rows]
+
+    async def get_sheet(self, branch_id: str, actor_id: str) -> dict[str, Any] | None:
+        """An actor's character sheet as a raw dict (docs/06). The store keeps it opaquely; the
+        pipeline validates it against the SHARED port Sheet (a d20-shaped contract for now,
+        OQ-13) — so the sheet SHAPE is port-fixed, while the ruleset owns its SEMANTICS."""
+        async with self.pool.acquire() as conn:
+            sheet = await conn.fetchval(
+                "SELECT sheet FROM proj_sheets WHERE branch_id = $1 AND actor_id = $2",
+                branch_id,
+                actor_id,
+            )
+        return dict(sheet) if sheet is not None else None
 
     # --- branching internals ---
 

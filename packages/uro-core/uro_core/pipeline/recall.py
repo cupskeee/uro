@@ -87,7 +87,13 @@ async def assemble_recall(
     return RecallBundle(recent_beats=recent, actors=on_stage, claims=claims, beliefs=beliefs)
 
 
-def build_narrator_messages(recall: RecallBundle, intent_text: str) -> list[Message]:
+def build_narrator_messages(
+    recall: RecallBundle,
+    intent_text: str,
+    *,
+    mechanics_traces: list[str] | None = None,
+    directives: str = "",
+) -> list[Message]:
     facts = [c.statement for c in recall.claims if c.truth == "true"]
     rumors = [c.statement for c in recall.claims if c.truth != "true"]
     claim_by_id = {c.claim_id: c for c in recall.claims}
@@ -116,6 +122,15 @@ def build_narrator_messages(recall: RecallBundle, intent_text: str) -> list[Mess
     if recall.actors:
         present = ", ".join(f"{a.name} ({a.role})" if a.role else a.name for a in recall.actors)
         context_lines.append(f"PRESENT: {present}")
+    # Mechanics results the ruleset produced this beat (docs/06): the narrator MUST honor the
+    # outcome — a failed persuade check cannot be narrated as a success.
+    if mechanics_traces:
+        context_lines.append(
+            "MECHANICS (weave these outcomes in — do not contradict them):\n"
+            + "\n".join(f"- {t}" for t in mechanics_traces)
+        )
+    if directives:
+        context_lines.append(f"DIRECTION: {directives}")
 
     messages = [Message(role="system", content=_NARRATOR_SYSTEM)]
     if context_lines:

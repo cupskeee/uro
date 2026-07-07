@@ -66,8 +66,9 @@ class Award(BaseModel):
 
 class Affordance(BaseModel):
     """A mechanically-backed verb the planner may invoke (docs/06, D-21). `trigger_categories`
-    are intent classes that MUST route through this affordance — plan validation enforces
-    that deterministically (docs/13), so a check can't be dodged by phrasing."""
+    are intent classes that MUST route through this affordance — plan validation enforces that
+    deterministically GIVEN the planner's honest classification (docs/13); a misclassified
+    intent can still slip through, and consequence gating (the backstop) is not built yet."""
 
     id: str
     ability: Ability
@@ -170,6 +171,11 @@ class Ruleset(Protocol):
     def progression(self, sheet: Sheet, award: Award) -> Sheet: ...
 
     def affordances(self) -> list[Affordance]: ...
+
+    def dc_for(self, difficulty: Difficulty) -> int:
+        """Map an affordance's difficulty tier to a numeric DC — the mechanics gate uses this
+        to build a CheckRequest from an affordance without knowing the ruleset's DC scale."""
+        ...
 
     def resolve_check(self, req: CheckRequest, rng: Rng) -> CheckResult: ...
 

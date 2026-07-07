@@ -7,13 +7,16 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from typing import Any
 
 import typer
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.pipeline.engine import Engine
+from uro_core.rulesets.base import CharSpec
+from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import World
 
-from uro_cli.wiring import build_router, build_store
+from uro_cli.wiring import build_router, build_ruleset, build_store
 
 app = typer.Typer(no_args_is_help=True, help="Uro Engine — reference client.")
 db_app = typer.Typer(no_args_is_help=True, help="Database management.")
@@ -44,6 +47,12 @@ async def _world_or_exit(store: PostgresEventStore, ident: str) -> World:
         typer.echo(f"no such world: {ident}", err=True)
         raise typer.Exit(1)
     return world
+
+
+def _build_pc_sheet() -> tuple[dict[str, Any], str]:
+    """A default character sheet from the bound ruleset, so every PC can be checked (docs/06)."""
+    ruleset = build_ruleset()
+    return ruleset.new_character(CharSpec(), Rng(0)).model_dump(), ruleset.id
 
 
 @app.callback()
@@ -82,18 +91,27 @@ def db_migrate() -> None:
 
 @world_app.command("new")
 def world_new(name: str) -> None:
-    """Create a world (+ its main branch) and a campaign to play it. Prints the campaign id."""
+    """Create a world (+ its main branch) and a ready-to-play campaign with a default,
+    sheeted PC. Prints the campaign id."""
 
     async def _run() -> None:
         store = build_store()
         await store.connect()
         try:
             world = await store.create_world(name)
-            campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+            sheet, ruleset_id = _build_pc_sheet()
+            campaign = await store.start_campaign(
+                world.world_id,
+                world.main_branch_id,
+                participant_id=PARTICIPANT,
+                new_pc_name="Adventurer",
+                pc_sheet=sheet,
+                ruleset_id=ruleset_id,
+            )
         finally:
             await store.close()
         typer.echo(f"world:    {world.world_id}  ({name})")
-        typer.echo(f"campaign: {campaign.campaign_id}")
+        typer.echo(f"campaign: {campaign.campaign_id}  (PC: Adventurer)")
         typer.echo(f"\nplay it:  uro play {campaign.campaign_id}")
 
     _run_async(_run)
@@ -120,7 +138,13 @@ def play(
             if campaign is None:
                 typer.echo(f"no such campaign: {campaign_id}", err=True)
                 raise typer.Exit(1)
-            engine = Engine(store, build_router(provider, model), bare=bare)
+            # No ruleset in bare (ablation) mode — the planner/gate are exactly what it ablates.
+            engine = Engine(
+                store,
+                build_router(provider, model),
+                ruleset=None if bare else build_ruleset(),
+                bare=bare,
+            )
 
             history = await store.recent_beats(campaign.branch_id, 3)
             if history:
@@ -286,12 +310,23 @@ def campaign_new(
             if b is None:
                 typer.echo(f"no such branch: {branch}", err=True)
                 raise typer.Exit(1)
+            # Every PC needs a sheet so the mechanics gate can check it (docs/06). A fresh PC
+            # gets one; an adopted actor is sheeted only if it lacks one (a re-adopted former
+            # PC keeps the sheet carried on its branch).
+            pc_sheet = None
+            ruleset_id = ""
+            if pc is not None or (
+                adopt is not None and await store.get_sheet(b.branch_id, adopt) is None
+            ):
+                pc_sheet, ruleset_id = _build_pc_sheet()
             campaign = await store.start_campaign(
                 w.world_id,
                 b.branch_id,
                 participant_id=participant,
                 adopt_actor_id=adopt,
                 new_pc_name=pc,
+                pc_sheet=pc_sheet,
+                ruleset_id=ruleset_id,
             )
         finally:
             await store.close()

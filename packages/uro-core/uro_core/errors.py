@@ -16,3 +16,8 @@ class ProviderError(UroError):
 
 class EmptyNarrationError(UroError):
     """A beat produced no narration; it must not enter the append-only log."""
+
+
+class PlannerError(UroError):
+    """The planner could not produce a valid plan after re-asks; the beat is unrunnable
+    (docs/13: a beat without a plan fails, retryable as a fresh beat)."""

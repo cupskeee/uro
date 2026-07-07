@@ -17,6 +17,7 @@ class Ruleset(Protocol):
 
     # Action resolution (free-roam checks)
     def affordances(self) -> list[Affordance]       # vocabulary + mandatory trigger categories (D-21)
+    def dc_for(self, difficulty: Difficulty) -> int # tier (easy/medium/hard) → numeric DC
     def resolve_check(self, req: CheckRequest, rng: Rng) -> CheckResult
 
     # Encounter mode (combat)

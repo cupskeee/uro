@@ -8,7 +8,7 @@ alongside EventStore for Phase 1's single store.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from uro_core.ports.event_store import EventStore
 from uro_core.ports.vector import VectorIndex
@@ -22,12 +22,18 @@ class ProjectionQueries(Protocol):
 
     async def list_places(self, branch_id: str) -> list[PlaceView]: ...
 
+    async def get_sheet(self, branch_id: str, actor_id: str) -> dict[str, Any] | None:
+        """An actor's ruleset character sheet as a raw dict (docs/06); None if unsheeted."""
+        ...
+
     async def is_pc(self, branch_id: str, actor_id: str) -> bool:
         """Per-branch PC-ness (docs/02): the same actor is a PC on one fork, an NPC on
         a sibling — answered by PCBound/PCReleased history, never a global flag."""
         ...
 
     async def active_pcs(self, branch_id: str) -> list[str]: ...
+
+    async def campaign_pc(self, campaign_id: str) -> str | None: ...
 
     async def find_actor_by_name(self, branch_id: str, name: str) -> ActorView | None:
         """Match by name (case-insensitive) or alias — the seed of entity resolution."""

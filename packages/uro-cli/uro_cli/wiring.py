@@ -22,6 +22,8 @@ from uro_core.providers.adapters.openai_compat import OpenAICompatProvider
 from uro_core.providers.adapters.stub import StubProvider
 from uro_core.providers.base import LLMProvider
 from uro_core.providers.router import ProviderRouter
+from uro_core.rulesets.base import Ruleset
+from uro_core.rulesets.uro_basic import UroBasic
 
 DEFAULT_DSN = "postgresql://uro:uro@localhost:5433/uro"
 
@@ -34,6 +36,11 @@ def db_dsn() -> str:
 
 def build_store() -> PostgresEventStore:
     return PostgresEventStore(db_dsn())
+
+
+def build_ruleset() -> Ruleset:
+    """The bound ruleset (docs/06). Built-in Uro Basic for now; world packs will select one."""
+    return UroBasic()
 
 
 def _config() -> dict[str, Any]:

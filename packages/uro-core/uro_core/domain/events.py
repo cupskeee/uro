@@ -491,3 +491,35 @@ def adaptation_applied(
             trigger_refs=trigger_refs or [], scope=scope, summary=summary
         ).model_dump(),
     )
+
+
+# --- Character sheets (docs/06, 12; ruleset-owned) ---
+#
+# The ruleset owns the sheet's SEMANTICS (docs/06 sheet_schema); the store records it opaquely,
+# though the pipeline currently reads it via the shared port Sheet (port-fixed shape, OQ-13).
+# Emitter R S. The PoC stores the FULL sheet per update (a whole-sheet replace, not the
+# catalog's incremental "sheet_patch") — simplest sound rule until mechanics need partial patches.
+
+
+class SheetUpdatedPayload(BaseModel):
+    v: int = 1
+    actor_id: str
+    ruleset_id: str = ""
+    sheet: dict[str, Any] = Field(default_factory=dict)
+
+
+def sheet_updated(
+    *,
+    actor_id: str,
+    sheet: dict[str, Any],
+    ruleset_id: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="SheetUpdated",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=SheetUpdatedPayload(
+            actor_id=actor_id, ruleset_id=ruleset_id, sheet=sheet
+        ).model_dump(),
+    )

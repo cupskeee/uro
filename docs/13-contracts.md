@@ -40,7 +40,7 @@ Stage graphs are assembled per mode (`05`). Rules:
 
 - **Atomicity:** the beat's *own* events reach the store only through the commit stage [6], in one transaction with the outbox write. A failed beat commits nothing of its own — streamed prose the player already saw simply never became canon (client marks the beat failed/retryable). One carve-out: the Actor service's simulate-on-observation may write a **separate, preceding** commit mid-beat (`05`, `03`) — atomic in its own right, not the beat's events.
 - **Concurrency:** at most **one in-flight beat per campaign**, enforced by the engine after `TurnArbiter` admission (`08`). Different campaigns/branches are fully concurrent. This rule stops *other* writers moving the head — but the beat's own off-screen-sim sub-commit does move it, so the beat re-anchors `branch_head` onto that sub-commit before proceeding to [6].
-- **Plan validation (pre-narration, deterministic, no LLM):** between [2] and [3] the plan is checked against state and ruleset: referenced targets must exist, presupposed facts must not be `false`, and if the intent matches a ruleset-declared **trigger category** the plan must invoke that affordance (D-21). Violations re-ask the planner. This is the *only* point where replanning happens — nothing has streamed yet.
+- **Plan validation (pre-narration, deterministic, no LLM):** between [2] and [3] the plan is checked against state and ruleset: referenced targets must exist, presupposed facts must not be `false`, and if the intent matches a ruleset-declared **trigger category** the plan must invoke that affordance (D-21). Violations re-ask the planner. This is the *only* point where replanning happens — nothing has streamed yet. *(Phase-3 status: the affordance-vocabulary fence + D-21 trigger coverage + **actor**-ref existence are enforced; place/item existence and the presupposed-facts check are deferred — there is no place/item registry yet.)*
 - **Post-narration validation is downgrade-only:** problems found at [5] can only downgrade a proposal (claim → belief) or drop it with a logged warning. No replanning, no prose regeneration after streaming begins — the player has already read it.
 - **Time:** the planner proposes `time_cost` (in segments); the commit stage emits `TimeAdvanced` when > 0.
 
@@ -80,9 +80,11 @@ Default sampling per role (deployment-overridable): narrator 0.9 · dialogue 0.8
   "intent_class": "dialogue | action | movement | examine | meta",
   "targets": ["actor:...", "place:...", "item:..."],       // entity refs on stage
   "speakers": ["actor:..."],                               // who gets a dialogue call in [4]
+  "triggers": ["change_disposition", ...],                 // trigger categories the intent hits;
+                                                           //   EACH must be invoked by a mechanic
+                                                           //   below — deterministic D-21 check
   "mechanics": [{"affordance": "persuade", "actor": "...", "target": "...", "context": "..."}],
   "mode_transition": null,                                  // or {"to": "encounter", "cause": "..."}
-  "thread_hooks": [{"thread": "...", "development": "..."}],
   "time_cost": 0,                                           // segments
   "narration_directives": "one line of pacing/tone guidance for [4]",
   "suggestions": ["2-4 short next-action hints, affordance-grounded — returned with the beat result (D-23)"]

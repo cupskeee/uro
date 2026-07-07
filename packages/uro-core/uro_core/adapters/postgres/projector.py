@@ -153,6 +153,20 @@ async def _pc_released(conn: asyncpg.Connection, branch_id: str, p: dict[str, An
     )
 
 
+async def _sheet_updated(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # Whole-sheet replace (docs/06): the ruleset owns the sheet's shape; we store it opaquely.
+    await conn.execute(
+        "INSERT INTO proj_sheets (branch_id, actor_id, ruleset_id, sheet) "
+        "VALUES ($1, $2, $3, $4) "
+        "ON CONFLICT (branch_id, actor_id) DO UPDATE SET "
+        "ruleset_id = EXCLUDED.ruleset_id, sheet = EXCLUDED.sheet",
+        branch_id,
+        p["actor_id"],
+        p.get("ruleset_id", ""),
+        p.get("sheet", {}),
+    )
+
+
 _HANDLERS = {
     "ActorCreated": _actor_created,
     "ActorPromoted": _actor_promoted,
@@ -165,6 +179,7 @@ _HANDLERS = {
     "PlaceDestroyed": _place_destroyed,
     "PCBound": _pc_bound,
     "PCReleased": _pc_released,
+    "SheetUpdated": _sheet_updated,
 }
 
 
@@ -195,6 +210,7 @@ _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "beliefs": ("actor_id", "claim_id", "confidence", "learned_from"),
     "places": ("place_id", "name", "kind", "status", "description"),
     "pcs": ("campaign_id", "actor_id", "participant_id", "active"),
+    "sheets": ("actor_id", "ruleset_id", "sheet"),
 }
 
 

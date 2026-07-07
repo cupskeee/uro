@@ -1,10 +1,10 @@
-"""Phase 1 beat pipeline (docs/05, 10).
+"""Beat pipeline (docs/05, 10, 13).
 
-context (recency + structured recall) → narrate → extract → gauntlet → commit. The
-planner and mechanics stages are still ahead (Phase 3, D-28); the epistemic loop is
-here: recall feeds established facts to the narrator so characters can contradict
-lies, and the extractor turns the resulting prose into committed state through the
-validation gauntlet.
+context → [plan → mechanics] → narrate → extract → gauntlet → commit. Phase 1's epistemic
+loop (recall → narrate → extract) stands; Phase 3 (D-28) inserts the planner + mechanics gate
+when a ruleset is bound: the planner classifies intent and picks affordances, plan validation
+fences it (D-21), and the ruleset resolves the checks deterministically. With no ruleset
+bound (Phase 0/1 compat, `--bare`) the planner/gate are skipped and the flow is unchanged.
 """
 
 from __future__ import annotations
@@ -14,22 +14,27 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from uro_core.domain.events import DomainEvent, beat_resolved
 from uro_core.domain.ids import new_id
-from uro_core.errors import EmptyNarrationError, ProviderError
+from uro_core.errors import EmptyNarrationError, PlannerError, ProviderError
 from uro_core.metering import LLMCall
 from uro_core.pipeline.extraction import (
     build_extractor_messages,
     parse_extraction,
     run_gauntlet,
 )
+from uro_core.pipeline.mechanics import resolve_mechanics
+from uro_core.pipeline.plan import BeatPlan, build_planner_messages, parse_plan, validate_plan
 from uro_core.pipeline.recall import RecallBundle, assemble_recall, build_narrator_messages
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
 from uro_core.providers.router import ProviderRouter
+from uro_core.rulesets.base import CheckResult, Ruleset
+from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import Campaign
 
 logger = logging.getLogger(__name__)
@@ -40,6 +45,19 @@ class BeatResult(BaseModel):
     narration: str
     commit_id: str
     extracted: int = 0  # number of state events canonicalized from the prose
+    checks: int = 0  # ruleset checks resolved this beat (planner→mechanics gate)
+    suggestions: list[str] = Field(default_factory=list)  # affordance-grounded hints (D-23)
+
+
+class _Context(BaseModel):
+    """What context assembly produced for the narrator + commit (docs/13 BeatState subset)."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    recall: RecallBundle
+    mechanics_traces: list[str] = Field(default_factory=list)
+    directives: str = ""
+    suggestions: list[str] = Field(default_factory=list)
 
 
 def _hash_messages(messages: list[Message]) -> str:
@@ -55,12 +73,15 @@ class Engine:
         store: EngineStore,
         router: ProviderRouter,
         *,
+        ruleset: Ruleset | None = None,
         recency: int = 8,
         semantic_k: int = 4,
         bare: bool = False,
     ) -> None:
         self._store = store
         self._router = router
+        # The bound ruleset enables the planner + mechanics gate (D-28). None → Phase-1 flow.
+        self._ruleset = ruleset
         self._recency = recency
         self._semantic_k = semantic_k
         # bare = ablation baseline (thesis T1): a raw-transcript GM — no structured/
@@ -105,13 +126,18 @@ class Engine:
         self, campaign: Campaign, participant_id: str, intent_text: str
     ) -> BeatResult:
         """Resolve one beat and commit it (narration + extracted state)."""
-        recall = await self._recall(campaign.branch_id, intent_text)
-        messages = build_narrator_messages(recall, intent_text)
+        ctx = await self._context(campaign, intent_text)
+        messages = build_narrator_messages(
+            ctx.recall,
+            intent_text,
+            mechanics_traces=ctx.mechanics_traces,
+            directives=ctx.directives,
+        )
         started = time.perf_counter()
         chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
         await self._meter("narrator", messages, started)
         narration = "".join(chunks).strip()
-        return await self._finish(campaign, participant_id, intent_text, narration, recall)
+        return await self._finish(campaign, participant_id, intent_text, narration, ctx)
 
     async def run_beat_stream(
         self, campaign: Campaign, participant_id: str, intent_text: str
@@ -122,16 +148,35 @@ class Engine:
         (e.g. Ctrl-C mid-stream) the commit is intentionally skipped: nothing partial
         enters the append-only log, so a resumed session simply never saw that beat.
         """
-        recall = await self._recall(campaign.branch_id, intent_text)
-        messages = build_narrator_messages(recall, intent_text)
+        ctx = await self._context(campaign, intent_text)
+        messages = build_narrator_messages(
+            ctx.recall,
+            intent_text,
+            mechanics_traces=ctx.mechanics_traces,
+            directives=ctx.directives,
+        )
         started = time.perf_counter()
         collected: list[str] = []
         async for chunk in self._router.stream("narrator", messages):
             collected.append(chunk)
             yield chunk
         await self._meter("narrator", messages, started)
-        await self._finish(
-            campaign, participant_id, intent_text, "".join(collected).strip(), recall
+        await self._finish(campaign, participant_id, intent_text, "".join(collected).strip(), ctx)
+
+    async def _context(self, campaign: Campaign, intent_text: str) -> _Context:
+        """Context assembly [1] + (when a ruleset is bound) plan [2] + mechanics gate [3].
+        The plan/gate run before any prose streams, so a re-ask replan is still free (docs/13)."""
+        recall = await self._recall(campaign.branch_id, intent_text)
+        if self._ruleset is None or self._bare:
+            return _Context(recall=recall)
+        pc_actor_id = await self._store.campaign_pc(campaign.campaign_id) or ""
+        plan = await self._plan(campaign, intent_text, recall, pc_actor_id)
+        checks = await self._mechanics(campaign, plan, recall, pc_actor_id)
+        return _Context(
+            recall=recall,
+            mechanics_traces=[c.trace for c in checks],
+            directives=plan.narration_directives,
+            suggestions=plan.suggestions,
         )
 
     async def _finish(
@@ -140,14 +185,16 @@ class Engine:
         participant_id: str,
         intent_text: str,
         narration: str,
-        recall: RecallBundle,
+        ctx: _Context,
     ) -> BeatResult:
         if not narration:
             raise EmptyNarrationError(
                 f"provider produced no narration for a beat by {participant_id}"
             )
         # Bare (ablation) mode records only the transcript — no extraction, no memory.
-        extracted = [] if self._bare else await self._extract(campaign.branch_id, recall, narration)
+        extracted = (
+            [] if self._bare else await self._extract(campaign.branch_id, ctx.recall, narration)
+        )
         beat_id = new_id()
         events: list[DomainEvent] = [
             beat_resolved(
@@ -161,14 +208,79 @@ class Engine:
         commit = await self._store.append_beat(campaign.branch_id, events)
         if not self._bare:
             await self._remember(
-                campaign.branch_id, commit.commit_id, narration, [a.actor_id for a in recall.actors]
+                campaign.branch_id,
+                commit.commit_id,
+                narration,
+                [a.actor_id for a in ctx.recall.actors],
             )
         return BeatResult(
             beat_id=beat_id,
             narration=narration,
             commit_id=commit.commit_id,
             extracted=len(extracted),
+            checks=len(ctx.mechanics_traces),
+            suggestions=ctx.suggestions,
         )
+
+    async def _plan(
+        self, campaign: Campaign, intent_text: str, recall: RecallBundle, pc_actor_id: str
+    ) -> BeatPlan:
+        """Planner [2] + deterministic plan validation. The only replanning point (docs/13):
+        up to 2 re-asks with the validation error attached; exhausting them fails the beat."""
+        assert self._ruleset is not None
+        affordances = self._ruleset.affordances()
+        known_ids = {a.actor_id for a in recall.actors} | ({pc_actor_id} if pc_actor_id else set())
+        messages = build_planner_messages(affordances, recall, pc_actor_id, intent_text)
+        reason = "no plan produced"
+        for _ in range(3):  # 1 attempt + 2 re-asks (docs/13)
+            started = time.perf_counter()
+            raw = await self._router.complete(
+                "planner", messages, json_mode=True, temperature=0.2, max_tokens=1024
+            )
+            await self._meter("planner", messages, started)
+            plan = parse_plan(raw)
+            if plan is None:
+                reason = "output was not a valid BeatPlan JSON object"
+            else:
+                errors = validate_plan(plan, affordances, known_ids)
+                if not errors:
+                    return plan
+                reason = "; ".join(errors)
+            messages = [
+                *messages,
+                Message(
+                    role="user",
+                    content=f"That plan was invalid ({reason}). Return a corrected JSON BeatPlan.",
+                ),
+            ]
+        raise PlannerError(f"planner failed after re-asks: {reason}")
+
+    async def _mechanics(
+        self, campaign: Campaign, plan: BeatPlan, recall: RecallBundle, pc_actor_id: str
+    ) -> list[CheckResult]:
+        """Mechanics gate [3]: resolve the plan's free-roam checks via the ruleset. No LLM."""
+        assert self._ruleset is not None
+        actor_ids = {pc_actor_id} if pc_actor_id else set()
+        actor_ids |= {m.actor for m in plan.mechanics if m.actor}
+        sheets: dict[str, dict[str, Any]] = {}
+        for aid in actor_ids:
+            sheet = await self._store.get_sheet(campaign.branch_id, aid)
+            if sheet is not None:
+                sheets[aid] = sheet
+        if pc_actor_id and pc_actor_id not in sheets:
+            # A ruleset-bound beat whose PC has no sheet resolves 0 checks — surface it rather
+            # than silently skip. (world new / campaign new sheet the PC; this is an edge.)
+            logger.warning("ruleset-bound beat: PC %r has no sheet; checks skipped", pc_actor_id)
+        rng = await self._beat_rng(campaign)
+        return resolve_mechanics(self._ruleset, plan, sheets, pc_actor_id, rng)
+
+    async def _beat_rng(self, campaign: Campaign) -> Rng:
+        """A per-beat seeded Rng derived from the campaign + the commit it builds on — stable
+        and reproducible for the same history, so a beat's rolls replay (docs/06, 10)."""
+        branch = await self._store.get_branch(campaign.branch_id)
+        head = (branch.head_commit if branch else None) or campaign.branch_id
+        digest = hashlib.sha256(f"{campaign.campaign_id}:{head}".encode()).hexdigest()
+        return Rng(int(digest[:12], 16))
 
     async def _remember(
         self, branch_id: str, commit_id: str, text: str, entity_refs: list[str]

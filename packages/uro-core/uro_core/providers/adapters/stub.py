@@ -47,8 +47,10 @@ class StubProvider:
             yield sentence + " "
 
     async def complete(self, req: CompletionRequest) -> str:
-        # The stub extracts nothing — `uro play --provider stub` narrates without
-        # building state, so the offline dev loop still works end-to-end.
+        # Role-aware so the offline dev loop works end-to-end with the Phase-3 pipeline:
+        # the planner gets a trivially-valid (empty) BeatPlan; the extractor gets nothing.
+        if req.stage_tag == "planner":
+            return '{"intent_class": "action", "triggers": [], "mechanics": []}'
         return '{"actors": [], "claims": []}'
 
     async def embed(self, texts: list[str]) -> list[list[float]]:

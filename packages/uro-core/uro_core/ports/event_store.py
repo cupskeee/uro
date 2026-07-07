@@ -7,7 +7,7 @@ append a beat commit, and read recent beats back from the log (the resume path).
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent
 from uro_core.metering import LLMCall
@@ -44,10 +44,13 @@ class EventStore(Protocol):
         adopt_actor_id: str | None = None,
         new_pc_name: str | None = None,
         new_pc_id: str | None = None,
+        pc_sheet: dict[str, Any] | None = None,
+        ruleset_id: str = "",
         seed: int = 0,
     ) -> Campaign:
         """Create a campaign on a branch and bind its PC (adopt an existing actor or make
-        a fresh one) — CampaignStarted + PCBound as events (docs/03, 12)."""
+        a fresh one), optionally with a ruleset-built character sheet — CampaignStarted +
+        PCBound (+ SheetUpdated) as events (docs/03, 06, 12)."""
         ...
 
     async def end_campaign(

@@ -47,7 +47,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | `ActorStateChanged` | actor_id, changes{} | X A H | status, occupation, condition flavor |
 | `ActorDamaged` | actor_id, amount, source, trace | R E | mechanical only — never extractor |
 | `ActorDied` | actor_id, cause | R H A E | |
-| `SheetUpdated` | actor_id, sheet_patch | R S | ruleset-owned character sheet changes |
+| `SheetUpdated` | actor_id, ruleset_id, sheet | R S | ruleset-owned character sheet; the PoC records the whole sheet per update (whole-sheet replace), not an incremental patch |
 | `PCBound` / `PCReleased` | actor_id, participant_id, campaign_id | S | adopt-as-PC at fork; release at campaign end (retired hero becomes NPC) |
 
 ### Identity & resolution
