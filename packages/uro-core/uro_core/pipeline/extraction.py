@@ -16,6 +16,10 @@ Enforced by policy (correct as far as the extractor classifies honestly):
   plus a belief for the speaker (an NPC can lie without corrupting world truth).
 - Contradiction: a proposed `truth=true` claim the extractor flags as contradicting
   an existing `truth=true` claim is downgraded to `unknown`.
+- Flavor filter (docs/05 promotion rules): the prompt tells the extractor to leave
+  sensory/atmospheric description out entirely; a claim it marks `durable=false` (or
+  any that slips through) is dropped by the gauntlet — flavor never becomes canon.
+  Real models over-extract atmosphere as fact without this (found in the first live run).
 
 NOT yet implemented (docs/13, deferred): evidence-span/consequence gating and the
 "a truth=true claim must not merely restate a character's assertion" guard. So
@@ -46,12 +50,21 @@ from uro_core.providers.base import Message
 _DEFAULT_BELIEF_CONFIDENCE = 0.8  # placeholder until belief-strength modeling (docs/11)
 
 EXTRACTOR_SYSTEM = (
-    "You extract world state from RPG narration. Report only what the prose states — never "
-    "invent. A fact the NARRATOR asserts as real has provenance 'narrator'. Something a "
-    "CHARACTER says (in quotes or reported speech) has provenance 'dialogue' with that "
-    "character as 'speaker' — it may be a lie. Name a new actor only if the prose explicitly "
-    "names them. When a statement conflicts with a KNOWN CLAIM, list that claim's id in "
-    "'contradicts'. Keep statements terse and self-contained. Output ONLY a JSON object."
+    "You extract DURABLE world state from RPG narration — the facts a game master would jot "
+    "on an index card, not the scenery. Report only what the prose states; never invent.\n\n"
+    "EXTRACT: named people / places / factions / items; facts about them (identity, role, "
+    "relationships, location, secrets, condition); plot developments; and lasting changes to "
+    "the world.\n\n"
+    "DO NOT EXTRACT (this is flavor, not canon — omit it, or mark durable=false): sensory and "
+    "atmospheric description (weather, lighting, smells, a crackling fire), the player's own "
+    "actions or movements, momentary gestures and mood, and generic scene-setting. When in "
+    "doubt, leave it out — a missed detail costs nothing, but flavor recorded as fact pollutes "
+    "the world state.\n\n"
+    "PROVENANCE: a fact the NARRATOR asserts as real → 'narrator'; something a CHARACTER says "
+    "(quotes or reported speech) → 'dialogue' with that character as 'speaker' (it may be a "
+    "lie). Name a new actor only if the prose explicitly names them. When a statement conflicts "
+    "with a KNOWN CLAIM, put that claim's id in 'contradicts'. Keep statements terse and "
+    "self-contained. Output ONLY a JSON object."
 )
 
 
@@ -67,6 +80,8 @@ class ProposedClaim(BaseModel):
     speaker: str | None = None
     contradicts: list[str] = Field(default_factory=list)
     confidence: float | None = None
+    durable: bool = True  # false = flavor/atmosphere; the gauntlet drops it (kept only as a
+    #                       structural safety net — the prompt should keep flavor out entirely)
 
 
 class Extraction(BaseModel):
@@ -89,7 +104,7 @@ def build_extractor_messages(recall: RecallBundle, narration: str) -> list[Messa
         'Return JSON: {"actors": [{"name", "role"}], "claims": [{"statement", '
         '"about": [names], "provenance": "narrator"|"dialogue", '
         '"speaker": name (dialogue only), "contradicts": [known claim ids], '
-        '"confidence": 0..1}]}'
+        '"durable": true for a lasting fact / false for flavor, "confidence": 0..1}]}'
     )
     return [
         Message(role="system", content=EXTRACTOR_SYSTEM),
@@ -147,10 +162,12 @@ async def run_gauntlet(
     # Pre-mint dialogue speakers so a claim *about* a speaker (resolved create=False
     # below) links to the same actor_id the belief uses, not a divergent name-token.
     for pc in extraction.claims:
-        if pc.provenance == "dialogue" and pc.speaker and pc.speaker.strip():
+        if pc.durable and pc.provenance == "dialogue" and pc.speaker and pc.speaker.strip():
             await resolve(pc.speaker, create=True)
 
     for pc in extraction.claims:
+        if not pc.durable:
+            continue  # flavor / atmosphere — not canon (docs/05 promotion rules)
         statement = pc.statement.strip()
         if not statement:
             continue

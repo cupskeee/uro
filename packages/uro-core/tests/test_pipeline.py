@@ -61,6 +61,21 @@ async def test_narrator_claim_becomes_true(store: PostgresEventStore) -> None:
     assert _of_type(events, "BeliefChanged") == []  # narrator fact, no belief
 
 
+async def test_gauntlet_drops_flavor_claims(store: PostgresEventStore) -> None:
+    # Flavor (durable=false) is not canon (docs/05); a real fact alongside it survives.
+    # Guards the fix for the first live run's over-extraction (~5 claims/beat, mostly atmosphere).
+    branch = await _branch(store)
+    ex = Extraction(
+        claims=[
+            ProposedClaim(statement="The Duke disbanded his army.", durable=True),
+            ProposedClaim(statement="The fire crackles merrily in the hearth.", durable=False),
+        ]
+    )
+    events = await run_gauntlet(store, branch, ex)
+    kept = _of_type(events, "ClaimRecorded")
+    assert len(kept) == 1 and kept[0].payload["statement"] == "The Duke disbanded his army."
+
+
 async def test_dialogue_claim_is_testimony_plus_belief(store: PostgresEventStore) -> None:
     branch = await _branch(store)
     await store.append_beat(branch, [actor_created(actor_id="a:flora", name="Flora", tier=2)])
