@@ -369,6 +369,90 @@ def play(
     _run_async(_run)
 
 
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="bind address"),
+    port: int = typer.Option(8000, help="bind port"),
+    token: list[str] = typer.Option(  # noqa: B008 (typer DI-style default, like every option here)
+        None, "--token", help="bearer token → participant (repeatable; token mode, docs/08)"
+    ),
+    provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
+    model: str = typer.Option(None, help="model id for the provider"),
+) -> None:
+    """Run the Uro server (docs/08): a thin FastAPI shell over the engine. Each --token maps to
+    a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop)."""
+    import uvicorn
+    from uro_core.pipeline.engine import Engine
+    from uro_server.app import create_app, engine_deps
+
+    toks = token or ["local"]
+    tokens = {t: f"player-{i + 1}" for i, t in enumerate(toks)}
+    store = build_store()
+    engine = Engine(store, build_router(provider, model), ruleset=build_ruleset())
+    fastapi_app = create_app(engine_deps(store, engine, tokens))
+
+    @fastapi_app.on_event("startup")
+    async def _startup() -> None:
+        await store.connect()
+
+    @fastapi_app.on_event("shutdown")
+    async def _shutdown() -> None:
+        await store.close()
+
+    typer.echo(f"uro server on ws://{host}:{port}  ({len(tokens)} token(s), provider={provider})")
+    for t, p in tokens.items():
+        typer.echo(f"  token {t!r} → {p}")
+    uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
+
+
+@app.command()
+def connect(
+    campaign_id: str,
+    server: str = typer.Option("http://127.0.0.1:8000", help="server base URL"),
+    token: str = typer.Option("local", help="bearer token (maps to a participant server-side)"),
+) -> None:
+    """HTTP-client play mode (docs/08): connect to a running `uro serve` over WebSocket. Type an
+    action; '/quit' to leave. Beats from every participant on the campaign stream in live."""
+    import asyncio
+    import json
+
+    import websockets
+
+    ws_base = server.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
+    uri = f"{ws_base}/campaigns/{campaign_id}/play?token={token}"
+
+    async def _client() -> None:
+        try:
+            async with websockets.connect(uri) as ws:
+                typer.echo(f"connected to {campaign_id} as {token!r}. Type an action; /quit.\n")
+
+                async def receive() -> None:
+                    async for raw in ws:
+                        msg = json.loads(raw)
+                        kind = msg.get("type")
+                        if kind == "narration_chunk":
+                            typer.echo(msg["text"], nl=False)
+                        elif kind == "beat_committed":
+                            typer.echo(f"\n  ✓ [{msg['participant_id']}] {msg['intent']!r}\n")
+                        elif kind in ("participant_joined", "participant_left"):
+                            typer.echo(f"  · {msg['participant_id']} {kind.split('_')[1]}")
+
+                receiver = asyncio.create_task(receive())
+                loop = asyncio.get_event_loop()
+                while True:
+                    intent = (await loop.run_in_executor(None, input, "> ")).strip()
+                    if intent in ("/quit", "/exit"):
+                        break
+                    if intent:
+                        await ws.send(json.dumps({"type": "intent", "text": intent}))
+                receiver.cancel()
+        except OSError as exc:
+            typer.echo(f"could not connect to {server}: {exc} (is `uro serve` running?)", err=True)
+            raise typer.Exit(1) from exc
+
+    asyncio.run(_client())
+
+
 @branch_app.command("list")
 def branch_list(world: str) -> None:
     """List a world's branches (with head depth) and its markers."""

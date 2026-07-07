@@ -5,8 +5,10 @@ description = "Uro Engine reference client — play, dry-run, and dev tools agai
 requires-python = ">=3.12"
 dependencies = [
     "uro-core",
+    "uro-server",
     "typer>=0.15",
     "rich>=13.9",
+    "websockets>=14",
 ]
 
 [project.scripts]
@@ -14,6 +16,7 @@ uro = "uro_cli.main:app"
 
 [tool.uv.sources]
 uro-core = { workspace = true }
+uro-server = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

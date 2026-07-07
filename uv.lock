@@ -1027,6 +1027,8 @@ dependencies = [
     { name = "rich" },
     { name = "typer" },
     { name = "uro-core" },
+    { name = "uro-server" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -1034,6 +1036,8 @@ requires-dist = [
     { name = "rich", specifier = ">=13.9" },
     { name = "typer", specifier = ">=0.15" },
     { name = "uro-core", editable = "packages/uro-core" },
+    { name = "uro-server", editable = "packages/uro-server" },
+    { name = "websockets", specifier = ">=14" },
 ]
 
 [[package]]

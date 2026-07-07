@@ -1,0 +1,146 @@
+"""The FastAPI shell (docs/08): transport, sessions, auth, wiring — NO engine logic.
+
+Everything the engine does is reached through `ServerDeps` (a small port): token→participant
+resolution, campaign existence, and a streaming beat runner. Production wires it to a connected
+store + Engine (`engine_deps`); tests inject a fake — so the transport (auth, broadcast fan-out,
+the WS play channel) is exercised without a live DB or model. The heavy engine path is tested
+directly in uro-core.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
+from uro_core.pipeline.engine import Engine
+from uro_core.ports.projections import EngineStore
+from uro_core.session import SoloArbiter, TurnArbiter
+
+from uro_server.sessions import SessionHub
+
+
+@dataclass
+class ServerDeps:
+    """The seam between the transport shell and the engine (docs/01: server sees only ports)."""
+
+    resolve_participant: Callable[[str], str | None]  # bearer token → participant_id (None = deny)
+    campaign_exists: Callable[[str], Awaitable[bool]]
+    run_beat: Callable[
+        [str, str, str], AsyncIterator[str]
+    ]  # (campaign, participant, intent) → chunks
+
+
+def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> ServerDeps:
+    """Production wiring: a connected store + Engine behind the transport port. `tokens` maps a
+    bearer token to a participant_id (docs/08 token mode)."""
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return (await store.get_campaign(campaign_id)) is not None
+
+    async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[str]:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            return
+        async for chunk in engine.run_beat_stream(campaign, participant, text):
+            yield chunk
+
+    return ServerDeps(
+        resolve_participant=lambda token: tokens.get(token),
+        campaign_exists=campaign_exists,
+        run_beat=run_beat,
+    )
+
+
+def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastAPI:
+    app = FastAPI(title="Uro Engine server")
+    hub = SessionHub()
+    arb = arbiter or SoloArbiter()
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.websocket("/campaigns/{campaign_id}/play")
+    async def play(ws: WebSocket, campaign_id: str) -> None:
+        # Auth (docs/08 token mode): ?token=… → participant_id. Reject before accept.
+        participant = deps.resolve_participant(ws.query_params.get("token", ""))
+        if participant is None:
+            await ws.close(code=4401)  # unauthorized
+            return
+        if not await deps.campaign_exists(campaign_id):
+            await ws.close(code=4404)  # no such campaign
+            return
+        await ws.accept()
+        queue = hub.subscribe(campaign_id)
+        await hub.publish(
+            campaign_id, {"type": "participant_joined", "participant_id": participant}
+        )
+        # Fan hub messages out to THIS connection while we read intents from it.
+        forward = asyncio.create_task(_forward(ws, queue))
+        try:
+            while True:
+                msg = await ws.receive_json()
+                if msg.get("type") == "intent":
+                    await _run_and_broadcast(
+                        deps, arb, hub, campaign_id, participant, str(msg.get("text", ""))
+                    )
+        except WebSocketDisconnect:
+            pass
+        finally:
+            forward.cancel()
+            hub.unsubscribe(campaign_id, queue)
+            await hub.publish(
+                campaign_id, {"type": "participant_left", "participant_id": participant}
+            )
+
+    return app
+
+
+async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> None:
+    """Pump this connection's queue to its socket until cancelled."""
+    while True:
+        message = await queue.get()
+        if ws.application_state != WebSocketState.CONNECTED:
+            return
+        await ws.send_json(message)
+
+
+async def _run_and_broadcast(
+    deps: ServerDeps,
+    arbiter: TurnArbiter,
+    hub: SessionHub,
+    campaign_id: str,
+    participant: str,
+    text: str,
+) -> None:
+    """Admit the intent, run the beat, and broadcast its narration + commit to the whole session
+    (docs/08 broadcast-shaped output) — so every connected client sees the SAME beat."""
+    if not text.strip():
+        return
+    if not await arbiter.admit(campaign_id, participant, text):
+        await hub.publish(
+            campaign_id, {"type": "intent_rejected", "participant_id": participant, "text": text}
+        )
+        return
+    await hub.publish(
+        campaign_id, {"type": "beat_started", "participant_id": participant, "intent": text}
+    )
+    chunks: list[str] = []
+    async for chunk in deps.run_beat(campaign_id, participant, text):
+        chunks.append(chunk)
+        await hub.publish(
+            campaign_id,
+            {"type": "narration_chunk", "participant_id": participant, "text": chunk},
+        )
+    await hub.publish(
+        campaign_id,
+        {
+            "type": "beat_committed",
+            "participant_id": participant,
+            "intent": text,
+            "narration": "".join(chunks).strip(),
+        },
+    )
