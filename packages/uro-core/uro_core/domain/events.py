@@ -39,6 +39,7 @@ class CausedBy(BaseModel):
     participant_id: str | None = None
     beat_id: str | None = None
     history_pass: HistoryPass | None = Field(default=None, alias="pass")
+    encounter_id: str | None = None  # ruleset kind: which encounter produced the effect
 
 
 class DomainEvent(BaseModel):
@@ -522,4 +523,194 @@ def sheet_updated(
         payload=SheetUpdatedPayload(
             actor_id=actor_id, ruleset_id=ruleset_id, sheet=sheet
         ).model_dump(),
+    )
+
+
+def ruleset_cause(encounter_id: str) -> CausedBy:
+    """Provenance for a ruleset-emitted effect inside an encounter (docs/12, D-26)."""
+    return CausedBy(kind="ruleset", encounter_id=encounter_id)
+
+
+# --- Encounter mode & mechanical effects (docs/06, 12; emitter R for in-process resolution) ---
+#
+# The ruleset produces Effects (docs/06); the pipeline maps each to one of these R-emitted
+# events so mechanics are ordinary timeline citizens. ActorDamaged reduces the sheet's hp
+# projection; ItemTransferred moves ownership. Injuries and loot persist into later free-roam.
+
+
+class ActorDamagedPayload(BaseModel):
+    v: int = 1
+    actor_id: str
+    amount: int
+    source: str = ""
+    trace: str = ""
+
+
+class ActorDiedPayload(BaseModel):
+    v: int = 1
+    actor_id: str
+    cause: str = ""
+
+
+class ItemCreatedPayload(BaseModel):
+    v: int = 1
+    item_id: str
+    name: str
+    owner_ref: str = ""
+    kind: str = ""
+
+
+class ItemTransferredPayload(BaseModel):
+    v: int = 1
+    item_id: str
+    from_ref: str = ""
+    to_ref: str = ""
+    means: str = ""
+
+
+class EncounterStartedPayload(BaseModel):
+    v: int = 1
+    encounter_id: str
+    participants: list[str] = Field(default_factory=list)
+    initiative: list[list[Any]] = Field(default_factory=list)  # [[actor_id, roll], ...]
+
+
+class EncounterTurnTakenPayload(BaseModel):
+    v: int = 1
+    encounter_id: str
+    actor_id: str
+    action: str
+    result: str = ""
+    trace: str = ""
+
+
+class EncounterEndedPayload(BaseModel):
+    v: int = 1
+    encounter_id: str
+    outcome: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModeChangedPayload(BaseModel):
+    v: int = 1
+    from_mode: str
+    to_mode: str
+    cause: str = ""
+
+
+def actor_damaged(
+    *,
+    actor_id: str,
+    amount: int,
+    source: str = "",
+    trace: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ActorDamaged",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=ActorDamagedPayload(
+            actor_id=actor_id, amount=amount, source=source, trace=trace
+        ).model_dump(),
+    )
+
+
+def actor_died(*, actor_id: str, cause: str = "", caused_by: CausedBy | None = None) -> DomainEvent:
+    return DomainEvent(
+        event_type="ActorDied",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=ActorDiedPayload(actor_id=actor_id, cause=cause).model_dump(),
+    )
+
+
+def item_created(
+    *,
+    item_id: str,
+    name: str,
+    owner_ref: str = "",
+    kind: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ItemCreated",
+        entity_refs=[item_id, owner_ref] if owner_ref else [item_id],
+        caused_by=_default_cause(caused_by),
+        payload=ItemCreatedPayload(
+            item_id=item_id, name=name, owner_ref=owner_ref, kind=kind
+        ).model_dump(),
+    )
+
+
+def item_transferred(
+    *,
+    item_id: str,
+    from_ref: str = "",
+    to_ref: str = "",
+    means: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ItemTransferred",
+        entity_refs=[item_id, from_ref, to_ref],
+        caused_by=_default_cause(caused_by),
+        payload=ItemTransferredPayload(
+            item_id=item_id, from_ref=from_ref, to_ref=to_ref, means=means
+        ).model_dump(),
+    )
+
+
+def encounter_started(
+    *,
+    encounter_id: str,
+    participants: list[str],
+    initiative: list[list[Any]] | None = None,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="EncounterStarted",
+        entity_refs=list(participants),
+        caused_by=_default_cause(caused_by),
+        payload=EncounterStartedPayload(
+            encounter_id=encounter_id, participants=participants, initiative=initiative or []
+        ).model_dump(),
+    )
+
+
+def encounter_turn_taken(
+    *,
+    encounter_id: str,
+    actor_id: str,
+    action: str,
+    result: str = "",
+    trace: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="EncounterTurnTaken",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=EncounterTurnTakenPayload(
+            encounter_id=encounter_id, actor_id=actor_id, action=action, result=result, trace=trace
+        ).model_dump(),
+    )
+
+
+def encounter_ended(
+    *, encounter_id: str, outcome: dict[str, Any], caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="EncounterEnded",
+        caused_by=_default_cause(caused_by),
+        payload=EncounterEndedPayload(encounter_id=encounter_id, outcome=outcome).model_dump(),
+    )
+
+
+def mode_changed(
+    *, from_mode: str, to_mode: str, cause: str = "", caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ModeChanged",
+        caused_by=_default_cause(caused_by),
+        payload=ModeChangedPayload(from_mode=from_mode, to_mode=to_mode, cause=cause).model_dump(),
     )

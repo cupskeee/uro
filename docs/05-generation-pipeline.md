@@ -9,7 +9,7 @@ Play advances in **beats**: one player intent, resolved. In **free-roam** there 
 | Mode | Cadence | Owner |
 |---|---|---|
 | `freeroam` | beat per player intent | pipeline |
-| `encounter` | initiative-ordered turns; each turn is a constrained beat | ruleset state machine, pipeline renders |
+| `encounter` | initiative-ordered turns; each turn is a constrained beat *(PoC/D-29: the fight auto-resolves inside ONE beat — both sides via `npc_action` — not turn-per-beat)* | ruleset state machine, pipeline renders |
 | `downtime` | time-skip ("a month passes"); off-screen simulation commits | History + Actor services |
 
 Mode transitions are themselves pipeline decisions (the mechanics gate detects "this action starts combat") and are recorded as events.

@@ -673,6 +673,27 @@ class PostgresEventStore:
             )
         return [PlaceView(**dict(r)) for r in rows]
 
+    async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]:
+        """Item ids an actor owns (docs/02) — used to loot a defeated combatant."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT item_id FROM proj_items WHERE branch_id = $1 AND owner_ref = $2 "
+                "ORDER BY item_id",
+                branch_id,
+                owner_ref,
+            )
+        return [r["item_id"] for r in rows]
+
+    async def get_item(self, branch_id: str, item_id: str) -> dict[str, Any] | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT item_id, name, kind, owner_ref FROM proj_items "
+                "WHERE branch_id = $1 AND item_id = $2",
+                branch_id,
+                item_id,
+            )
+        return dict(row) if row else None
+
     async def get_sheet(self, branch_id: str, actor_id: str) -> dict[str, Any] | None:
         """An actor's character sheet as a raw dict (docs/06). The store keeps it opaquely; the
         pipeline validates it against the SHARED port Sheet (a d20-shaped contract for now,

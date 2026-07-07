@@ -29,7 +29,7 @@ GET    /usage?world=&campaign=&stage=   token/latency metering
 GET    /healthz
 ```
 
-The WebSocket channel carries: client→server `intent`, `encounter_action`, `pin_actor`; server→client `narration_chunk`, `scene_update`, `mechanics_result`, `mode_change`, `beat_committed`, `suggestions`, `participant_*`. Message envelope always includes `campaign_id`, `beat_id`, and `participant_id` — that last one is the multiplayer seam (below).
+The WebSocket channel carries: client→server `intent`, `encounter_action` *(future — encounters auto-resolve in the PoC, D-29)*, `pin_actor`; server→client `narration_chunk`, `scene_update`, `mechanics_result`, `mode_change`, `beat_committed`, `suggestions`, `participant_*`. Message envelope always includes `campaign_id`, `beat_id`, and `participant_id` — that last one is the multiplayer seam (below).
 
 Beat results may carry `suggestions[]` — 2–4 affordance-grounded next-action hints emitted by the planner at no extra LLM cost (D-23). **Free-text intent is canonical**; suggestions are hints clients may ignore entirely (the CLI renders them dimmed), never a constrained choice list.
 

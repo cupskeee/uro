@@ -167,6 +167,51 @@ async def _sheet_updated(conn: asyncpg.Connection, branch_id: str, p: dict[str, 
     )
 
 
+async def _actor_damaged(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # Subtract from the sheet's hp (clamped at 0). A no-op if the actor has no sheet.
+    await conn.execute(
+        "UPDATE proj_sheets SET sheet = jsonb_set(sheet, '{hp}', "
+        "  to_jsonb(GREATEST(0, ((sheet->>'hp')::int) - $3))) "
+        "WHERE branch_id = $1 AND actor_id = $2",
+        branch_id,
+        p["actor_id"],
+        int(p.get("amount", 0)),
+    )
+
+
+async def _actor_died(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # Ensure hp is 0 (usually already, from the killing blow). Death vs. downed is narrative.
+    await conn.execute(
+        "UPDATE proj_sheets SET sheet = jsonb_set(sheet, '{hp}', to_jsonb(0)) "
+        "WHERE branch_id = $1 AND actor_id = $2",
+        branch_id,
+        p["actor_id"],
+    )
+
+
+async def _item_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    await conn.execute(
+        "INSERT INTO proj_items (branch_id, item_id, name, kind, owner_ref) "
+        "VALUES ($1, $2, $3, $4, $5) "
+        "ON CONFLICT (branch_id, item_id) DO UPDATE SET "
+        "name = EXCLUDED.name, kind = EXCLUDED.kind, owner_ref = EXCLUDED.owner_ref",
+        branch_id,
+        p["item_id"],
+        p.get("name", ""),
+        p.get("kind", ""),
+        p.get("owner_ref", ""),
+    )
+
+
+async def _item_transferred(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    await conn.execute(
+        "UPDATE proj_items SET owner_ref = $3 WHERE branch_id = $1 AND item_id = $2",
+        branch_id,
+        p["item_id"],
+        p.get("to_ref", ""),
+    )
+
+
 _HANDLERS = {
     "ActorCreated": _actor_created,
     "ActorPromoted": _actor_promoted,
@@ -180,6 +225,10 @@ _HANDLERS = {
     "PCBound": _pc_bound,
     "PCReleased": _pc_released,
     "SheetUpdated": _sheet_updated,
+    "ActorDamaged": _actor_damaged,
+    "ActorDied": _actor_died,
+    "ItemCreated": _item_created,
+    "ItemTransferred": _item_transferred,
 }
 
 
@@ -211,6 +260,7 @@ _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "places": ("place_id", "name", "kind", "status", "description"),
     "pcs": ("campaign_id", "actor_id", "participant_id", "active"),
     "sheets": ("actor_id", "ruleset_id", "sheet"),
+    "items": ("item_id", "name", "kind", "owner_ref"),
 }
 
 

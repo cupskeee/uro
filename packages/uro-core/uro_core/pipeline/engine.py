@@ -18,22 +18,44 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from uro_core.domain.events import DomainEvent, beat_resolved
+from uro_core.domain.events import (
+    CausedBy,
+    DomainEvent,
+    beat_resolved,
+    claim_recorded,
+    item_transferred,
+    mode_changed,
+    sheet_updated,
+)
 from uro_core.domain.ids import new_id
 from uro_core.errors import EmptyNarrationError, PlannerError, ProviderError
 from uro_core.metering import LLMCall
+from uro_core.pipeline.encounter import run_encounter
 from uro_core.pipeline.extraction import (
     build_extractor_messages,
     parse_extraction,
     run_gauntlet,
 )
-from uro_core.pipeline.mechanics import resolve_mechanics
-from uro_core.pipeline.plan import BeatPlan, build_planner_messages, parse_plan, validate_plan
+from uro_core.pipeline.mechanics import encounter_trigger, resolve_mechanics
+from uro_core.pipeline.plan import (
+    BeatPlan,
+    PlanMechanic,
+    build_planner_messages,
+    parse_plan,
+    validate_plan,
+)
 from uro_core.pipeline.recall import RecallBundle, assemble_recall, build_narrator_messages
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
 from uro_core.providers.router import ProviderRouter
-from uro_core.rulesets.base import CheckResult, Ruleset
+from uro_core.rulesets.base import (
+    CharSpec,
+    CheckResult,
+    Combatant,
+    EncounterOutcome,
+    Ruleset,
+    Sheet,
+)
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import Campaign
 
@@ -52,9 +74,8 @@ class BeatResult(BaseModel):
 class _Context(BaseModel):
     """What context assembly produced for the narrator + commit (docs/13 BeatState subset)."""
 
-    model_config = {"arbitrary_types_allowed": True}
-
     recall: RecallBundle
+    plan: BeatPlan | None = None
     mechanics_traces: list[str] = Field(default_factory=list)
     directives: str = ""
     suggestions: list[str] = Field(default_factory=list)
@@ -125,19 +146,16 @@ class Engine:
     async def run_beat(
         self, campaign: Campaign, participant_id: str, intent_text: str
     ) -> BeatResult:
-        """Resolve one beat and commit it (narration + extracted state)."""
+        """Resolve one beat and commit it (narration + extracted state, or a resolved fight)."""
         ctx = await self._context(campaign, intent_text)
-        messages = build_narrator_messages(
-            ctx.recall,
-            intent_text,
-            mechanics_traces=ctx.mechanics_traces,
-            directives=ctx.directives,
-        )
+        messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         started = time.perf_counter()
         chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
         await self._meter("narrator", messages, started)
         narration = "".join(chunks).strip()
-        return await self._finish(campaign, participant_id, intent_text, narration, ctx)
+        return await self._finish(
+            campaign, participant_id, intent_text, narration, ctx, encounter_events
+        )
 
     async def run_beat_stream(
         self, campaign: Campaign, participant_id: str, intent_text: str
@@ -149,19 +167,46 @@ class Engine:
         enters the append-only log, so a resumed session simply never saw that beat.
         """
         ctx = await self._context(campaign, intent_text)
-        messages = build_narrator_messages(
-            ctx.recall,
-            intent_text,
-            mechanics_traces=ctx.mechanics_traces,
-            directives=ctx.directives,
-        )
+        messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         started = time.perf_counter()
         collected: list[str] = []
         async for chunk in self._router.stream("narrator", messages):
             collected.append(chunk)
             yield chunk
         await self._meter("narrator", messages, started)
-        await self._finish(campaign, participant_id, intent_text, "".join(collected).strip(), ctx)
+        await self._finish(
+            campaign, participant_id, intent_text, "".join(collected).strip(), ctx, encounter_events
+        )
+
+    async def _prepare_narration(
+        self, campaign: Campaign, ctx: _Context, intent_text: str
+    ) -> tuple[list[Message], list[DomainEvent] | None]:
+        """Decide free-roam vs combat and build the narrator prompt. When the plan invokes an
+        encounter-starting affordance (attack), resolve the whole fight deterministically FIRST
+        (no LLM), then narrate its outcome — returning the fight's events for the commit stage."""
+        trigger = (
+            encounter_trigger(self._ruleset, ctx.plan)
+            if (self._ruleset is not None and ctx.plan is not None)
+            else None
+        )
+        if trigger is not None:
+            resolved = await self._resolve_encounter(campaign, ctx, trigger)
+            if resolved is not None:  # a valid fight formed; otherwise fall through to free-roam
+                events, traces = resolved
+                messages = build_narrator_messages(
+                    ctx.recall,
+                    intent_text,
+                    mechanics_traces=traces,
+                    directives="A fight breaks out — narrate it, honoring these outcomes.",
+                )
+                return messages, events
+        messages = build_narrator_messages(
+            ctx.recall,
+            intent_text,
+            mechanics_traces=ctx.mechanics_traces,
+            directives=ctx.directives,
+        )
+        return messages, None
 
     async def _context(self, campaign: Campaign, intent_text: str) -> _Context:
         """Context assembly [1] + (when a ruleset is bound) plan [2] + mechanics gate [3].
@@ -174,6 +219,7 @@ class Engine:
         checks = await self._mechanics(campaign, plan, recall, pc_actor_id)
         return _Context(
             recall=recall,
+            plan=plan,
             mechanics_traces=[c.trace for c in checks],
             directives=plan.narration_directives,
             suggestions=plan.suggestions,
@@ -186,25 +232,52 @@ class Engine:
         intent_text: str,
         narration: str,
         ctx: _Context,
+        encounter_events: list[DomainEvent] | None = None,
     ) -> BeatResult:
         if not narration:
             raise EmptyNarrationError(
                 f"provider produced no narration for a beat by {participant_id}"
             )
-        # Bare (ablation) mode records only the transcript — no extraction, no memory.
-        extracted = (
-            [] if self._bare else await self._extract(campaign.branch_id, ctx.recall, narration)
-        )
         beat_id = new_id()
-        events: list[DomainEvent] = [
-            beat_resolved(
-                beat_id=beat_id,
-                participant_id=participant_id,
-                intent_text=intent_text,
-                narration=narration,
-            ),
-            *extracted,
-        ]
+        if encounter_events is not None:
+            # Combat beat: the ruleset's mechanical events ARE the state (no extraction). Wrap
+            # them with ModeChanged in/out and the narrating BeatResolved, all one commit.
+            cause = CausedBy(kind="player_action", participant_id=participant_id, beat_id=beat_id)
+            events: list[DomainEvent] = [
+                mode_changed(
+                    from_mode="freeroam", to_mode="encounter", cause=intent_text, caused_by=cause
+                ),
+                *encounter_events,
+                mode_changed(
+                    from_mode="encounter",
+                    to_mode="freeroam",
+                    cause="fight resolved",
+                    caused_by=cause,
+                ),
+                beat_resolved(
+                    beat_id=beat_id,
+                    participant_id=participant_id,
+                    intent_text=intent_text,
+                    narration=narration,
+                ),
+            ]
+            extracted_n = 0
+        else:
+            # Free-roam: canonicalize prose through the extractor gauntlet. Bare mode records
+            # only the transcript.
+            extracted = (
+                [] if self._bare else await self._extract(campaign.branch_id, ctx.recall, narration)
+            )
+            events = [
+                beat_resolved(
+                    beat_id=beat_id,
+                    participant_id=participant_id,
+                    intent_text=intent_text,
+                    narration=narration,
+                ),
+                *extracted,
+            ]
+            extracted_n = len(extracted)
         commit = await self._store.append_beat(campaign.branch_id, events)
         if not self._bare:
             await self._remember(
@@ -217,10 +290,94 @@ class Engine:
             beat_id=beat_id,
             narration=narration,
             commit_id=commit.commit_id,
-            extracted=len(extracted),
+            extracted=extracted_n,
             checks=len(ctx.mechanics_traces),
             suggestions=ctx.suggestions,
         )
+
+    async def _resolve_encounter(
+        self, campaign: Campaign, ctx: _Context, trigger: PlanMechanic
+    ) -> tuple[list[DomainEvent], list[str]] | None:
+        """Build combatants from sheets (a default for an unsheeted combatant), auto-resolve the
+        fight (docs/06, no LLM), and derive its consequences. Returns (events, traces), or None
+        when no real fight forms — an attack with no distinct, known opponent falls back to
+        free-roam rather than fabricating a won encounter against no one (review 3.3)."""
+        assert self._ruleset is not None
+        branch = campaign.branch_id
+        pc_id = await self._store.campaign_pc(campaign.campaign_id) or ""
+        aggressor = trigger.actor or pc_id
+        defender = trigger.target
+        # A real encounter needs two DISTINCT, KNOWN actors on OPPOSING sides. PC identity only
+        # attributes consequences; it does not decide the split (so NPC-vs-NPC works too).
+        if not aggressor or not defender or aggressor == defender:
+            return None
+
+        setup: list[DomainEvent] = []
+        combatants: list[Combatant] = []
+        for actor_id, team in ((aggressor, "aggressor"), (defender, "defender")):
+            if await self._store.get_actor(branch, actor_id) is None:
+                return None  # a ref that is not a known actor → not a real fight
+            sheet_dict = await self._store.get_sheet(branch, actor_id)
+            if sheet_dict is None:  # a known-but-unsheeted combatant gets a default sheet, logged
+                sheet_dict = self._ruleset.new_character(CharSpec(), Rng(0)).model_dump()
+                setup.append(
+                    sheet_updated(actor_id=actor_id, sheet=sheet_dict, ruleset_id=self._ruleset.id)
+                )
+            combatants.append(
+                Combatant(actor_id=actor_id, team=team, sheet=Sheet.model_validate(sheet_dict))
+            )
+
+        encounter_id = f"e:{new_id()}"
+        rng = await self._beat_rng(campaign)
+        enc_events, outcome = run_encounter(
+            self._ruleset, combatants, rng, encounter_id=encounter_id
+        )
+        consequences = await self._combat_consequences(branch, outcome, combatants)
+
+        traces = [
+            e.payload["trace"]
+            for e in enc_events
+            if e.event_type == "EncounterTurnTaken" and e.payload.get("trace")
+        ]
+        traces.append(f"outcome: team {outcome.winner_team or 'none'} prevails")
+        return [*setup, *enc_events, *consequences], traces
+
+    async def _combat_consequences(
+        self, branch_id: str, outcome: EncounterOutcome, combatants: list[Combatant]
+    ) -> list[DomainEvent]:
+        """Persistent fallout of a decided fight: each combatant on the losing team is wounded
+        (a truth=true claim) and the victor loots their items (ItemTransferred). Emitted by P."""
+        if outcome.winner_team is None:
+            return []
+        victors = [c.actor_id for c in combatants if c.team == outcome.winner_team]
+        losers = [c.actor_id for c in combatants if c.team != outcome.winner_team]
+        if not victors or not losers:
+            return []
+        victor = victors[0]
+        cause = CausedBy(kind="player_action")
+        events: list[DomainEvent] = []
+        for loser in losers:
+            events.append(
+                claim_recorded(
+                    claim_id=f"c:{new_id()}",
+                    statement=f"{loser} was beaten down in the brawl and left wounded.",
+                    subject_refs=[loser],
+                    truth="true",
+                    origin="mechanics",
+                    caused_by=cause,
+                )
+            )
+            for item_id in await self._store.items_owned_by(branch_id, loser):
+                events.append(
+                    item_transferred(
+                        item_id=item_id,
+                        from_ref=loser,
+                        to_ref=victor,
+                        means="looted",
+                        caused_by=cause,
+                    )
+                )
+        return events
 
     async def _plan(
         self, campaign: Campaign, intent_text: str, recall: RecallBundle, pc_actor_id: str
