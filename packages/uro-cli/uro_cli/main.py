@@ -19,9 +19,11 @@ app = typer.Typer(no_args_is_help=True, help="Uro Engine — reference client.")
 db_app = typer.Typer(no_args_is_help=True, help="Database management.")
 world_app = typer.Typer(no_args_is_help=True, help="World and campaign management.")
 branch_app = typer.Typer(no_args_is_help=True, help="Branch and timeline management (docs/03).")
+campaign_app = typer.Typer(no_args_is_help=True, help="Campaign lifecycle over branches.")
 app.add_typer(db_app, name="db")
 app.add_typer(world_app, name="world")
 app.add_typer(branch_app, name="branch")
+app.add_typer(campaign_app, name="campaign")
 
 PARTICIPANT = "player-1"  # Phase 0 is single-player; participants arrive in Phase 5.
 
@@ -184,6 +186,9 @@ def branch_fork(
     world: str,
     at: str = typer.Option(..., "--at", help="marker name or commit id to fork from"),
     name: str = typer.Option(..., "--name", help="name for the new branch"),
+    time_skip_days: int = typer.Option(
+        0, "--time-skip-days", help="advance in-fiction time on the fork (e.g. 365 = a year later)"
+    ),
 ) -> None:
     """Fork a new branch from any commit or marker (docs/03: branch anywhere)."""
 
@@ -193,11 +198,15 @@ def branch_fork(
         try:
             w = await _world_or_exit(store, world)
             branch = await store.fork_branch(w.world_id, at, name)
+            if time_skip_days > 0:
+                await store.time_skip(branch.branch_id, time_skip_days)
         finally:
             await store.close()
         forked = branch.forked_from[:8] if branch.forked_from else "-"
         typer.echo(f"forked branch {name!r}: {branch.branch_id}")
         typer.echo(f"  from {forked}  (head = {forked})")
+        if time_skip_days > 0:
+            typer.echo(f"  time-skipped {time_skip_days} day(s) on the fork")
 
     _run_async(_run)
 
@@ -251,6 +260,64 @@ def log(
         for e in entries:
             marks = f"  [{', '.join(e.markers)}]" if e.markers else ""
             typer.echo(f"  {e.depth:>4} {e.commit_id[:8]}  {e.summary}{marks}")
+
+    _run_async(_run)
+
+
+@campaign_app.command("new")
+def campaign_new(
+    world: str,
+    branch: str = typer.Option("main", "--branch", help="branch to play on (default main)"),
+    adopt: str = typer.Option(None, "--adopt", help="adopt an existing actor id as the PC"),
+    pc: str = typer.Option(None, "--pc", help="create a fresh PC with this name"),
+    participant: str = typer.Option(PARTICIPANT, "--participant", help="participant id"),
+) -> None:
+    """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one)."""
+
+    async def _run() -> None:
+        if (adopt is None) == (pc is None):
+            typer.echo("provide exactly one of --adopt <actor_id> or --pc <name>", err=True)
+            raise typer.Exit(1)
+        store = build_store()
+        await store.connect()
+        try:
+            w = await _world_or_exit(store, world)
+            b = await store.get_branch_by_name(w.world_id, branch)
+            if b is None:
+                typer.echo(f"no such branch: {branch}", err=True)
+                raise typer.Exit(1)
+            campaign = await store.start_campaign(
+                w.world_id,
+                b.branch_id,
+                participant_id=participant,
+                adopt_actor_id=adopt,
+                new_pc_name=pc,
+            )
+        finally:
+            await store.close()
+        who = f"adopted {adopt}" if adopt else f"new PC {pc!r}"
+        typer.echo(f"campaign: {campaign.campaign_id}  (branch {branch!r}, {who})")
+        typer.echo(f"play it:  uro play {campaign.campaign_id}")
+
+    _run_async(_run)
+
+
+@campaign_app.command("end")
+def campaign_end(
+    campaign_id: str,
+    marker: str = typer.Option(..., "--marker", help="name the closing commit (a fork root)"),
+    outcome: str = typer.Option("", "--outcome", help="short outcome note"),
+) -> None:
+    """End a campaign: release its PCs to world NPCs and mark the closing commit."""
+
+    async def _run() -> None:
+        store = build_store()
+        await store.connect()
+        try:
+            m = await store.end_campaign(campaign_id, marker, outcome=outcome)
+        finally:
+            await store.close()
+        typer.echo(f"campaign ended; marker {m.name!r} → commit {m.commit_id[:8]}")
 
     _run_async(_run)
 

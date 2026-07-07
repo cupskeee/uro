@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from uro_core.domain.ids import new_id
 
@@ -25,12 +25,20 @@ class WorldTime(BaseModel):
     segment: Segment = "morning"
 
 
+HistoryPass = Literal["seeding", "adaptation", "backfill", "timeskip"]
+
+
 class CausedBy(BaseModel):
-    """Provenance of an event (docs/12). Phase 0 uses `system` and `player_action`."""
+    """Provenance of an event (docs/12). The `history` kind carries a `pass`
+    discriminator (seeding|adaptation|backfill|timeskip) — serialized under the wire
+    key `pass` (a Python keyword, so the field is `history_pass` with that alias)."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     kind: CausedByKind
     participant_id: str | None = None
     beat_id: str | None = None
+    history_pass: HistoryPass | None = Field(default=None, alias="pass")
 
 
 class DomainEvent(BaseModel):
@@ -334,4 +342,152 @@ def place_destroyed(
         entity_refs=[place_id],
         caused_by=_default_cause(caused_by),
         payload=PlaceDestroyedPayload(place_id=place_id, cause=cause).model_dump(),
+    )
+
+
+def history_cause(pass_: HistoryPass) -> CausedBy:
+    """Provenance for a History-service event (seeding/adaptation/timeskip, docs/12)."""
+    # Via model_validate on the wire shape so the `pass` alias sets history_pass cleanly.
+    return CausedBy.model_validate({"kind": "history", "pass": pass_})
+
+
+# --- Campaign lifecycle & PC binding (docs/12; the fork's adopt-as-PC / retire-to-NPC) ---
+#
+# "Is this actor a PC?" is not a global flag — it is answered per-branch by the campaign's
+# PCBound/PCReleased history (docs/02): the SAME actor_id can be a PC on one fork (the player
+# who continues) and an ordinary NPC on a sibling fork (where someone else plays). Emitter S.
+
+
+class CampaignStartedPayload(BaseModel):
+    v: int = 1
+    campaign_id: str
+    branch_id: str
+    party: list[str] = Field(default_factory=list)  # PC actor ids
+    seed: int = 0
+
+
+class CampaignEndedPayload(BaseModel):
+    v: int = 1
+    campaign_id: str
+    outcome: str = ""
+    marker_ref: str = ""
+
+
+class PCBoundPayload(BaseModel):
+    v: int = 1
+    actor_id: str
+    participant_id: str
+    campaign_id: str
+
+
+class PCReleasedPayload(BaseModel):
+    v: int = 1
+    actor_id: str
+    participant_id: str
+    campaign_id: str
+
+
+def campaign_started(
+    *,
+    campaign_id: str,
+    branch_id: str,
+    party: list[str] | None = None,
+    seed: int = 0,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="CampaignStarted",
+        entity_refs=list(party or []),
+        caused_by=_default_cause(caused_by),
+        payload=CampaignStartedPayload(
+            campaign_id=campaign_id, branch_id=branch_id, party=party or [], seed=seed
+        ).model_dump(),
+    )
+
+
+def campaign_ended(
+    *,
+    campaign_id: str,
+    outcome: str = "",
+    marker_ref: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="CampaignEnded",
+        caused_by=_default_cause(caused_by),
+        payload=CampaignEndedPayload(
+            campaign_id=campaign_id, outcome=outcome, marker_ref=marker_ref
+        ).model_dump(),
+    )
+
+
+def pc_bound(
+    *, actor_id: str, participant_id: str, campaign_id: str, caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="PCBound",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=PCBoundPayload(
+            actor_id=actor_id, participant_id=participant_id, campaign_id=campaign_id
+        ).model_dump(),
+    )
+
+
+def pc_released(
+    *, actor_id: str, participant_id: str, campaign_id: str, caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="PCReleased",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=PCReleasedPayload(
+            actor_id=actor_id, participant_id=participant_id, campaign_id=campaign_id
+        ).model_dump(),
+    )
+
+
+# --- Time & History adaptation (docs/12; the fork time-skip) ---
+
+
+class TimeAdvancedPayload(BaseModel):
+    v: int = 1
+    from_day: int
+    to_day: int
+    reason: str = ""
+
+
+class AdaptationAppliedPayload(BaseModel):
+    v: int = 1
+    trigger_refs: list[str] = Field(default_factory=list)
+    scope: str = ""
+    summary: str = ""
+
+
+def time_advanced(
+    *, from_day: int, to_day: int, reason: str = "", caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="TimeAdvanced",
+        world_time=WorldTime(day=to_day),
+        caused_by=_default_cause(caused_by),
+        payload=TimeAdvancedPayload(from_day=from_day, to_day=to_day, reason=reason).model_dump(),
+    )
+
+
+def adaptation_applied(
+    *,
+    trigger_refs: list[str] | None = None,
+    scope: str = "",
+    summary: str = "",
+    to_day: int = 0,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="AdaptationApplied",
+        world_time=WorldTime(day=to_day),
+        caused_by=_default_cause(caused_by),
+        payload=AdaptationAppliedPayload(
+            trigger_refs=trigger_refs or [], scope=scope, summary=summary
+        ).model_dump(),
     )

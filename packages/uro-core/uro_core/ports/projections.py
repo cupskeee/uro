@@ -22,6 +22,13 @@ class ProjectionQueries(Protocol):
 
     async def list_places(self, branch_id: str) -> list[PlaceView]: ...
 
+    async def is_pc(self, branch_id: str, actor_id: str) -> bool:
+        """Per-branch PC-ness (docs/02): the same actor is a PC on one fork, an NPC on
+        a sibling — answered by PCBound/PCReleased history, never a global flag."""
+        ...
+
+    async def active_pcs(self, branch_id: str) -> list[str]: ...
+
     async def find_actor_by_name(self, branch_id: str, name: str) -> ActorView | None:
         """Match by name (case-insensitive) or alias — the seed of entity resolution."""
         ...

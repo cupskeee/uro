@@ -129,6 +129,30 @@ async def _place_destroyed(conn: asyncpg.Connection, branch_id: str, p: dict[str
     )
 
 
+async def _pc_bound(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    await conn.execute(
+        "INSERT INTO proj_pcs (branch_id, campaign_id, actor_id, participant_id, active) "
+        "VALUES ($1, $2, $3, $4, true) "
+        "ON CONFLICT (branch_id, campaign_id, actor_id) DO UPDATE SET "
+        "participant_id = EXCLUDED.participant_id, active = true",
+        branch_id,
+        p["campaign_id"],
+        p["actor_id"],
+        p["participant_id"],
+    )
+
+
+async def _pc_released(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # Retire to NPC: the binding row stays as history, `active` flips false.
+    await conn.execute(
+        "UPDATE proj_pcs SET active = false "
+        "WHERE branch_id = $1 AND campaign_id = $2 AND actor_id = $3",
+        branch_id,
+        p["campaign_id"],
+        p["actor_id"],
+    )
+
+
 _HANDLERS = {
     "ActorCreated": _actor_created,
     "ActorPromoted": _actor_promoted,
@@ -139,6 +163,8 @@ _HANDLERS = {
     "PlaceStateChanged": _place_state_changed,
     "TerrainChanged": _terrain_changed,
     "PlaceDestroyed": _place_destroyed,
+    "PCBound": _pc_bound,
+    "PCReleased": _pc_released,
 }
 
 
@@ -168,6 +194,7 @@ _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "claims": ("claim_id", "statement", "subject_refs", "truth", "origin"),
     "beliefs": ("actor_id", "claim_id", "confidence", "learned_from"),
     "places": ("place_id", "name", "kind", "status", "description"),
+    "pcs": ("campaign_id", "actor_id", "participant_id", "active"),
 }
 
 

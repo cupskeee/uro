@@ -18,7 +18,19 @@ from uro_core.adapters.postgres.projector import (
     restore_snapshot,
     snapshot_state,
 )
-from uro_core.domain.events import BeatResolvedPayload, DomainEvent, world_genesis
+from uro_core.domain.events import (
+    BeatResolvedPayload,
+    DomainEvent,
+    actor_created,
+    adaptation_applied,
+    campaign_ended,
+    campaign_started,
+    history_cause,
+    pc_bound,
+    pc_released,
+    time_advanced,
+    world_genesis,
+)
 from uro_core.domain.hashing import compute_commit_hash
 from uro_core.domain.ids import new_id
 from uro_core.metering import LLMCall
@@ -191,56 +203,250 @@ class PostgresEventStore:
             )
         return Campaign(**dict(row)) if row else None
 
+    # --- campaigns over branches, PC binding, time-skip (docs/02, 03, 12) ---
+
+    async def start_campaign(
+        self,
+        world_id: str,
+        branch_id: str,
+        *,
+        participant_id: str,
+        adopt_actor_id: str | None = None,
+        new_pc_name: str | None = None,
+        new_pc_id: str | None = None,
+        seed: int = 0,
+    ) -> Campaign:
+        """Create a campaign on a branch and bind its PC — either ADOPT an existing world
+        actor (the meteor 'continue': play the one who caused it) or CREATE a fresh PC.
+        Emits CampaignStarted + (ActorCreated if fresh) + PCBound in one commit, so PC-ness
+        is event-sourced and reproduced by materialization on any future fork."""
+        if (adopt_actor_id is None) == (new_pc_name is None):
+            raise ValueError("start_campaign needs exactly one of adopt_actor_id / new_pc_name")
+        campaign_id = new_id()
+        events: list[DomainEvent] = []
+        if adopt_actor_id is not None:
+            pc_actor_id = adopt_actor_id
+        else:
+            pc_actor_id = new_pc_id or new_id()
+            events.append(
+                actor_created(actor_id=pc_actor_id, name=new_pc_name or "", tier=2, role="pc")
+            )
+        events.append(
+            campaign_started(
+                campaign_id=campaign_id, branch_id=branch_id, party=[pc_actor_id], seed=seed
+            )
+        )
+        events.append(
+            pc_bound(actor_id=pc_actor_id, participant_id=participant_id, campaign_id=campaign_id)
+        )
+        async with self.pool.acquire() as conn, conn.transaction():
+            branch = await conn.fetchrow(
+                "SELECT world_id FROM branches WHERE branch_id = $1", branch_id
+            )
+            if branch is None or branch["world_id"] != world_id:
+                raise KeyError(f"unknown branch {branch_id!r} in world {world_id!r}")
+            if adopt_actor_id is not None:
+                known = await conn.fetchval(
+                    "SELECT 1 FROM proj_actors WHERE branch_id = $1 AND actor_id = $2",
+                    branch_id,
+                    adopt_actor_id,
+                )
+                if known is None:
+                    raise ValueError(
+                        f"cannot adopt unknown actor {adopt_actor_id!r} on this branch"
+                    )
+            await conn.execute(
+                "INSERT INTO campaigns (campaign_id, world_id, branch_id) VALUES ($1, $2, $3)",
+                campaign_id,
+                world_id,
+                branch_id,
+            )
+            await self._append(conn, branch_id, events)
+        return Campaign(campaign_id=campaign_id, world_id=world_id, branch_id=branch_id)
+
+    async def end_campaign(
+        self, campaign_id: str, marker_name: str, *, outcome: str = ""
+    ) -> Marker:
+        """End a campaign: release its PCs (they revert to world NPCs) and mark the closing
+        commit. Emits CampaignEnded + PCReleased(each active PC) in one commit, then a marker
+        + snapshot at that head — the exact fork root a continuation branches from (docs/03)."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            camp = await conn.fetchrow(
+                "SELECT world_id, branch_id FROM campaigns WHERE campaign_id = $1", campaign_id
+            )
+            if camp is None:
+                raise KeyError(f"unknown campaign {campaign_id!r}")
+            world_id, branch_id = camp["world_id"], camp["branch_id"]
+            pcs = await conn.fetch(
+                "SELECT actor_id, participant_id FROM proj_pcs "
+                "WHERE branch_id = $1 AND campaign_id = $2 AND active ORDER BY actor_id",
+                branch_id,
+                campaign_id,
+            )
+            events: list[DomainEvent] = [
+                campaign_ended(campaign_id=campaign_id, outcome=outcome, marker_ref=marker_name)
+            ]
+            events.extend(
+                pc_released(
+                    actor_id=r["actor_id"],
+                    participant_id=r["participant_id"],
+                    campaign_id=campaign_id,
+                )
+                for r in pcs
+            )
+            commit = await self._append(conn, branch_id, events)
+            marker_id = new_id()
+            try:
+                await conn.execute(
+                    "INSERT INTO markers (marker_id, world_id, name, commit_id) "
+                    "VALUES ($1, $2, $3, $4)",
+                    marker_id,
+                    world_id,
+                    marker_name,
+                    commit.commit_id,
+                )
+            except asyncpg.UniqueViolationError as exc:
+                raise ValueError(f"marker {marker_name!r} already exists in this world") from exc
+            await self._write_snapshot(conn, commit.commit_id, branch_id)
+            return Marker(
+                marker_id=marker_id,
+                world_id=world_id,
+                name=marker_name,
+                commit_id=commit.commit_id,
+            )
+
+    async def time_skip(
+        self, branch_id: str, days: int, *, reason: str = "time-skip on fork"
+    ) -> Commit:
+        """Advance in-fiction time on a branch (the fork's '50 years later'). Deterministic:
+        commits TimeAdvanced + an AdaptationApplied HEADER — the PoC does no LLM ripple, so
+        this records the skip honestly rather than pretending to regenerate threads (docs/03)."""
+        if days <= 0:
+            raise ValueError("time-skip days must be positive")
+        async with self.pool.acquire() as conn, conn.transaction():
+            locked = await conn.fetchval(
+                "SELECT world_id FROM branches WHERE branch_id = $1 FOR UPDATE", branch_id
+            )
+            if locked is None:
+                raise KeyError(f"unknown branch {branch_id!r}")
+            from_day = await self._current_day(conn, branch_id)
+            to_day = from_day + days
+            events = [
+                time_advanced(
+                    from_day=from_day,
+                    to_day=to_day,
+                    reason=reason,
+                    caused_by=history_cause("timeskip"),
+                ),
+                adaptation_applied(
+                    scope="fork-timeskip",
+                    summary=f"deterministic {days}-day skip; no LLM ripple in the PoC",
+                    to_day=to_day,
+                    caused_by=history_cause("adaptation"),
+                ),
+            ]
+            return await self._append(conn, branch_id, events)
+
+    async def is_pc(self, branch_id: str, actor_id: str) -> bool:
+        """Per-branch PC-ness (docs/02): true iff the actor has an ACTIVE binding here."""
+        async with self.pool.acquire() as conn:
+            found = await conn.fetchval(
+                "SELECT 1 FROM proj_pcs WHERE branch_id = $1 AND actor_id = $2 AND active LIMIT 1",
+                branch_id,
+                actor_id,
+            )
+        return found is not None
+
+    async def active_pcs(self, branch_id: str) -> list[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT actor_id FROM proj_pcs WHERE branch_id = $1 AND active "
+                "ORDER BY actor_id",
+                branch_id,
+            )
+        return [r["actor_id"] for r in rows]
+
+    async def current_world_time(self, branch_id: str) -> int:
+        """The branch's latest in-fiction day (max over its ancestry; 0 if unset)."""
+        async with self.pool.acquire() as conn:
+            return await self._current_day(conn, branch_id)
+
+    @staticmethod
+    async def _current_day(conn: asyncpg.Connection, branch_id: str) -> int:
+        day = await conn.fetchval(
+            """
+            WITH RECURSIVE chain AS (
+                SELECT c.commit_id, c.parent_id
+                FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+                WHERE b.branch_id = $1
+                UNION ALL
+                SELECT c.commit_id, c.parent_id
+                FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+            )
+            SELECT max((e.world_time->>'day')::int)
+            FROM chain JOIN events e ON e.commit_id = chain.commit_id
+            """,
+            branch_id,
+        )
+        return int(day) if day is not None else 0
+
     # --- the timeline ---
 
     async def append_beat(self, branch_id: str, events: list[DomainEvent]) -> Commit:
         async with self.pool.acquire() as conn, conn.transaction():
-            branch = await conn.fetchrow(
-                "SELECT world_id, head_commit FROM branches WHERE branch_id = $1 FOR UPDATE",
-                branch_id,
+            return await self._append(conn, branch_id, events)
+
+    async def _append(
+        self, conn: asyncpg.Connection, branch_id: str, events: list[DomainEvent]
+    ) -> Commit:
+        """The commit core, on a caller-provided connection/transaction — so a campaign
+        start or a time-skip can commit its events atomically alongside its own writes."""
+        branch = await conn.fetchrow(
+            "SELECT world_id, head_commit FROM branches WHERE branch_id = $1 FOR UPDATE",
+            branch_id,
+        )
+        if branch is None:
+            raise KeyError(f"unknown branch {branch_id!r}")
+        parent_id = branch["head_commit"]
+        parent_hash = None
+        parent_depth = -1  # so genesis's child (parent_depth 0) lands at depth 1
+        if parent_id is not None:
+            parent = await conn.fetchrow(
+                "SELECT commit_hash, depth FROM commits WHERE commit_id = $1", parent_id
             )
-            if branch is None:
-                raise KeyError(f"unknown branch {branch_id!r}")
-            parent_id = branch["head_commit"]
-            parent_hash = None
-            parent_depth = -1  # so genesis's child (parent_depth 0) lands at depth 1
-            if parent_id is not None:
-                parent = await conn.fetchrow(
-                    "SELECT commit_hash, depth FROM commits WHERE commit_id = $1", parent_id
-                )
-                parent_hash, parent_depth = parent["commit_hash"], parent["depth"]
-            commit_id = new_id()
-            commit_hash = compute_commit_hash(parent_hash, events)
-            depth = parent_depth + 1
-            await conn.execute(
-                "INSERT INTO commits (commit_id, world_id, parent_id, commit_hash, depth) "
-                "VALUES ($1, $2, $3, $4, $5)",
-                commit_id,
-                branch["world_id"],
-                parent_id,
-                commit_hash,
-                depth,
-            )
-            await self._insert_events(conn, commit_id, events)
-            # Project in the SAME transaction — projections never drift from the log.
-            for event in events:
-                await apply_event(conn, branch_id, event)
-            await conn.execute(
-                "UPDATE branches SET head_commit = $1 WHERE branch_id = $2",
-                commit_id,
-                branch_id,
-            )
-            # Periodic snapshot: the branch's proj_* rows now equal state at this new
-            # head, and state-at-a-commit is branch-independent — capture it verbatim.
-            if depth > 0 and depth % self._snapshot_every == 0:
-                await self._write_snapshot(conn, commit_id, branch_id)
-            return Commit(
-                commit_id=commit_id,
-                world_id=branch["world_id"],
-                parent_id=parent_id,
-                commit_hash=commit_hash,
-                depth=depth,
-            )
+            parent_hash, parent_depth = parent["commit_hash"], parent["depth"]
+        commit_id = new_id()
+        commit_hash = compute_commit_hash(parent_hash, events)
+        depth = parent_depth + 1
+        await conn.execute(
+            "INSERT INTO commits (commit_id, world_id, parent_id, commit_hash, depth) "
+            "VALUES ($1, $2, $3, $4, $5)",
+            commit_id,
+            branch["world_id"],
+            parent_id,
+            commit_hash,
+            depth,
+        )
+        await self._insert_events(conn, commit_id, events)
+        # Project in the SAME transaction — projections never drift from the log.
+        for event in events:
+            await apply_event(conn, branch_id, event)
+        await conn.execute(
+            "UPDATE branches SET head_commit = $1 WHERE branch_id = $2",
+            commit_id,
+            branch_id,
+        )
+        # Periodic snapshot: the branch's proj_* rows now equal state at this new
+        # head, and state-at-a-commit is branch-independent — capture it verbatim.
+        if depth > 0 and depth % self._snapshot_every == 0:
+            await self._write_snapshot(conn, commit_id, branch_id)
+        return Commit(
+            commit_id=commit_id,
+            world_id=branch["world_id"],
+            parent_id=parent_id,
+            commit_hash=commit_hash,
+            depth=depth,
+        )
 
     async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:
         async with self.pool.acquire() as conn:
@@ -721,6 +927,6 @@ class PostgresEventStore:
                 event.event_type,
                 event.entity_refs,
                 event.world_time.model_dump(),
-                event.caused_by.model_dump(),
+                event.caused_by.model_dump(by_alias=True),  # history `pass` on the wire (docs/12)
                 event.payload,
             )

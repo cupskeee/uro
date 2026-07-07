@@ -35,6 +35,35 @@ class EventStore(Protocol):
 
     async def get_campaign(self, campaign_id: str) -> Campaign | None: ...
 
+    async def start_campaign(
+        self,
+        world_id: str,
+        branch_id: str,
+        *,
+        participant_id: str,
+        adopt_actor_id: str | None = None,
+        new_pc_name: str | None = None,
+        new_pc_id: str | None = None,
+        seed: int = 0,
+    ) -> Campaign:
+        """Create a campaign on a branch and bind its PC (adopt an existing actor or make
+        a fresh one) — CampaignStarted + PCBound as events (docs/03, 12)."""
+        ...
+
+    async def end_campaign(
+        self, campaign_id: str, marker_name: str, *, outcome: str = ""
+    ) -> Marker:
+        """End a campaign: release its PCs to NPCs, mark + snapshot the closing commit."""
+        ...
+
+    async def time_skip(
+        self, branch_id: str, days: int, *, reason: str = "time-skip on fork"
+    ) -> Commit:
+        """Advance in-fiction time on a branch (TimeAdvanced + AdaptationApplied header)."""
+        ...
+
+    async def current_world_time(self, branch_id: str) -> int: ...
+
     async def append_beat(self, branch_id: str, events: list[DomainEvent]) -> Commit:
         """Append one beat commit to the branch head and advance it — one transaction."""
         ...
