@@ -95,6 +95,20 @@ class PlaceView(BaseModel):
     description: str
 
 
+class FactionView(BaseModel):
+    faction_id: str
+    name: str
+    kind: str  # faction | religion
+    description: str
+
+
+class EdgeView(BaseModel):
+    src: str
+    rel_type: str
+    dst: str
+    weight: float
+
+
 class MemoryHit(BaseModel):
     text: str
     kind: str

@@ -12,7 +12,14 @@ from typing import Any, Protocol
 
 from uro_core.ports.event_store import EventStore
 from uro_core.ports.vector import VectorIndex
-from uro_core.timeline.models import ActorView, BeliefView, ClaimView, PlaceView
+from uro_core.timeline.models import (
+    ActorView,
+    BeliefView,
+    ClaimView,
+    EdgeView,
+    FactionView,
+    PlaceView,
+)
 
 
 class ProjectionQueries(Protocol):
@@ -21,6 +28,14 @@ class ProjectionQueries(Protocol):
     async def get_place(self, branch_id: str, place_id: str) -> PlaceView | None: ...
 
     async def list_places(self, branch_id: str) -> list[PlaceView]: ...
+
+    async def list_factions(self, branch_id: str) -> list[FactionView]: ...
+
+    async def get_faction(self, branch_id: str, faction_id: str) -> FactionView | None: ...
+
+    async def list_edges(self, branch_id: str, rel_type: str | None = None) -> list[EdgeView]: ...
+
+    async def edges_from(self, branch_id: str, src: str) -> list[EdgeView]: ...
 
     async def get_sheet(self, branch_id: str, actor_id: str) -> dict[str, Any] | None:
         """An actor's ruleset character sheet as a raw dict (docs/06); None if unsheeted."""

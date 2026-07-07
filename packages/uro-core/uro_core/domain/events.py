@@ -720,3 +720,146 @@ def mode_changed(
         caused_by=_default_cause(caused_by),
         payload=ModeChangedPayload(from_mode=from_mode, to_mode=to_mode, cause=cause).model_dump(),
     )
+
+
+# --- World-building: factions, edges (the graph), threads, History seeding (docs/02, 09, 12) ---
+
+
+class FactionCreatedPayload(BaseModel):
+    v: int = 1
+    faction_id: str
+    name: str
+    kind: str = "faction"  # or "religion" (docs/02)
+    description: str = ""
+
+
+class EdgeAddedPayload(BaseModel):
+    v: int = 1
+    src: str
+    rel_type: str  # member_of | located_in | at_war_with | rules | owns | knows | …
+    dst: str
+    weight: float = 1.0
+    attrs: dict[str, Any] = Field(default_factory=dict)
+
+
+class EdgeRemovedPayload(BaseModel):
+    v: int = 1
+    src: str
+    rel_type: str
+    dst: str
+
+
+class ThreadCreatedPayload(BaseModel):
+    v: int = 1
+    thread_id: str
+    stakes: str
+    state: str = "dormant"
+    originator: str = ""
+
+
+class HistorySeededPayload(BaseModel):
+    v: int = 1
+    seed: int
+    simulated_years: int = 0
+    era_summary: str = ""
+
+
+def faction_created(
+    *,
+    faction_id: str,
+    name: str,
+    kind: str = "faction",
+    description: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="FactionCreated",
+        entity_refs=[faction_id],
+        caused_by=_default_cause(caused_by),
+        payload=FactionCreatedPayload(
+            faction_id=faction_id, name=name, kind=kind, description=description
+        ).model_dump(),
+    )
+
+
+def edge_added(
+    *,
+    src: str,
+    rel_type: str,
+    dst: str,
+    weight: float = 1.0,
+    attrs: dict[str, Any] | None = None,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="EdgeAdded",
+        entity_refs=[src, dst],
+        caused_by=_default_cause(caused_by),
+        payload=EdgeAddedPayload(
+            src=src, rel_type=rel_type, dst=dst, weight=weight, attrs=attrs or {}
+        ).model_dump(),
+    )
+
+
+def edge_updated(
+    *,
+    src: str,
+    rel_type: str,
+    dst: str,
+    weight: float = 1.0,
+    attrs: dict[str, Any] | None = None,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="EdgeUpdated",
+        entity_refs=[src, dst],
+        caused_by=_default_cause(caused_by),
+        payload=EdgeAddedPayload(
+            src=src, rel_type=rel_type, dst=dst, weight=weight, attrs=attrs or {}
+        ).model_dump(),
+    )
+
+
+def edge_removed(
+    *, src: str, rel_type: str, dst: str, caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="EdgeRemoved",
+        entity_refs=[src, dst],
+        caused_by=_default_cause(caused_by),
+        payload=EdgeRemovedPayload(src=src, rel_type=rel_type, dst=dst).model_dump(),
+    )
+
+
+def thread_created(
+    *,
+    thread_id: str,
+    stakes: str,
+    state: str = "dormant",
+    originator: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ThreadCreated",
+        entity_refs=[thread_id],
+        caused_by=_default_cause(caused_by),
+        payload=ThreadCreatedPayload(
+            thread_id=thread_id, stakes=stakes, state=state, originator=originator
+        ).model_dump(),
+    )
+
+
+def history_seeded(
+    *,
+    seed: int,
+    simulated_years: int = 0,
+    era_summary: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="HistorySeeded",
+        caused_by=_default_cause(caused_by),
+        payload=HistorySeededPayload(
+            seed=seed, simulated_years=simulated_years, era_summary=era_summary
+        ).model_dump(),
+    )

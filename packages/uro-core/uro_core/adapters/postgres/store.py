@@ -45,6 +45,8 @@ from uro_core.timeline.models import (
     Campaign,
     ClaimView,
     Commit,
+    EdgeView,
+    FactionView,
     LineageEntry,
     Marker,
     MemoryHit,
@@ -149,23 +151,28 @@ class PostgresEventStore:
 
     # --- worlds & campaigns ---
 
-    async def create_world(self, name: str) -> World:
+    async def create_world(
+        self, name: str, *, extra_events: list[DomainEvent] | None = None
+    ) -> World:
+        """Create a world + its `main` branch. The genesis commit is `WorldGenesis` plus any
+        `extra_events` — world-pack import (docs/09) passes the authored seed events (emitter S)
+        so the authored geography/actors/factions exist as state before any History seeding."""
+        genesis = [world_genesis(name), *(extra_events or [])]
         async with self.pool.acquire() as conn, conn.transaction():
             world_id = new_id()
             await conn.execute(
                 "INSERT INTO worlds (world_id, name) VALUES ($1, $2)", world_id, name
             )
-            genesis = world_genesis(name)
             commit_id = new_id()
-            commit_hash = compute_commit_hash(None, [genesis])
+            commit_hash = compute_commit_hash(None, genesis)
             await conn.execute(
-                "INSERT INTO commits (commit_id, world_id, parent_id, commit_hash) "
-                "VALUES ($1, $2, NULL, $3)",
+                "INSERT INTO commits (commit_id, world_id, parent_id, commit_hash, depth) "
+                "VALUES ($1, $2, NULL, $3, 0)",
                 commit_id,
                 world_id,
                 commit_hash,
             )
-            await self._insert_events(conn, commit_id, [genesis])
+            await self._insert_events(conn, commit_id, genesis)
             branch_id = new_id()
             await conn.execute(
                 "INSERT INTO branches (branch_id, world_id, name, head_commit) "
@@ -174,6 +181,9 @@ class PostgresEventStore:
                 world_id,
                 commit_id,
             )
+            # Project the seed events into the new main branch (genesis itself is a no-op).
+            for event in genesis:
+                await apply_event(conn, branch_id, event)
             return World(world_id=world_id, name=name, main_branch_id=branch_id)
 
     async def get_world_by_name(self, name: str) -> World | None:
@@ -681,6 +691,53 @@ class PostgresEventStore:
                 branch_id,
             )
         return [PlaceView(**dict(r)) for r in rows]
+
+    async def list_factions(self, branch_id: str) -> list[FactionView]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT faction_id, name, kind, description FROM proj_factions "
+                "WHERE branch_id = $1 ORDER BY faction_id",
+                branch_id,
+            )
+        return [FactionView(**dict(r)) for r in rows]
+
+    async def get_faction(self, branch_id: str, faction_id: str) -> FactionView | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT faction_id, name, kind, description FROM proj_factions "
+                "WHERE branch_id = $1 AND faction_id = $2",
+                branch_id,
+                faction_id,
+            )
+        return FactionView(**dict(row)) if row else None
+
+    async def list_edges(self, branch_id: str, rel_type: str | None = None) -> list[EdgeView]:
+        """The graph's edges on a branch (docs/07), optionally filtered by relation type."""
+        async with self.pool.acquire() as conn:
+            if rel_type is None:
+                rows = await conn.fetch(
+                    "SELECT src, rel_type, dst, weight FROM proj_edges "
+                    "WHERE branch_id = $1 ORDER BY src, rel_type, dst",
+                    branch_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT src, rel_type, dst, weight FROM proj_edges "
+                    "WHERE branch_id = $1 AND rel_type = $2 ORDER BY src, dst",
+                    branch_id,
+                    rel_type,
+                )
+        return [EdgeView(**dict(r)) for r in rows]
+
+    async def edges_from(self, branch_id: str, src: str) -> list[EdgeView]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT src, rel_type, dst, weight FROM proj_edges "
+                "WHERE branch_id = $1 AND src = $2 ORDER BY rel_type, dst",
+                branch_id,
+                src,
+            )
+        return [EdgeView(**dict(r)) for r in rows]
 
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]:
         """Item ids an actor owns (docs/02) — used to loot a defeated combatant."""

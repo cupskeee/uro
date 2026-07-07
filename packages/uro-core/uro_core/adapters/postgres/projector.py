@@ -212,6 +212,46 @@ async def _item_transferred(conn: asyncpg.Connection, branch_id: str, p: dict[st
     )
 
 
+async def _faction_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    await conn.execute(
+        "INSERT INTO proj_factions (branch_id, faction_id, name, kind, description) "
+        "VALUES ($1, $2, $3, $4, $5) "
+        "ON CONFLICT (branch_id, faction_id) DO UPDATE SET "
+        "name = EXCLUDED.name, kind = EXCLUDED.kind, description = EXCLUDED.description",
+        branch_id,
+        p["faction_id"],
+        p["name"],
+        p.get("kind", "faction"),
+        p.get("description", ""),
+    )
+
+
+async def _edge_added(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # EdgeAdded and EdgeUpdated share this upsert (set weight/attrs on the (src,rel,dst) key).
+    await conn.execute(
+        "INSERT INTO proj_edges (branch_id, src, rel_type, dst, weight, attrs) "
+        "VALUES ($1, $2, $3, $4, $5, $6) "
+        "ON CONFLICT (branch_id, src, rel_type, dst) DO UPDATE SET "
+        "weight = EXCLUDED.weight, attrs = EXCLUDED.attrs",
+        branch_id,
+        p["src"],
+        p["rel_type"],
+        p["dst"],
+        float(p.get("weight", 1.0)),
+        p.get("attrs", {}),
+    )
+
+
+async def _edge_removed(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    await conn.execute(
+        "DELETE FROM proj_edges WHERE branch_id = $1 AND src = $2 AND rel_type = $3 AND dst = $4",
+        branch_id,
+        p["src"],
+        p["rel_type"],
+        p["dst"],
+    )
+
+
 _HANDLERS = {
     "ActorCreated": _actor_created,
     "ActorPromoted": _actor_promoted,
@@ -229,6 +269,10 @@ _HANDLERS = {
     "ActorDied": _actor_died,
     "ItemCreated": _item_created,
     "ItemTransferred": _item_transferred,
+    "FactionCreated": _faction_created,
+    "EdgeAdded": _edge_added,
+    "EdgeUpdated": _edge_added,
+    "EdgeRemoved": _edge_removed,
 }
 
 
@@ -261,6 +305,8 @@ _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "pcs": ("campaign_id", "actor_id", "participant_id", "active"),
     "sheets": ("actor_id", "ruleset_id", "sheet"),
     "items": ("item_id", "name", "kind", "owner_ref"),
+    "factions": ("faction_id", "name", "kind", "description"),
+    "edges": ("src", "rel_type", "dst", "weight", "attrs"),
 }
 
 

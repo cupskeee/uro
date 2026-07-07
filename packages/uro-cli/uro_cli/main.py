@@ -145,6 +145,85 @@ def world_validate(path: str) -> None:
             typer.echo(f"  - {g}")
 
 
+@world_app.command("create")
+def world_create(path: str) -> None:
+    """Import a world pack (docs/09): validate, then commit the authored seeds as a new world."""
+
+    async def _run() -> None:
+        from uro_core.errors import PackError
+        from uro_core.worldpack.importer import pack_to_events
+        from uro_core.worldpack.parse import parse_pack
+        from uro_core.worldpack.sufficiency import check_sufficiency
+
+        try:
+            pack = parse_pack(path)
+        except PackError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        report = check_sufficiency(pack)
+        if report.grade == "insufficient":
+            typer.echo(f"error: pack is INSUFFICIENT to run: {'; '.join(report.gaps)}", err=True)
+            raise typer.Exit(1)
+        store = build_store()
+        await store.connect()
+        try:
+            world = await store.create_world(pack.manifest.name, extra_events=pack_to_events(pack))
+        finally:
+            await store.close()
+        typer.echo(f"world: {world.world_id}  ({pack.manifest.name}, grade {report.grade})")
+        typer.echo(f"seed history:  uro world seed {path} --seed 42")
+
+    _run_async(_run)
+
+
+@world_app.command("seed")
+def world_seed(
+    path: str, seed: int = typer.Option(42, "--seed", help="RNG seed for History")
+) -> None:
+    """Run History seeding on the world imported from <path>: layer seed-dependent dynasties and
+    wars on top of the authored geography (docs/09). Same pack + a different seed → a different
+    history on identical geography."""
+
+    async def _run() -> None:
+        from uro_core.engines.history import seed_history
+        from uro_core.errors import PackError
+        from uro_core.rulesets.rng import Rng
+        from uro_core.worldpack.parse import parse_pack
+
+        try:
+            pack = parse_pack(path)
+        except PackError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        events = seed_history(pack.manifest, Rng(seed))
+        store = build_store()
+        await store.connect()
+        try:
+            world = await store.get_world_by_name(pack.manifest.name)
+            if world is None:
+                typer.echo(
+                    f"no imported world named {pack.manifest.name!r} — "
+                    f"run `uro world create {path}` first",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            commit = await store.append_beat(world.main_branch_id, events)
+        finally:
+            await store.close()
+        dynasties = sum(1 for e in events if e.event_type == "FactionCreated")
+        wars = sum(
+            1
+            for e in events
+            if e.event_type == "EdgeAdded" and e.payload.get("rel_type") == "at_war_with"
+        )
+        typer.echo(
+            f"seeded {pack.manifest.name!r} with seed {seed} → commit {commit.commit_id[:8]}"
+        )
+        typer.echo(f"  {dynasties} dynasties, {wars} wars (on the pack's authored geography)")
+
+    _run_async(_run)
+
+
 @app.command()
 def play(
     campaign_id: str,
