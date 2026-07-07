@@ -33,9 +33,9 @@ Solo-dev PoC roadmap. No calendar estimates (the report's quarter/budget tables 
 
 *The reason this engine exists.*
 
-- Snapshots, markers, branch-from-any-commit, materialization at arbitrary commits.
-- Fork semantics: carry/drop rules, adopt-existing-actor-as-PC, time-skip on fork (History adaptation pass).
-- `uro branch fork`, `uro log`; campaign-over-branch plumbing.
+- Snapshots, markers, branch-from-any-commit, materialization at arbitrary commits. *(inc 2.1 done)* Places projection (deferred from Phase 1) lands here too — the meteor needs `PlaceDestroyed` to be true on one branch and absent on a sibling.
+- Fork semantics: carry/drop rules *(carry done, inc 2.1)*, adopt-existing-actor-as-PC, time-skip on fork (History adaptation pass — deterministic header in the PoC, not an LLM ripple). *(adopt-as-PC + time-skip: inc 2.2)*
+- `uro branch fork`, `uro log` *(inc 2.1 done)*; campaign-over-branch plumbing *(inc 2.2)*.
 
 **Acceptance: the meteor test** (`03-timeline-and-branching.md`) — one played campaign ending in a city-destroying event, then (a) continue as the same character, (b) new campaign as a farmer in the aftermath who hears NPCs retell campaign A's deeds as history, (c) a what-if branch from before the event. All three from the same event log, no special-casing.
 

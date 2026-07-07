@@ -19,6 +19,13 @@ class Branch(BaseModel):
     world_id: str
     name: str
     head_commit: str | None  # None only transiently; every branch is seeded at creation
+    forked_from: str | None = None  # the commit this branch was forked at (None = main)
+
+
+class BranchInfo(Branch):
+    """A branch plus its head's depth — for `uro branch list`."""
+
+    head_depth: int = 0
 
 
 class Commit(BaseModel):
@@ -26,6 +33,26 @@ class Commit(BaseModel):
     world_id: str
     parent_id: str | None
     commit_hash: str
+    depth: int = 0  # generation from genesis (genesis = 0)
+
+
+class Marker(BaseModel):
+    """A named, immutable ref to a commit (docs/03) — a tag, not an event."""
+
+    marker_id: str
+    world_id: str
+    name: str
+    commit_id: str
+
+
+class LineageEntry(BaseModel):
+    """One commit on a branch's lineage, for the git-log-style `uro log` view."""
+
+    commit_id: str
+    depth: int
+    event_types: list[str]
+    summary: str  # the beat's intent, or a terse event digest for non-beat commits
+    markers: list[str]  # marker names anchored at this commit
 
 
 class Campaign(BaseModel):
@@ -58,6 +85,14 @@ class BeliefView(BaseModel):
     claim_id: str
     confidence: float
     learned_from: str | None
+
+
+class PlaceView(BaseModel):
+    place_id: str
+    name: str
+    kind: str  # region | settlement | site
+    status: str  # active | destroyed
+    description: str
 
 
 class MemoryHit(BaseModel):

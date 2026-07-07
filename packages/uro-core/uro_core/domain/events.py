@@ -7,9 +7,9 @@ event catalog in later phases.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from uro_core.domain.ids import new_id
 
@@ -226,4 +226,112 @@ def belief_changed(
         payload=BeliefChangedPayload(
             actor_id=actor_id, claim_id=claim_id, confidence=confidence, learned_from=learned_from
         ).model_dump(),
+    )
+
+
+# --- Places: the slow-changing physical layer (docs/02, 12) ---
+#
+# Physical state is mutable via events — PlaceDestroyed/TerrainChanged are ordinary
+# timeline events (D-4). The meteor test turns on exactly this: the crater is `true`
+# on the aftermath branch and absent on a what-if fork taken before the strike.
+
+PlaceKind = Literal["region", "settlement", "site"]
+PlaceStatus = Literal["active", "destroyed"]
+
+
+class PlaceCreatedPayload(BaseModel):
+    v: int = 1
+    place_id: str
+    name: str
+    kind: PlaceKind = "site"
+    status: PlaceStatus = "active"
+    description: str = ""
+
+
+class PlaceStateChangedPayload(BaseModel):
+    v: int = 1
+    place_id: str
+    changes: dict[str, Any] = Field(default_factory=dict)  # name/kind/status/description
+
+    @model_validator(mode="after")
+    def _validate_enum_changes(self) -> PlaceStateChangedPayload:
+        # `changes` is deliberately open, but its enum-typed keys must clear the SAME bar
+        # PlaceCreated does — otherwise the loose mutation path could project a status like
+        # 'exploded' that state-checks (destroyed vs active — the meteor signal) misread.
+        # Rejected at the sanctioned mint path, like BeliefChanged's confidence bound.
+        for key, allowed in (("kind", get_args(PlaceKind)), ("status", get_args(PlaceStatus))):
+            value = self.changes.get(key)
+            if value is not None and value not in allowed:
+                raise ValueError(f"invalid place {key} {value!r}; expected one of {allowed}")
+        return self
+
+
+class TerrainChangedPayload(BaseModel):
+    v: int = 1
+    place_id: str
+    description: str
+    effects: list[str] = Field(default_factory=list)
+
+
+class PlaceDestroyedPayload(BaseModel):
+    v: int = 1
+    place_id: str
+    cause: str = ""
+
+
+def place_created(
+    *,
+    place_id: str,
+    name: str,
+    kind: PlaceKind = "site",
+    status: PlaceStatus = "active",
+    description: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="PlaceCreated",
+        entity_refs=[place_id],
+        caused_by=_default_cause(caused_by),
+        payload=PlaceCreatedPayload(
+            place_id=place_id, name=name, kind=kind, status=status, description=description
+        ).model_dump(),
+    )
+
+
+def place_state_changed(
+    *, place_id: str, changes: dict[str, Any], caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="PlaceStateChanged",
+        entity_refs=[place_id],
+        caused_by=_default_cause(caused_by),
+        payload=PlaceStateChangedPayload(place_id=place_id, changes=changes).model_dump(),
+    )
+
+
+def terrain_changed(
+    *,
+    place_id: str,
+    description: str,
+    effects: list[str] | None = None,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="TerrainChanged",
+        entity_refs=[place_id],
+        caused_by=_default_cause(caused_by),
+        payload=TerrainChangedPayload(
+            place_id=place_id, description=description, effects=effects or []
+        ).model_dump(),
+    )
+
+
+def place_destroyed(
+    *, place_id: str, cause: str = "", caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="PlaceDestroyed",
+        entity_refs=[place_id],
+        caused_by=_default_cause(caused_by),
+        payload=PlaceDestroyedPayload(place_id=place_id, cause=cause).model_dump(),
     )

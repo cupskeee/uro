@@ -12,7 +12,12 @@ from pathlib import Path
 
 import asyncpg
 
-from uro_core.adapters.postgres.projector import apply_event
+from uro_core.adapters.postgres.projector import (
+    apply_event,
+    apply_raw,
+    restore_snapshot,
+    snapshot_state,
+)
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent, world_genesis
 from uro_core.domain.hashing import compute_commit_hash
 from uro_core.domain.ids import new_id
@@ -20,12 +25,23 @@ from uro_core.metering import LLMCall
 from uro_core.timeline.models import (
     ActorView,
     BeliefView,
+    Branch,
+    BranchInfo,
     Campaign,
     ClaimView,
     Commit,
+    LineageEntry,
+    Marker,
     MemoryHit,
+    PlaceView,
     World,
 )
+
+# Full projection state is serialized every this-many commits (docs/03: N≈50) and
+# always at markers. Materialization restores the nearest ancestor snapshot then
+# replays forward, so this only trades snapshot storage for replay length — never
+# correctness. Instance-overridable so tests can exercise the snapshot path cheaply.
+SNAPSHOT_EVERY = 50
 
 
 def _vector_literal(vector: list[float]) -> str:
@@ -34,6 +50,34 @@ def _vector_literal(vector: list[float]) -> str:
 
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+# Shared prefix: a branch row plus its head commit's depth (BranchInfo).
+_BRANCH_SELECT = (
+    "SELECT b.branch_id, b.world_id, b.name, b.head_commit, b.forked_from, "
+    "       c.depth AS head_depth "
+    "FROM branches b JOIN commits c ON c.commit_id = b.head_commit "
+)
+
+
+def _lineage_entry(
+    commit_id: str, depth: int, events: list[asyncpg.Record], markers: list[str]
+) -> LineageEntry:
+    """Fold one commit's events (seq-ordered) into a log line: the beat's intent if it
+    is a beat, else a digest of its event types."""
+    event_types = [e["event_type"] for e in events]
+    summary = next(
+        (e["payload"].get("intent_text", "") for e in events if e["event_type"] == "BeatResolved"),
+        "",
+    )
+    if not summary:
+        summary = ", ".join(event_types) if event_types else "(empty)"
+    return LineageEntry(
+        commit_id=commit_id,
+        depth=depth,
+        event_types=event_types,
+        summary=summary,
+        markers=markers,
+    )
 
 
 async def _init_conn(conn: asyncpg.Connection) -> None:
@@ -45,6 +89,7 @@ class PostgresEventStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
         self._pool: asyncpg.Pool | None = None
+        self._snapshot_every = SNAPSHOT_EVERY
 
     # --- lifecycle ---
 
@@ -158,19 +203,23 @@ class PostgresEventStore:
                 raise KeyError(f"unknown branch {branch_id!r}")
             parent_id = branch["head_commit"]
             parent_hash = None
+            parent_depth = -1  # so genesis's child (parent_depth 0) lands at depth 1
             if parent_id is not None:
-                parent_hash = await conn.fetchval(
-                    "SELECT commit_hash FROM commits WHERE commit_id = $1", parent_id
+                parent = await conn.fetchrow(
+                    "SELECT commit_hash, depth FROM commits WHERE commit_id = $1", parent_id
                 )
+                parent_hash, parent_depth = parent["commit_hash"], parent["depth"]
             commit_id = new_id()
             commit_hash = compute_commit_hash(parent_hash, events)
+            depth = parent_depth + 1
             await conn.execute(
-                "INSERT INTO commits (commit_id, world_id, parent_id, commit_hash) "
-                "VALUES ($1, $2, $3, $4)",
+                "INSERT INTO commits (commit_id, world_id, parent_id, commit_hash, depth) "
+                "VALUES ($1, $2, $3, $4, $5)",
                 commit_id,
                 branch["world_id"],
                 parent_id,
                 commit_hash,
+                depth,
             )
             await self._insert_events(conn, commit_id, events)
             # Project in the SAME transaction — projections never drift from the log.
@@ -181,11 +230,16 @@ class PostgresEventStore:
                 commit_id,
                 branch_id,
             )
+            # Periodic snapshot: the branch's proj_* rows now equal state at this new
+            # head, and state-at-a-commit is branch-independent — capture it verbatim.
+            if depth > 0 and depth % self._snapshot_every == 0:
+                await self._write_snapshot(conn, commit_id, branch_id)
             return Commit(
                 commit_id=commit_id,
                 world_id=branch["world_id"],
                 parent_id=parent_id,
                 commit_hash=commit_hash,
+                depth=depth,
             )
 
     async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:
@@ -212,6 +266,293 @@ class PostgresEventStore:
             )
         # rows are newest-first; present oldest-first for chat reconstruction.
         return [BeatResolvedPayload(**r["payload"]) for r in reversed(rows)]
+
+    # --- branching: markers, snapshots, fork, materialization (docs/03, 07) ---
+
+    async def get_world(self, world_id: str) -> World | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT w.world_id, w.name, b.branch_id AS main_branch_id "
+                "FROM worlds w JOIN branches b "
+                "  ON b.world_id = w.world_id AND b.name = 'main' "
+                "WHERE w.world_id = $1",
+                world_id,
+            )
+        return World(**dict(row)) if row else None
+
+    async def get_branch(self, branch_id: str) -> BranchInfo | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(_BRANCH_SELECT + "WHERE b.branch_id = $1", branch_id)
+        return BranchInfo(**dict(row)) if row else None
+
+    async def get_branch_by_name(self, world_id: str, name: str) -> BranchInfo | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                _BRANCH_SELECT + "WHERE b.world_id = $1 AND b.name = $2 ORDER BY head_depth DESC",
+                world_id,
+                name,
+            )
+        return BranchInfo(**dict(row)) if row else None
+
+    async def list_branches(self, world_id: str) -> list[BranchInfo]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                _BRANCH_SELECT + "WHERE b.world_id = $1 ORDER BY head_depth ASC, b.name ASC",
+                world_id,
+            )
+        return [BranchInfo(**dict(r)) for r in rows]
+
+    async def create_marker(self, world_id: str, name: str, branch_id: str) -> Marker:
+        """Mark a branch's current head with a name (docs/03). Also snapshots that
+        commit — markers are the guaranteed snapshot points a fork can root from."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            # FOR UPDATE serializes against concurrent append_beat on this branch (which
+            # also locks the row) — otherwise, under READ COMMITTED, an append could advance
+            # the head between this read and snapshot_state below, storing state-at-Y under X.
+            head = await conn.fetchval(
+                "SELECT head_commit FROM branches WHERE branch_id = $1 AND world_id = $2 "
+                "FOR UPDATE",
+                branch_id,
+                world_id,
+            )
+            if head is None:
+                raise KeyError(f"unknown branch {branch_id!r} in world {world_id!r}")
+            marker_id = new_id()
+            try:
+                await conn.execute(
+                    "INSERT INTO markers (marker_id, world_id, name, commit_id) "
+                    "VALUES ($1, $2, $3, $4)",
+                    marker_id,
+                    world_id,
+                    name,
+                    head,
+                )
+            except asyncpg.UniqueViolationError as exc:
+                raise ValueError(f"marker {name!r} already exists in this world") from exc
+            await self._write_snapshot(conn, head, branch_id)
+            return Marker(marker_id=marker_id, world_id=world_id, name=name, commit_id=head)
+
+    async def list_markers(self, world_id: str) -> list[Marker]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT marker_id, world_id, name, commit_id FROM markers "
+                "WHERE world_id = $1 ORDER BY created_at ASC, name ASC",
+                world_id,
+            )
+        return [Marker(**dict(r)) for r in rows]
+
+    async def resolve_ref(self, world_id: str, ref: str) -> str:
+        """A marker name or a raw commit_id → a commit_id. Markers win on collision."""
+        async with self.pool.acquire() as conn:
+            return await self._resolve_ref(conn, world_id, ref)
+
+    async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:
+        """Branch from any commit (docs/03). The new ref shares history up to `from_ref`;
+        its projections are materialized there (copy-on-fork), and memory-index rows in
+        that ancestry are copied to point at the shared embeddings. New commits chain off
+        `from_ref`, so sibling branches never see each other's post-fork events."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            from_commit = await self._resolve_ref(conn, world_id, from_ref)
+            new_branch_id = new_id()
+            try:
+                await conn.execute(
+                    "INSERT INTO branches (branch_id, world_id, name, head_commit, forked_from) "
+                    "VALUES ($1, $2, $3, $4, $4)",
+                    new_branch_id,
+                    world_id,
+                    name,
+                    from_commit,
+                )
+            except asyncpg.UniqueViolationError as exc:
+                # Branch names are unique per world (git-like); 'main' is always taken.
+                raise ValueError(f"branch {name!r} already exists in this world") from exc
+            ancestry = await self._ancestry(conn, from_commit)
+            await self._materialize_into(conn, new_branch_id, ancestry)
+            await self._copy_memory(conn, new_branch_id, [c["commit_id"] for c in ancestry])
+            return Branch(
+                branch_id=new_branch_id,
+                world_id=world_id,
+                name=name,
+                head_commit=from_commit,
+                forked_from=from_commit,
+            )
+
+    async def lineage(self, branch_id: str, limit: int = 50) -> list[LineageEntry]:
+        """A branch's commit lineage, head→genesis — the `uro log` view. Per-branch
+        lineage only; branches don't merge, so this never crosses into a sibling (docs/02)."""
+        async with self.pool.acquire() as conn:
+            commits = await conn.fetch(
+                """
+                WITH RECURSIVE chain AS (
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+                    WHERE b.branch_id = $1
+                    UNION ALL
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+                )
+                SELECT commit_id, depth FROM chain ORDER BY depth DESC LIMIT $2
+                """,
+                branch_id,
+                limit,
+            )
+            ids = [r["commit_id"] for r in commits]
+            if not ids:
+                return []
+            events = await conn.fetch(
+                "SELECT commit_id, seq, event_type, payload FROM events "
+                "WHERE commit_id = ANY($1::text[]) ORDER BY commit_id, seq",
+                ids,
+            )
+            markers = await conn.fetch(
+                "SELECT commit_id, name FROM markers WHERE commit_id = ANY($1::text[])",
+                ids,
+            )
+        by_commit: dict[str, list[asyncpg.Record]] = {}
+        for e in events:
+            by_commit.setdefault(e["commit_id"], []).append(e)
+        marks: dict[str, list[str]] = {}
+        for m in markers:
+            marks.setdefault(m["commit_id"], []).append(m["name"])
+        return [
+            _lineage_entry(
+                c["commit_id"],
+                c["depth"],
+                by_commit.get(c["commit_id"], []),
+                marks.get(c["commit_id"], []),
+            )
+            for c in commits
+        ]
+
+    # --- places projection (docs/02); used by the meteor test and `uro log` ---
+
+    async def get_place(self, branch_id: str, place_id: str) -> PlaceView | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT place_id, name, kind, status, description FROM proj_places "
+                "WHERE branch_id = $1 AND place_id = $2",
+                branch_id,
+                place_id,
+            )
+        return PlaceView(**dict(row)) if row else None
+
+    async def list_places(self, branch_id: str) -> list[PlaceView]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT place_id, name, kind, status, description FROM proj_places "
+                "WHERE branch_id = $1 ORDER BY place_id",
+                branch_id,
+            )
+        return [PlaceView(**dict(r)) for r in rows]
+
+    # --- branching internals ---
+
+    @staticmethod
+    async def _resolve_ref(conn: asyncpg.Connection, world_id: str, ref: str) -> str:
+        marker = await conn.fetchval(
+            "SELECT commit_id FROM markers WHERE world_id = $1 AND name = $2", world_id, ref
+        )
+        if marker is not None:
+            return str(marker)
+        commit = await conn.fetchval(
+            "SELECT commit_id FROM commits WHERE commit_id = $1 AND world_id = $2", ref, world_id
+        )
+        if commit is not None:
+            return str(commit)
+        raise KeyError(f"no marker or commit {ref!r} in world {world_id!r}")
+
+    @staticmethod
+    async def _ancestry(conn: asyncpg.Connection, commit_id: str) -> list[asyncpg.Record]:
+        """The commit and all its ancestors, genesis-first (ordered by depth)."""
+        rows: list[asyncpg.Record] = await conn.fetch(
+            """
+            WITH RECURSIVE chain AS (
+                SELECT commit_id, parent_id, depth FROM commits WHERE commit_id = $1
+                UNION ALL
+                SELECT c.commit_id, c.parent_id, c.depth
+                FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+            )
+            SELECT commit_id, depth FROM chain ORDER BY depth ASC
+            """,
+            commit_id,
+        )
+        return rows
+
+    async def _materialize_into(
+        self, conn: asyncpg.Connection, target_branch: str, ancestry: list[asyncpg.Record]
+    ) -> int:
+        """Build `target_branch`'s projection rows for state at the tip of `ancestry`:
+        restore the nearest ancestor snapshot, then replay events after it. Returns the
+        number of commits replayed (the replay window) — snapshots keep this bounded, so
+        forking is O(window), not O(history). Caller must have created the empty branch."""
+        ancestry_ids = [c["commit_id"] for c in ancestry]
+        snap = await conn.fetchrow(
+            "SELECT s.commit_id, s.state, c.depth "
+            "FROM snapshots s JOIN commits c ON c.commit_id = s.commit_id "
+            "WHERE s.commit_id = ANY($1::text[]) ORDER BY c.depth DESC LIMIT 1",
+            ancestry_ids,
+        )
+        if snap is not None:
+            await restore_snapshot(conn, target_branch, snap["state"])
+            from_depth = snap["depth"]
+        else:
+            from_depth = -1
+        replay_ids = [c["commit_id"] for c in ancestry if c["depth"] > from_depth]
+        if replay_ids:
+            rows = await conn.fetch(
+                "SELECT e.event_type, e.payload FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "WHERE e.commit_id = ANY($1::text[]) ORDER BY c.depth ASC, e.seq ASC",
+                replay_ids,
+            )
+            for r in rows:
+                await apply_raw(conn, target_branch, r["event_type"], r["payload"])
+        return len(replay_ids)
+
+    async def _copy_memory(
+        self, conn: asyncpg.Connection, target_branch: str, ancestry_ids: list[str]
+    ) -> None:
+        """Copy memory-index membership rows for the fork's ancestry to the new branch.
+        Embeddings themselves live once (by content hash) and are never recomputed — only
+        the lightweight pointer rows are duplicated (docs/07). DISTINCT dedups when the
+        same commit's memory already exists on more than one source branch (fork of fork)."""
+        rows = await conn.fetch(
+            "SELECT DISTINCT ON (commit_id, content_hash) "
+            "  commit_id, content_hash, kind, text, entity_refs "
+            "FROM memory_index WHERE commit_id = ANY($1::text[]) "
+            "ORDER BY commit_id, content_hash",
+            ancestry_ids,
+        )
+        for r in rows:
+            await conn.execute(
+                "INSERT INTO memory_index "
+                "(memory_id, branch_id, content_hash, kind, text, entity_refs, commit_id) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                new_id(),
+                target_branch,
+                r["content_hash"],
+                r["kind"],
+                r["text"],
+                r["entity_refs"],
+                r["commit_id"],
+            )
+
+    async def _write_snapshot(
+        self, conn: asyncpg.Connection, commit_id: str, branch_id: str
+    ) -> None:
+        """Capture `branch_id`'s current projection rows as the snapshot for `commit_id`.
+        Only sound when `commit_id` is that branch's head (its rows == state there)."""
+        blob = await snapshot_state(conn, branch_id)
+        state_hash = hashlib.sha256(
+            json.dumps(blob, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        await conn.execute(
+            "INSERT INTO snapshots (commit_id, state_hash, state) VALUES ($1, $2, $3) "
+            "ON CONFLICT (commit_id) DO NOTHING",
+            commit_id,
+            state_hash,
+            blob,
+        )
 
     # --- metering (docs/07, D-14). Operational, prunable; not world truth. ---
     # Note: on EventStore for Phase 0's single store; splits into a UsageRecorder

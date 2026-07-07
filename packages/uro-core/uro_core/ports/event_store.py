@@ -11,7 +11,15 @@ from typing import Protocol
 
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent
 from uro_core.metering import LLMCall
-from uro_core.timeline.models import Campaign, Commit, World
+from uro_core.timeline.models import (
+    Branch,
+    BranchInfo,
+    Campaign,
+    Commit,
+    LineageEntry,
+    Marker,
+    World,
+)
 
 
 class EventStore(Protocol):
@@ -20,6 +28,8 @@ class EventStore(Protocol):
         ...
 
     async def get_world_by_name(self, name: str) -> World | None: ...
+
+    async def get_world(self, world_id: str) -> World | None: ...
 
     async def create_campaign(self, world_id: str, branch_id: str) -> Campaign: ...
 
@@ -39,4 +49,31 @@ class EventStore(Protocol):
 
     async def record_llm_call(self, call: LLMCall) -> None:
         """Record one stage-tagged LLM call for usage metering (docs/07, D-14)."""
+        ...
+
+    # --- branching (docs/03): markers, fork-from-any-commit, lineage ---
+
+    async def get_branch(self, branch_id: str) -> BranchInfo | None: ...
+
+    async def get_branch_by_name(self, world_id: str, name: str) -> BranchInfo | None: ...
+
+    async def list_branches(self, world_id: str) -> list[BranchInfo]: ...
+
+    async def create_marker(self, world_id: str, name: str, branch_id: str) -> Marker:
+        """Name a branch's current head (docs/03) and snapshot it as a fork root."""
+        ...
+
+    async def list_markers(self, world_id: str) -> list[Marker]: ...
+
+    async def resolve_ref(self, world_id: str, ref: str) -> str:
+        """A marker name or a raw commit_id → a commit_id (markers win on collision)."""
+        ...
+
+    async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:
+        """Branch from any commit: a new ref + copy-on-fork projections materialized
+        at `from_ref`, sharing history up to that point (docs/03)."""
+        ...
+
+    async def lineage(self, branch_id: str, limit: int = 50) -> list[LineageEntry]:
+        """A branch's commit lineage head→genesis — the `uro log` view."""
         ...

@@ -12,11 +12,15 @@ from typing import Protocol
 
 from uro_core.ports.event_store import EventStore
 from uro_core.ports.vector import VectorIndex
-from uro_core.timeline.models import ActorView, BeliefView, ClaimView
+from uro_core.timeline.models import ActorView, BeliefView, ClaimView, PlaceView
 
 
 class ProjectionQueries(Protocol):
     async def get_actor(self, branch_id: str, actor_id: str) -> ActorView | None: ...
+
+    async def get_place(self, branch_id: str, place_id: str) -> PlaceView | None: ...
+
+    async def list_places(self, branch_id: str) -> list[PlaceView]: ...
 
     async def find_actor_by_name(self, branch_id: str, name: str) -> ActorView | None:
         """Match by name (case-insensitive) or alias — the seed of entity resolution."""
