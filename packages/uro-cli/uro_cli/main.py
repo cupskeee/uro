@@ -229,6 +229,70 @@ def world_seed(
     _run_async(_run)
 
 
+@world_app.command("backfill")
+def world_backfill(
+    path: str,
+    provider: str = typer.Option("openai", help="stub | local | openai | anthropic"),
+    model: str = typer.Option(None, help="model id for the worldsmith role"),
+) -> None:
+    """Offer to fill a thin pack's gaps with AI-generated, provenance-tagged seeds (docs/09).
+    Opt-in; prints what WOULD be added (does not rewrite the pack)."""
+
+    async def _run() -> None:
+        from uro_core.errors import PackError
+        from uro_core.worldpack.backfill import backfill_gaps
+        from uro_core.worldpack.parse import parse_pack
+        from uro_core.worldpack.sufficiency import check_sufficiency
+
+        try:
+            pack = parse_pack(path)
+        except PackError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        before = check_sufficiency(pack)
+        if before.grade == "runnable":
+            typer.echo("pack is already runnable — nothing to backfill")
+            return
+        augmented, added = await backfill_gaps(pack, build_router(provider, model), report=before)
+        after = check_sufficiency(augmented)
+        typer.echo(f"backfill: {before.grade} → {after.grade}")
+        for a in added:
+            typer.echo(f"  + {a}")
+        if not added:
+            typer.echo("  (model produced nothing usable — gaps remain)")
+
+    _run_async(_run)
+
+
+@world_app.command("probe")
+def world_probe(
+    path: str,
+    provider: str = typer.Option("openai", help="stub | local | openai | anthropic"),
+    model: str = typer.Option(None, help="model id for the bound roles"),
+    tries: int = typer.Option(3, help="structured-output attempts"),
+) -> None:
+    """Probe whether the bound models can deliver what the world declares (docs/04) — a
+    compatibility report, not enforcement."""
+
+    async def _run() -> None:
+        from uro_core.engines.probe import run_probes
+        from uro_core.errors import PackError
+        from uro_core.worldpack.parse import parse_pack
+
+        try:
+            pack = parse_pack(path)
+        except PackError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        report = await run_probes(pack.manifest, build_router(provider, model), tries=tries)
+        typer.echo(f"probe report for {report.world}: {'OK' if report.ok else 'ISSUES'}")
+        for r in report.results:
+            gate = f"  (gates {r.gate_for})" if r.gate_for else ""
+            typer.echo(f"  [{r.status.upper():4}] {r.name}: {r.detail}{gate}")
+
+    _run_async(_run)
+
+
 @app.command()
 def play(
     campaign_id: str,
@@ -466,6 +530,36 @@ def campaign_end(
         finally:
             await store.close()
         typer.echo(f"campaign ended; marker {m.name!r} → commit {m.commit_id[:8]}")
+
+    _run_async(_run)
+
+
+@app.command("dry-run")
+def dry_run(
+    campaign_id: str,
+    intent: str,
+    provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
+    model: str = typer.Option(None, help="model id for local/openai/anthropic providers"),
+) -> None:
+    """Dry-run a beat (docs/09 creator loop): show the events it WOULD commit, without writing.
+    Nothing enters the log — the campaign is untouched."""
+
+    async def _run() -> None:
+        store = build_store()
+        await store.connect()
+        try:
+            campaign = await store.get_campaign(campaign_id)
+            if campaign is None:
+                typer.echo(f"no such campaign: {campaign_id}", err=True)
+                raise typer.Exit(1)
+            engine = Engine(store, build_router(provider, model), ruleset=build_ruleset())
+            events = await engine.preview_beat(campaign, PARTICIPANT, intent)
+        finally:
+            await store.close()
+        typer.echo(f"dry-run {intent!r}: {len(events)} event(s) would commit (nothing written):")
+        for e in events:
+            refs = f"  → {e.entity_refs}" if e.entity_refs else ""
+            typer.echo(f"  {e.event_type}{refs}")
 
     _run_async(_run)
 

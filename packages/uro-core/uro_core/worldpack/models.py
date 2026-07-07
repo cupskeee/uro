@@ -90,6 +90,7 @@ class ThreadSeed(BaseModel):
     id: str
     stakes: str
     state: Literal["dormant", "offered", "active"] = "dormant"
+    provenance: str = "author"  # "ai_backfill" for machine-generated seeds (docs/09)
 
 
 class ClaimSeed(BaseModel):

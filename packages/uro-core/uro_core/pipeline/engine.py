@@ -242,6 +242,23 @@ class Engine:
             suggestions=plan.suggestions,
         )
 
+    async def preview_beat(
+        self, campaign: Campaign, participant_id: str, intent_text: str
+    ) -> list[DomainEvent]:
+        """Dry-run a beat (docs/09 creator loop): run the full pipeline — plan, narrate, extract —
+        but DO NOT commit. Returns the would-be events for inspection (the event diff). Nothing
+        enters the append-only log, so the campaign state is untouched."""
+        ctx = await self._context(campaign, intent_text)
+        messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
+        started = time.perf_counter()
+        chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
+        await self._meter("narrator", messages, started)
+        narration = "".join(chunks).strip()
+        events, _, _ = await self._beat_events(
+            campaign, participant_id, intent_text, narration, ctx, encounter_events
+        )
+        return events
+
     async def _finish(
         self,
         campaign: Campaign,
@@ -251,6 +268,37 @@ class Engine:
         ctx: _Context,
         encounter_events: list[DomainEvent] | None = None,
     ) -> BeatResult:
+        events, extracted_n, beat_id = await self._beat_events(
+            campaign, participant_id, intent_text, narration, ctx, encounter_events
+        )
+        commit = await self._store.append_beat(campaign.branch_id, events)
+        if not self._bare:
+            await self._remember(
+                campaign.branch_id,
+                commit.commit_id,
+                narration,
+                [a.actor_id for a in ctx.recall.actors],
+            )
+        return BeatResult(
+            beat_id=beat_id,
+            narration=narration,
+            commit_id=commit.commit_id,
+            extracted=extracted_n,
+            checks=len(ctx.mechanics_traces),
+            suggestions=ctx.suggestions,
+        )
+
+    async def _beat_events(
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        intent_text: str,
+        narration: str,
+        ctx: _Context,
+        encounter_events: list[DomainEvent] | None,
+    ) -> tuple[list[DomainEvent], int, str]:
+        """Build a beat's committable events (shared by run and dry-run). Runs the extractor for
+        a free-roam beat; wraps a resolved fight for a combat beat. Does NOT commit."""
         if not narration:
             raise EmptyNarrationError(
                 f"provider produced no narration for a beat by {participant_id}"
@@ -295,22 +343,7 @@ class Engine:
                 *extracted,
             ]
             extracted_n = len(extracted)
-        commit = await self._store.append_beat(campaign.branch_id, events)
-        if not self._bare:
-            await self._remember(
-                campaign.branch_id,
-                commit.commit_id,
-                narration,
-                [a.actor_id for a in ctx.recall.actors],
-            )
-        return BeatResult(
-            beat_id=beat_id,
-            narration=narration,
-            commit_id=commit.commit_id,
-            extracted=extracted_n,
-            checks=len(ctx.mechanics_traces),
-            suggestions=ctx.suggestions,
-        )
+        return events, extracted_n, beat_id
 
     async def _resolve_encounter(
         self, campaign: Campaign, ctx: _Context, trigger: PlanMechanic
