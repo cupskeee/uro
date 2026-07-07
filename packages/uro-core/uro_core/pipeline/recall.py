@@ -94,6 +94,16 @@ async def assemble_recall(
     )
 
 
+def _certainty(confidence: float) -> str:
+    """Turn a belief's confidence into certainty phrasing — the rumor-distortion signal the
+    narrator needs to hedge a garbled, third-hand belief (docs/02)."""
+    if confidence >= 0.75:
+        return "is certain"
+    if confidence >= 0.45:
+        return "believes"
+    return "has heard a rumor"
+
+
 def build_narrator_messages(
     recall: RecallBundle,
     intent_text: str,
@@ -108,9 +118,12 @@ def build_narrator_messages(
     # belief_claims render on-stage NPCs' beliefs (below) but are NOT scene facts/rumors.
     claim_by_id = {c.claim_id: c for c in [*recall.claims, *recall.belief_claims]}
     name_by_id = {a.actor_id: a.name for a in recall.actors}
-    # Who present believes what — joined to already-recalled claims, no extra queries.
+    # Who present believes what — joined to already-recalled claims, no extra queries. Confidence
+    # is surfaced as certainty phrasing so the narrator can tell an eyewitness from a garbled,
+    # third-hand rumor (a low-confidence belief → "has heard a rumor", not settled knowledge).
     belief_lines = [
-        f"- {name_by_id[b.actor_id]} believes: {claim_by_id[b.claim_id].statement}"
+        f"- {name_by_id[b.actor_id]} {_certainty(b.confidence)}: "
+        f"{claim_by_id[b.claim_id].statement}"
         for b in recall.beliefs
         if b.actor_id in name_by_id and b.claim_id in claim_by_id
     ]

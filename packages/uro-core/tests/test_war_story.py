@@ -80,13 +80,14 @@ async def test_war_story_feat_becomes_a_traceable_rumor(store: PostgresEventStor
     assert outcome.witnesses == ["a:raider1"]
     await store.append_beat(branch, await distill_outcome(store, branch, outcome))
 
-    # the feat is canon — a truth=true claim about the hero
-    feat = next(c for c in await store.claims_about(branch, "a:hero") if c.truth == "true")
-    assert "champion" in feat.statement
+    # the feat is on record as the external game's TESTIMONY (truth=unknown, not Uro's canon) —
+    # an external bundle cannot assert protected canon; its witnesses merely believe it
+    feat = next(c for c in await store.claims_about(branch, "a:hero") if "champion" in c.statement)
+    assert feat.truth == "unknown" and feat.origin == "external"
 
     # Mera (T1, two hops from the witness, never at the battle) believes a GARBLED version...
     mera = next(b for b in await store.beliefs_of(branch, "a:mera") if b.claim_id == feat.claim_id)
-    assert mera.confidence < 0.9  # third-hand, not eyewitness certainty
+    assert mera.confidence < 0.45  # third-hand → a low-confidence rumor, not eyewitness certainty
     # ...traceable back through the contact graph to the surviving witness
     assert await _trace(store, branch, "a:mera", feat.claim_id) == [
         "a:mera",
@@ -94,7 +95,8 @@ async def test_war_story_feat_becomes_a_traceable_rumor(store: PostgresEventStor
         "a:raider1",
     ]
 
-    # ...and beats later she RETELLS it: asking Mera surfaces the rumor in the narrator's context
+    # ...and beats later she RETELLS it — with the DISTORTION (low confidence) reaching the
+    # narrator: the rumor surfaces framed as a rumor, not settled fact
     spy = _SpyNarrator()
     engine = Engine(store, ProviderRouter(bindings={}, default=spy))
     campaign = await store.start_campaign(
@@ -106,6 +108,7 @@ async def test_war_story_feat_becomes_a_traceable_rumor(store: PostgresEventStor
     )
     await engine.run_beat(campaign, "p1", "I ask Mera what she has heard of late")
     assert feat.statement in spy.context  # the feat rumor reached the narrator via Mera's belief
+    assert "has heard a rumor" in spy.context  # ...and reached it as a RUMOR (confidence surfaced)
 
 
 async def test_war_story_no_survivors_no_rumor(store: PostgresEventStore) -> None:
@@ -115,7 +118,7 @@ async def test_war_story_no_survivors_no_rumor(store: PostgresEventStore) -> Non
     assert outcome.witnesses == []
     await store.append_beat(branch, await distill_outcome(store, branch, outcome))
 
-    # the feat still HAPPENED (an unwitnessed claim exists)...
-    assert any(c.truth == "true" for c in await store.claims_about(branch, "a:hero"))
+    # the feat is still on record (an unwitnessed testimony claim exists)...
+    assert any("champion" in c.statement for c in await store.claims_about(branch, "a:hero"))
     # ...but with no survivors, nobody ever heard of it: Mera holds no belief about it
     assert await store.beliefs_of(branch, "a:mera") == []

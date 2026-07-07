@@ -2,17 +2,24 @@
 
 A world's truth IS its event log. An export bundle carries the commits (each with its events)
 + branches + markers, stamped with a SELF-CONSISTENT hash chain (`commit_hash = h(parent_hash,
-events)`, chained genesis→head). `verify_bundle` recomputes that chain and raises `ExportError`
-on any mismatch — so a bundle altered in transit is caught before import (the trust anchor).
+events)`, chained genesis→head) plus a `manifest_hash` over the world name + branch/marker
+structure + the commit hashes. `verify_bundle` recomputes both and raises `ExportError` on any
+mismatch — so a bundle whose events, branch/marker structure, or name were altered in transit is
+caught before import.
+
+Scope, honestly: this is a KEYLESS integrity check — cheap tamper-EVIDENCE that catches accidental
+corruption and naive edits (change one event and the recompute diverges). It is NOT cryptographic
+AUTHENTICITY: a forger who recomputes the whole chain produces a self-consistent bundle. Binding
+it to a signed root (an author key) is the export-pack hardening left for later.
 
 Note: because payloads round-trip through JSONB (which does not preserve key order), the bundle
-re-derives its chain over the stored events at export time rather than copying the world's
-in-DB commit hashes. The bundle is thus internally verifiable end-to-end (export→import); it is
-tamper-evidence for the TRANSFER, which is what an export pack needs.
+re-derives its chain over the stored events at export time rather than copying the world's in-DB
+commit hashes — so it is internally verifiable end-to-end (export→import).
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -59,6 +66,7 @@ class WorldBundle(BaseModel):
     commits: list[BundleCommit] = Field(default_factory=list)
     branches: list[BundleBranch] = Field(default_factory=list)
     markers: list[BundleMarker] = Field(default_factory=list)
+    manifest_hash: str = ""  # binds world_name + branch/marker structure + commit hashes
 
 
 def to_domain_event(e: BundleEvent) -> DomainEvent:
@@ -83,15 +91,30 @@ def chain_hashes(commits: list[BundleCommit]) -> dict[str, str]:
     return hashes
 
 
+def _manifest_digest(bundle: WorldBundle) -> str:
+    """A digest over the bundle's name + branch/marker structure + commit hashes — binds the
+    metadata the commit chain alone doesn't cover (a forged name or a repointed branch/marker)."""
+    h = hashlib.sha256()
+    h.update(bundle.world_name.encode("utf-8"))
+    for c in sorted(bundle.commits, key=lambda c: c.commit_id):
+        h.update(f"|c|{c.commit_id}|{c.commit_hash}".encode())
+    for b in sorted(bundle.branches, key=lambda b: b.branch_id):
+        h.update(f"|b|{b.branch_id}|{b.name}|{b.head_commit}|{b.forked_from}".encode())
+    for m in sorted(bundle.markers, key=lambda m: m.marker_id):
+        h.update(f"|m|{m.marker_id}|{m.name}|{m.commit_id}".encode())
+    return h.hexdigest()
+
+
 def stamp_chain(bundle: WorldBundle) -> None:
-    """Fill in each commit's `commit_hash` from the recomputed chain (called at export)."""
+    """Fill in each commit's `commit_hash` + the manifest_hash from the recomputed chain."""
     hashes = chain_hashes(bundle.commits)
     for c in bundle.commits:
         c.commit_hash = hashes[c.commit_id]
+    bundle.manifest_hash = _manifest_digest(bundle)
 
 
 def verify_bundle(bundle: WorldBundle) -> None:
-    """Recompute the chain and raise ExportError on the first mismatch (tamper-evident)."""
+    """Recompute the chain + manifest digest; raise ExportError on the first mismatch."""
     hashes = chain_hashes(bundle.commits)
     for c in bundle.commits:
         if hashes[c.commit_id] != c.commit_hash:
@@ -99,3 +122,7 @@ def verify_bundle(bundle: WorldBundle) -> None:
                 f"hash-chain verification failed at commit {c.commit_id} "
                 f"(depth {c.depth}) — the bundle was altered in transit"
             )
+    if _manifest_digest(bundle) != bundle.manifest_hash:
+        raise ExportError(
+            "manifest verification failed — the world name or branch/marker structure was altered"
+        )

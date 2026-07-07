@@ -39,7 +39,7 @@ class Stage(Protocol):
 Stage graphs are assembled per mode (`05`). Rules:
 
 - **Atomicity:** the beat's *own* events reach the store only through the commit stage [6], in one transaction with the outbox write. A failed beat commits nothing of its own — streamed prose the player already saw simply never became canon (client marks the beat failed/retryable). One carve-out: the Actor service's simulate-on-observation may write a **separate, preceding** commit mid-beat (`05`, `03`) — atomic in its own right, not the beat's events.
-- **Concurrency:** at most **one in-flight beat per campaign**, enforced by the engine after `TurnArbiter` admission (`08`). Different campaigns/branches are fully concurrent. This rule stops *other* writers moving the head — but the beat's own off-screen-sim sub-commit does move it, so the beat re-anchors `branch_head` onto that sub-commit before proceeding to [6].
+- **Concurrency (DESIGN; the enforcement is NOT built yet):** the intended rule is at most **one in-flight beat per campaign** after `TurnArbiter` admission (`08`), different campaigns/branches fully concurrent. *PoC status:* `append_beat` does NOT check an expected head or serialize per-campaign — single-writer safety currently rests on convention (the CLI/embedded loop is serial; the server serializes a connection's own beats but not across connections). An expected-head guard + per-campaign in-flight lock is the intended hardening.
 - **Plan validation (pre-narration, deterministic, no LLM):** between [2] and [3] the plan is checked against state and ruleset: referenced targets must exist, presupposed facts must not be `false`, and if the intent matches a ruleset-declared **trigger category** the plan must invoke that affordance (D-21). Violations re-ask the planner. This is the *only* point where replanning happens — nothing has streamed yet. *(Phase-3 status: the affordance-vocabulary fence + D-21 trigger coverage + **actor**-ref existence are enforced; place/item existence and the presupposed-facts check are deferred — there is no place/item registry yet.)*
 - **Post-narration validation is downgrade-only:** problems found at [5] can only downgrade a proposal (claim → belief) or drop it with a logged warning. No replanning, no prose regeneration after streaming begins — the player has already read it.
 - **Time:** the planner proposes `time_cost` (in segments); the commit stage emits `TimeAdvanced` when > 0.
@@ -51,7 +51,7 @@ Canon corruption via prompt injection is a first-class threat: player text feeds
 | Tier | Source | May become |
 |---|---|---|
 | 0 | Engine state, ruleset results, world-pack seeds | Authoritative; only events change it |
-| 1 | External resolver telemetry (Chronicler mode outcome bundles, D-25) | Mechanical facts commit directly *within the encounter's declared domain*; interpretations (feats → claims, reputations) are distilled, then gauntlet-validated with witness-scoped beliefs |
+| 1 | External resolver telemetry (Chronicler mode outcome bundles, D-25) | Mechanical facts (deaths, transfers) commit directly *within the encounter's declared domain*; interpretations (feats → claims) commit as **`truth=unknown` testimony** + witness-scoped beliefs, never protected canon. *PoC: the extractor gauntlet is not yet applied to feat testimony (OQ-12)* |
 | 2 | Narrator output (scene/outcome prose) | `truth=true` claims — subject to the gauntlet below |
 | 3 | Dialogue output (any character speaking) | Testimony: `ClaimRecorded truth=unknown` + `BeliefChanged` for speaker/listeners |
 | 4 | Player intent text / PC speech | **Never evidence.** |
@@ -142,6 +142,6 @@ Placeholder targets (see `11` placeholder constants) — a design constraint, no
 | Schema invalid after re-asks | [5] | commit flavor-only, warn |
 | Contradiction unresolved | [5] | downgrade/drop proposal, warn |
 | Ruleset exception | [3] | beat fails (ruleset bugs must be loud, never narrated around) |
-| Commit conflict (branch head moved by *another* writer) | [6] | impossible by concurrency rule; assert & fail loudly. The beat's *own* off-screen-sim sub-commit is expected head movement, not a conflict — the beat re-anchors onto it (see Concurrency) rather than failing |
+| Commit conflict (branch head moved by *another* writer) | [6] | *intended:* prevented by the concurrency rule, else assert & fail loudly — **NOT built yet** (no expected-head check; see Concurrency). The beat's *own* off-screen-sim sub-commit is expected head movement, not a conflict |
 
 A failed beat returns `BeatFailure {stage, reason, retryable}` over the API; the CLI renders it and offers retry (which is a brand-new beat — there is no partial-beat resume).

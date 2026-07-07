@@ -211,7 +211,9 @@ class PostgresEventStore:
     async def export_world(self, world_id: str) -> WorldBundle:
         """Serialize a world's whole log — commits (with events), branches, markers — into a
         bundle stamped with a self-consistent hash chain (verifiable on import)."""
-        async with self.pool.acquire() as conn:
+        # One transaction so a concurrent append_beat can't yield a torn bundle (a new commit
+        # read without its events, or events without the branch head that points at them).
+        async with self.pool.acquire() as conn, conn.transaction():
             world = await conn.fetchrow("SELECT name FROM worlds WHERE world_id = $1", world_id)
             if world is None:
                 raise ValueError(f"no such world: {world_id}")

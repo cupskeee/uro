@@ -14,8 +14,12 @@ as settled fact. A garbled-STATEMENT model (a fresh claim per hop) is a later re
 
 from __future__ import annotations
 
-from uro_core.domain.events import DomainEvent, belief_changed
+from uro_core.domain.events import CausedBy, DomainEvent, belief_changed
 from uro_core.ports.projections import ProjectionQueries
+
+# The Actor service is emitter A (docs/12): off-screen agency. Its BeliefChanged fan-out carries
+# an agenda cause, distinct from the extractor's (X) in-scene belief updates.
+_ACTOR_CAUSE = CausedBy(kind="agenda")
 
 
 async def propagate_belief(
@@ -41,7 +45,11 @@ async def propagate_belief(
         confidence[witness] = base_confidence
         events.append(
             belief_changed(
-                actor_id=witness, claim_id=claim_id, confidence=base_confidence, learned_from=None
+                actor_id=witness,
+                claim_id=claim_id,
+                confidence=base_confidence,
+                learned_from=None,
+                caused_by=_ACTOR_CAUSE,
             )
         )
     frontier = list(confidence)
@@ -63,6 +71,7 @@ async def propagate_belief(
                         claim_id=claim_id,
                         confidence=heard_confidence,
                         learned_from=src,
+                        caused_by=_ACTOR_CAUSE,
                     )
                 )
                 next_frontier.append(edge.dst)

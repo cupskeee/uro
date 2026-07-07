@@ -69,7 +69,8 @@ def test_narrator_prompt_surfaces_present_beliefs() -> None:
         ],
     )
     blob = "\n".join(m.content for m in build_narrator_messages(recall, "I ask about the Duke"))
-    assert "Flora believes: The Duke plans war." in blob  # beliefs are live, not dead recall
+    # beliefs are live, and confidence surfaces as certainty phrasing (0.9 → "is certain")
+    assert "Flora is certain: The Duke plans war." in blob
 
 
 def test_narrator_prompt_surfaces_recalled_memories() -> None:

@@ -14,13 +14,19 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from uro_core.pipeline.engine import Engine
 from uro_core.ports.projections import EngineStore
 from uro_core.session import SoloArbiter, TurnArbiter
 
 from uro_server.sessions import SessionHub
+
+
+def _bearer_token(request: Request) -> str:
+    """Extract a bearer token from the Authorization header, or ''."""
+    auth = request.headers.get("authorization", "")
+    return auth[7:] if auth.lower().startswith("bearer ") else ""
 
 
 @dataclass
@@ -82,10 +88,15 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
     async def report_outcome(
         campaign_id: str,
         encounter_id: str,
+        request: Request,
         bundle: dict[str, Any] = Body(...),  # noqa: B008 (FastAPI DI-style default)
     ) -> dict[str, Any]:
         """Chronicler mode (D-25): an external game reports an outcome bundle; Uro distills it
-        into committed events (feats → witness rumors) and notifies the session."""
+        into committed events (feats → witness rumors) and notifies the session. AUTHED — an
+        external resolver mutates the timeline, so it needs a trusted token like any client."""
+        token = request.query_params.get("token") or _bearer_token(request)
+        if deps.resolve_participant(token) is None:
+            raise HTTPException(status_code=401, detail="unauthorized")
         if deps.report_outcome is None:
             raise HTTPException(status_code=501, detail="Chronicler mode not enabled")
         result = await deps.report_outcome(campaign_id, {**bundle, "encounter_id": encounter_id})

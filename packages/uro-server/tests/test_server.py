@@ -120,7 +120,7 @@ def test_outcome_endpoint_distills_the_bundle() -> None:
     deps = _fake_deps()
     deps.report_outcome = report_outcome
     resp = TestClient(create_app(deps)).post(
-        "/campaigns/camp-1/encounters/e:battle-7/outcome",
+        "/campaigns/camp-1/encounters/e:battle-7/outcome?token=tok-a",
         json={
             "feats": [{"actor": "a:hero", "description": "split the champion"}],
             "witnesses": ["a:raider1"],
@@ -131,8 +131,15 @@ def test_outcome_endpoint_distills_the_bundle() -> None:
     assert recorded["bundle"]["encounter_id"] == "e:battle-7"  # path param injected into the bundle
 
 
+def test_outcome_endpoint_rejects_a_bad_token() -> None:
+    resp = TestClient(create_app(_fake_deps())).post(
+        "/campaigns/camp-1/encounters/e/outcome?token=nope", json={}
+    )
+    assert resp.status_code == 401  # an external resolver mutates state → must be authed
+
+
 def test_outcome_endpoint_501_when_chronicler_disabled() -> None:
-    resp = TestClient(create_app(_fake_deps())).post(  # _fake_deps leaves report_outcome=None
-        "/campaigns/camp-1/encounters/e/outcome", json={}
+    resp = TestClient(create_app(_fake_deps())).post(  # authed, but report_outcome=None
+        "/campaigns/camp-1/encounters/e/outcome?token=tok-a", json={}
     )
     assert resp.status_code == 501

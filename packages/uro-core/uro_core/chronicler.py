@@ -7,8 +7,14 @@ trust tier), then belief-propagates each notable feat to the surviving witnesses
 feats become witness beliefs become rumors. No LLM.
 
 This is the tiny Phase-5 proof of D-25's Chronicler door; the full ingestion contract (OQ-12) is
-deferred. The bundle is trusted-but-scoped: it may report mechanical facts (feats, casualties,
-loot) but the interpretive retelling still flows through the ordinary narrator + belief model.
+deferred. **Trusted-but-SCOPED (the scope is enforced, not just claimed):** the external game is
+trusted for its own domain's MECHANICAL facts — casualties (`ActorDied`) and loot
+(`ItemTransferred`), emitters that whitelist E. Its INTERPRETIVE feat descriptions are NOT
+asserted as protected canon: a feat becomes a `truth="unknown"` testimony claim (what the game
+reports, believed by its witnesses), never a `truth="true"` established fact. So an external
+bundle cannot inject arbitrary protected canon — the witnesses believe the feat, the world does
+not vouch for it. Routing feat prose through the full extractor gauntlet (tier/contradiction
+gating) is the OQ-12 refinement.
 """
 
 from __future__ import annotations
@@ -62,13 +68,15 @@ async def distill_outcome(
     events: list[DomainEvent] = []
     for feat in bundle.feats:
         claim_id = f"c:{new_id()}"
+        # A feat is the external game's TESTIMONY, not Uro's canon — truth="unknown", believed by
+        # its witnesses (below). This keeps an external bundle from asserting protected canon.
         events.append(
             claim_recorded(
                 claim_id=claim_id,
                 statement=feat.description,
                 subject_refs=[feat.actor],
-                truth="true",
-                origin="chronicle",
+                truth="unknown",
+                origin="external",
                 caused_by=cause,
             )
         )
