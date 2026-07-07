@@ -146,11 +146,20 @@ def world_validate(path: str) -> None:
 
 
 @world_app.command("create")
-def world_create(path: str) -> None:
-    """Import a world pack (docs/09): validate, then commit the authored seeds as a new world."""
+def world_create(
+    path: str,
+    backfill: bool = typer.Option(
+        False, "--backfill", help="AI-fill gaps before import (committed, tagged ai_backfill)"
+    ),
+    provider: str = typer.Option("openai", help="provider for --backfill"),
+    model: str = typer.Option(None, help="model id for the worldsmith role (with --backfill)"),
+) -> None:
+    """Import a world pack (docs/09): validate, then commit the authored (and, with --backfill,
+    AI-filled) seeds as a new world."""
 
     async def _run() -> None:
         from uro_core.errors import PackError
+        from uro_core.worldpack.backfill import backfill_gaps
         from uro_core.worldpack.importer import pack_to_events
         from uro_core.worldpack.parse import parse_pack
         from uro_core.worldpack.sufficiency import check_sufficiency
@@ -161,6 +170,10 @@ def world_create(path: str) -> None:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
         report = check_sufficiency(pack)
+        added: list[str] = []
+        if backfill and report.grade != "runnable":
+            pack, added = await backfill_gaps(pack, build_router(provider, model), report=report)
+            report = check_sufficiency(pack)
         if report.grade == "insufficient":
             typer.echo(f"error: pack is INSUFFICIENT to run: {'; '.join(report.gaps)}", err=True)
             raise typer.Exit(1)
@@ -176,6 +189,8 @@ def world_create(path: str) -> None:
         finally:
             await store.close()
         typer.echo(f"world: {world.world_id}  ({pack.manifest.name}, grade {report.grade})")
+        for a in added:
+            typer.echo(f"  backfilled + committed: {a}")
         typer.echo(f"seed history:  uro world seed {path} --seed 42")
 
     _run_async(_run)

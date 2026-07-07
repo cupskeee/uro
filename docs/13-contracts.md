@@ -113,15 +113,17 @@ Validation gauntlet, in order: emitter whitelist → payload schema → tier cei
 
 ## Prompt template contracts
 
-Every template receives exactly these context objects (Jinja2, strict-undefined so a missing variable fails loudly). Packs override bodies, never contracts (`09`). `template_api_version: 0`.
+The INTENDED per-template context contract (Jinja2, `StrictUndefined` — shipped — so a template referencing an uninjected/misnamed variable fails loudly). Packs override bodies, never contracts (`09`). The `TEMPLATE_API_VERSION` constant is the intended pin anchor but is **reserved, not yet enforced** (no manifest version field, no check).
 
-| Template | Receives |
+| Template (intended) | Receives (intended) |
 |---|---|
 | `narrator.style.j2` | `world` {name, tone[]}, `scene` {place, present[], mode}, `plan`, `mechanics[]` (incl. trace strings), `recall`, `recent_beats[]` |
 | `dialogue.style.j2` | `world`, `actor` {profile, tier}, `beliefs_in_scope[]`, `relationships` (to party & present), `plan` (speaker slice), `recent_beats[]` |
 | `planner.hints.j2` | `world`, `scene`, `affordances[]` (from ruleset), `active_threads[]`, `recall` — appended to the planner system prompt |
 | `extractor.hints.j2` | whitelist summary, world naming conventions — appended to extractor system prompt |
 | `summarizer.style.j2` | beats-to-compress, target length, `world.tone` |
+
+**Shipped (Phase 4):** the default templates are `narrator.system.j2` (receives `style` = the world's tone string), `planner.system.j2`, and `extractor.system.j2` (no injected variables yet). A pack overrides one by shipping a file of the **same name** under `prompts/`. The richer per-template context above is the target the contract grows into.
 
 ## Provider request contract
 

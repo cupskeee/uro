@@ -51,6 +51,7 @@ from uro_core.timeline.models import (
     Marker,
     MemoryHit,
     PlaceView,
+    ThreadView,
     World,
 )
 
@@ -737,6 +738,16 @@ class PostgresEventStore:
                     rel_type,
                 )
         return [EdgeView(**dict(r)) for r in rows]
+
+    async def list_threads(self, branch_id: str) -> list[ThreadView]:
+        """A branch's conflict-seed threads (docs/09), authored + AI-backfilled (provenance)."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT thread_id, stakes, state, provenance FROM proj_threads "
+                "WHERE branch_id = $1 ORDER BY thread_id",
+                branch_id,
+            )
+        return [ThreadView(**dict(r)) for r in rows]
 
     async def edges_from(self, branch_id: str, src: str) -> list[EdgeView]:
         async with self.pool.acquire() as conn:

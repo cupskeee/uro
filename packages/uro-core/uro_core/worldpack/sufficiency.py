@@ -73,7 +73,7 @@ def check_sufficiency(pack: WorldPack) -> SufficiencyReport:
         ),
         _dim(
             "tone",
-            bool(pack.manifest.tone) or "narrator.style.j2" in pack.prompts,
+            bool(pack.manifest.tone) or "narrator.system.j2" in pack.prompts,
             f"tone: {pack.manifest.tone}" if pack.manifest.tone else "narrator style template",
             "no tone tags or narrator style template — the world has no voice",
         ),

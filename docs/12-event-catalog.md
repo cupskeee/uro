@@ -23,7 +23,7 @@ payload      {v: 1, ...}          # versioned per event type
 
 ## Emitter whitelist
 
-Each event type declares who may emit it — this is a hard validation rule at commit time and a core hallucination defense: the LLM-fed extractor can only ever *propose* types marked **X**; mechanical outcomes only ever come from the ruleset.
+Each event type declares who may emit it — the core hallucination defense: the LLM-fed extractor can only ever *propose* types marked **X**; mechanical outcomes only ever come from the ruleset. **How it's enforced (PoC):** structurally at the source, not by a generic commit-time emitter check. The extractor's output schema (`Extraction`, `pipeline/extraction.py`) can only express actor/claim shapes, so `run_gauntlet` emits only `ActorCreated`/`ClaimRecorded`/`BeliefChanged` — the LLM is *incapable* of proposing a mechanical event. The ruleset/pipeline/system emitters are likewise the only code paths that mint their event types. A generic per-commit `caused_by`-vs-whitelist validator is not (yet) a separate gate; this table is the source-of-truth contract those emitters are written to.
 
 Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects · **H** = History service (seeding, adaptation, and mid-play thread consequences) · **A** = Actor service (off-screen sim) · **P** = pipeline core · **S** = system/API (import, seeding, admin, fork ops) · **E** = external resolver (Chronicler mode, D-25 — the encounter it was handed: the opening handoff/parking event, then the mechanical facts reported back; interpretive content distilled then gauntlet-validated).
 
@@ -32,7 +32,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### World & places
 | event_type | payload (beyond `v`) | emit | notes |
 |---|---|---|---|
-| `WorldGenesis` | manifest snapshot, pack hash, seed | S | first commit of every world |
+| `WorldGenesis` | world_name, tone[], prompt_overrides{} | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) |
 | `PlaceCreated` | place entity, tier of detail | X H S | extractor may create Sites only |
 | `PlaceStateChanged` | place_id, changes{} | X H A | population, government ref, economy flavor |
 | `TerrainChanged` | place_id, description, effects[] | H R S | the meteor crater; slow-layer physical change. Mid-play, History emits it as a **thread's consequence-on-resolution** (`02`), `caused_by=player_action` — this is how a player-triggered cataclysm is recorded during a campaign (not extractor/pipeline) |
@@ -66,7 +66,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Claims & beliefs (epistemic layer)
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `ClaimRecorded` | claim_id, statement, subject_refs, truth, origin | X H P | narration-asserted → `truth=true`; character-asserted → `truth=unknown` (see `05`) |
+| `ClaimRecorded` | claim_id, statement, subject_refs, truth, origin | X H P S | narration-asserted → `truth=true`; character-asserted → `truth=unknown` (see `05`); `S` covers authored pack claims at import (`09`) |
 | `ClaimTruthChanged` | claim_id, truth, cause | P H | investigation resolves `unknown`; contradiction repair |
 | `BeliefChanged` | actor_id, claim_id, confidence, learned_from | X A P | rumor spread = BeliefChanged fan-out |
 
@@ -80,7 +80,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Threads
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `ThreadCreated` | thread entity | X H A P | off-screen plots included |
+| `ThreadCreated` | thread_id, stakes, state, originator, provenance | X H A P S | off-screen plots included; `S` covers authored + AI-backfilled pack conflict-seeds at import (`provenance=author\|ai_backfill`, `09`); projected to `proj_threads` |
 | `ThreadStateChanged` | thread_id, from→to (`dormant|offered|active|resolved|dead`), cause | P H A | |
 | `ThreadStepCompleted` | thread_id, step, outcome | P | |
 

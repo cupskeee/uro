@@ -766,6 +766,7 @@ class ThreadCreatedPayload(BaseModel):
     stakes: str
     state: str = "dormant"
     originator: str = ""
+    provenance: str = "author"  # "ai_backfill" for machine-generated seeds (docs/09)
 
 
 class HistorySeededPayload(BaseModel):
@@ -848,6 +849,7 @@ def thread_created(
     stakes: str,
     state: str = "dormant",
     originator: str = "",
+    provenance: str = "author",
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -855,7 +857,11 @@ def thread_created(
         entity_refs=[thread_id],
         caused_by=_default_cause(caused_by),
         payload=ThreadCreatedPayload(
-            thread_id=thread_id, stakes=stakes, state=state, originator=originator
+            thread_id=thread_id,
+            stakes=stakes,
+            state=state,
+            originator=originator,
+            provenance=provenance,
         ).model_dump(),
     )
 

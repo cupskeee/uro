@@ -109,6 +109,13 @@ class EdgeView(BaseModel):
     weight: float
 
 
+class ThreadView(BaseModel):
+    thread_id: str
+    stakes: str
+    state: str  # dormant | offered | active
+    provenance: str  # author | ai_backfill
+
+
 class MemoryHit(BaseModel):
     text: str
     kind: str

@@ -57,7 +57,7 @@ One physical model may serve all roles (cheap start); the indirection costs noth
 
 ## Capability probes
 
-Per owner feedback: when a world declares requirements (e.g. mature content enabled), there must be a way to **test whether the bound models can actually deliver**. `uro world probe <world>` runs a suite against every bound role and produces a stored, timestamped report:
+Per owner feedback: when a world declares requirements (e.g. mature content enabled), there must be a way to **test whether the bound models can actually deliver**. `uro world probe <world>` runs a suite against every bound role and produces a report (**PoC: printed to stdout with raw transcripts; persisted, timestamped report storage is deferred**). The shipped suite is two of the probes below — the hard `structured_output` gate and `content_rating`; the rest extend the same ask→judge→attach-transcript pattern:
 
 | Probe | Checks | Gate for |
 |---|---|---|

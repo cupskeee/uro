@@ -19,6 +19,7 @@ from uro_core.timeline.models import (
     EdgeView,
     FactionView,
     PlaceView,
+    ThreadView,
 )
 
 
@@ -36,6 +37,8 @@ class ProjectionQueries(Protocol):
     async def list_edges(self, branch_id: str, rel_type: str | None = None) -> list[EdgeView]: ...
 
     async def edges_from(self, branch_id: str, src: str) -> list[EdgeView]: ...
+
+    async def list_threads(self, branch_id: str) -> list[ThreadView]: ...
 
     async def world_style(self, branch_id: str) -> tuple[str, dict[str, str]]:
         """The narrator style (tone joined) + prompt-template overrides for a branch's world

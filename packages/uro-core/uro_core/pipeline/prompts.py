@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from importlib import resources
 
-from jinja2 import Environment
+from jinja2 import Environment, StrictUndefined
 
-# Template-API version (docs/09): packs pin against this so an engine upgrade fails loudly, not
-# weirdly. Bump when a stage's documented context contract changes incompatibly.
+# Template-API version (docs/09). RESERVED, not yet enforced: the intent is that a pack pins
+# against this so an engine upgrade fails loudly on a contract change, but the manifest carries
+# no version field yet and nothing checks it. Treat as a placeholder until wired.
 TEMPLATE_API_VERSION = 1
 
 
@@ -23,7 +24,11 @@ class PromptEnv:
     def __init__(self, overrides: dict[str, str] | None = None) -> None:
         self._overrides = overrides or {}
         self._defaults: dict[str, str] = {}
-        self._env = Environment(autoescape=False, keep_trailing_newline=False)
+        # StrictUndefined: a template (esp. a pack override) referencing an uninjected/misnamed
+        # variable raises loudly instead of silently rendering empty (docs/13 fail-loudly intent).
+        self._env = Environment(
+            autoescape=False, keep_trailing_newline=False, undefined=StrictUndefined
+        )
 
     def _source(self, name: str) -> str:
         if name in self._overrides:

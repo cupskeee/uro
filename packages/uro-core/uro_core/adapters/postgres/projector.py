@@ -252,6 +252,20 @@ async def _edge_removed(conn: asyncpg.Connection, branch_id: str, p: dict[str, A
     )
 
 
+async def _thread_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    await conn.execute(
+        "INSERT INTO proj_threads (branch_id, thread_id, stakes, state, provenance) "
+        "VALUES ($1, $2, $3, $4, $5) "
+        "ON CONFLICT (branch_id, thread_id) DO UPDATE SET "
+        "stakes = EXCLUDED.stakes, state = EXCLUDED.state, provenance = EXCLUDED.provenance",
+        branch_id,
+        p["thread_id"],
+        p["stakes"],
+        p.get("state", "dormant"),
+        p.get("provenance", "author"),
+    )
+
+
 _HANDLERS = {
     "ActorCreated": _actor_created,
     "ActorPromoted": _actor_promoted,
@@ -269,6 +283,7 @@ _HANDLERS = {
     "ActorDied": _actor_died,
     "ItemCreated": _item_created,
     "ItemTransferred": _item_transferred,
+    "ThreadCreated": _thread_created,
     "FactionCreated": _faction_created,
     "EdgeAdded": _edge_added,
     "EdgeUpdated": _edge_added,
@@ -307,6 +322,7 @@ _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "items": ("item_id", "name", "kind", "owner_ref"),
     "factions": ("faction_id", "name", "kind", "description"),
     "edges": ("src", "rel_type", "dst", "weight", "attrs"),
+    "threads": ("thread_id", "stakes", "state", "provenance"),
 }
 
 
@@ -315,9 +331,12 @@ async def snapshot_state(conn: asyncpg.Connection, branch_id: str) -> dict[str, 
     dict (stable across runs, so its state_hash is reproducible)."""
     state: dict[str, Any] = {"v": 1}
     for section, columns in _SNAPSHOT_TABLES.items():
+        # Order by ALL columns for a TOTAL order — ordering by only the first two leaves rows
+        # that share them (e.g. edges with the same src+rel_type but different dst) in an
+        # undefined order, which would make the state_hash non-reproducible.
         rows = await conn.fetch(
             f"SELECT {', '.join(columns)} FROM proj_{section} "
-            f"WHERE branch_id = $1 ORDER BY {columns[0]}, {columns[1]}",
+            f"WHERE branch_id = $1 ORDER BY {', '.join(columns)}",
             branch_id,
         )
         state[section] = [dict(r) for r in rows]

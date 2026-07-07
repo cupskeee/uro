@@ -1,10 +1,11 @@
 """Turn a parsed pack into the seed events committed at import (docs/09). No LLM.
 
-The authored geography/actors/factions/relations become `PlaceCreated`/`FactionCreated`/
-`ActorCreated`/`EdgeAdded`/`ClaimRecorded` (emitter S) in the WorldGenesis commit — so they
-exist as timeline state BEFORE any History seeding, and survive identically across seeds
-(docs/03: identical geography, different dynasties). Threads stay pack-level conflict seeds
-(consumed by sufficiency + backfill); importing them as `ThreadCreated` state is deferred.
+The authored geography/actors/factions/relations/threads become `PlaceCreated`/`FactionCreated`/
+`ActorCreated`/`EdgeAdded`/`ClaimRecorded`/`ThreadCreated` (emitter S) in the WorldGenesis commit —
+so they exist as timeline state BEFORE any History seeding, and survive identically across seeds
+(docs/03: identical geography, different dynasties). AI-backfilled conflict seeds ride the same
+path, tagged `provenance=ai_backfill` on the committed `ThreadCreated` — so the machine's
+inventions are reviewable committed state, not a discarded in-memory model.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from uro_core.domain.events import (
     edge_added,
     faction_created,
     place_created,
+    thread_created,
 )
 from uro_core.worldpack.models import PlaceKind, WorldPack
 
@@ -54,5 +56,9 @@ def pack_to_events(pack: WorldPack) -> list[DomainEvent]:
                 truth=c.truth,
                 origin="worldpack",
             )
+        )
+    for t in pack.threads:
+        events.append(
+            thread_created(thread_id=t.id, stakes=t.stakes, state=t.state, provenance=t.provenance)
         )
     return events

@@ -71,12 +71,12 @@ Multi-model per-role bindings go in `uro.toml` (`[llm.roles] narrator = "anthrop
 
 ## Phase 4 — Worlds
 
-- World pack format: parsing, validation, entity extraction from lore, **sufficiency check**, AI backfill (opt-in, provenance-tagged).
+- World pack format: parsing, validation, **sufficiency check**, AI backfill (opt-in, provenance-tagged, committed via `create --backfill`). *(LLM lore-extraction deferred — authored YAML is the primary source.)*
 - Prompt template packs with override-and-fallthrough; History seeding from manifest (`simulate_years`).
-- **Capability probes** + stored reports; dry-run mode polished (`uro dry-run`, event diffs).
+- **Capability probes** (report printed with transcripts; persisted/timestamped storage deferred); dry-run (`uro dry-run`, `preview_beat`).
 - Two real example packs in `worlds/` (one rich, one deliberately thin — the thin one is the sufficiency-check fixture).
 
-**Acceptance:** author a fresh pack from scratch, `validate` flags a missing conflict seed, backfill fills it (tagged), `probe` passes, `seed --seed 42` then `seed --seed 43` produce visibly different histories on identical geography, and a campaign plays in the authored tone.
+**Acceptance:** author a fresh pack from scratch, `validate` flags a missing conflict seed, backfill fills it (committed, tagged `ai_backfill`), `probe` passes, `seed --seed 42` then `seed --seed 43` produce visibly different histories on identical geography, and a campaign plays in the authored tone. *(Status: deterministic legs — validate/seed/tone/import — pass in CI; the LLM legs — backfill/probe — are stub-tested, live pass pending like Phases 1/3.)*
 
 ## Phase 5 — Server & sessions
 

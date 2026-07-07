@@ -128,3 +128,39 @@ async def test_imported_world_plays_in_authored_tone(store: PostgresEventStore) 
     engine = Engine(store, ProviderRouter(bindings={}, default=_Spy()))  # no ruleset → free-roam
     await engine.run_beat(campaign, "p1", "I look around Vel")
     assert "grim" in captured["narrator"] and "political" in captured["narrator"]
+
+
+async def test_authored_threads_import_as_provenance_tagged_state(
+    store: PostgresEventStore,
+) -> None:
+    pack = parse_pack(WORLDS / "ashfall")
+    world = await store.create_world(pack.manifest.name, extra_events=pack_to_events(pack))
+    threads = await store.list_threads(world.main_branch_id)
+    assert any(t.thread_id == "t:saltborn-ritual" and t.provenance == "author" for t in threads)
+
+
+async def test_backfilled_seed_commits_as_ai_backfill_state(store: PostgresEventStore) -> None:
+    # The acceptance's real leg: backfill → import commits a ThreadCreated tagged ai_backfill —
+    # queryable committed state, not a discarded in-memory model.
+    from uro_core.worldpack.backfill import backfill_gaps
+
+    class _Worldsmith:
+        async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
+            yield ""
+
+        async def complete(self, req: CompletionRequest) -> str:
+            return '{"stakes": "The Council hides a blight in the orchard.", "state": "dormant"}'
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [hashing_embedding(t) for t in texts]
+
+    pack = parse_pack(WORLDS / "thornwood")
+    augmented, added = await backfill_gaps(pack, ProviderRouter(bindings={}, default=_Worldsmith()))
+    assert added  # a seed was generated
+    world = await store.create_world(
+        augmented.manifest.name, extra_events=pack_to_events(augmented)
+    )
+    backfilled = [
+        t for t in await store.list_threads(world.main_branch_id) if t.provenance == "ai_backfill"
+    ]
+    assert len(backfilled) == 1 and "blight" in backfilled[0].stakes.lower()
