@@ -12,8 +12,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from uro_core.pipeline.engine import Engine
 from uro_core.ports.projections import EngineStore
@@ -31,6 +32,8 @@ class ServerDeps:
     run_beat: Callable[
         [str, str, str], AsyncIterator[str]
     ]  # (campaign, participant, intent) → chunks
+    # Chronicler mode (D-25): distill an external game's outcome bundle → committed events.
+    report_outcome: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
 
 
 def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> ServerDeps:
@@ -47,10 +50,22 @@ def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> S
         async for chunk in engine.run_beat_stream(campaign, participant, text):
             yield chunk
 
+    async def report_outcome(campaign_id: str, bundle_json: dict[str, Any]) -> dict[str, Any]:
+        from uro_core.chronicler import OutcomeBundle, distill_outcome
+
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        bundle = OutcomeBundle.model_validate(bundle_json)
+        events = await distill_outcome(store, campaign.branch_id, bundle)
+        commit = await store.append_beat(campaign.branch_id, events)
+        return {"committed_events": len(events), "commit_id": commit.commit_id}
+
     return ServerDeps(
         resolve_participant=lambda token: tokens.get(token),
         campaign_exists=campaign_exists,
         run_beat=run_beat,
+        report_outcome=report_outcome,
     )
 
 
@@ -62,6 +77,22 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/campaigns/{campaign_id}/encounters/{encounter_id}/outcome")
+    async def report_outcome(
+        campaign_id: str,
+        encounter_id: str,
+        bundle: dict[str, Any] = Body(...),  # noqa: B008 (FastAPI DI-style default)
+    ) -> dict[str, Any]:
+        """Chronicler mode (D-25): an external game reports an outcome bundle; Uro distills it
+        into committed events (feats → witness rumors) and notifies the session."""
+        if deps.report_outcome is None:
+            raise HTTPException(status_code=501, detail="Chronicler mode not enabled")
+        result = await deps.report_outcome(campaign_id, {**bundle, "encounter_id": encounter_id})
+        await hub.publish(
+            campaign_id, {"type": "outcome_recorded", "encounter_id": encounter_id, **result}
+        )
+        return result
 
     @app.websocket("/campaigns/{campaign_id}/play")
     async def play(ws: WebSocket, campaign_id: str) -> None:

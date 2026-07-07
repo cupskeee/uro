@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from uro_core.domain.ids import new_id
 
 Segment = Literal["morning", "afternoon", "evening", "night"]
-CausedByKind = Literal["player_action", "agenda", "history", "ruleset", "system"]
+CausedByKind = Literal["player_action", "agenda", "history", "ruleset", "system", "external"]
 Truth = Literal["true", "false", "unknown"]  # engine-level ground truth of a claim (docs/02)
 
 
@@ -546,6 +546,12 @@ def sheet_updated(
 def ruleset_cause(encounter_id: str) -> CausedBy:
     """Provenance for a ruleset-emitted effect inside an encounter (docs/12, D-26)."""
     return CausedBy(kind="ruleset", encounter_id=encounter_id)
+
+
+def external_cause(encounter_id: str) -> CausedBy:
+    """Provenance for facts distilled from an EXTERNAL game's outcome bundle — the Chronicler
+    external trust tier, emitter E (docs/12, 13, D-25). Distinct from the ruleset (Uro's own)."""
+    return CausedBy(kind="external", encounter_id=encounter_id)
 
 
 # --- Encounter mode & mechanical effects (docs/06, 12; emitter R for in-process resolution) ---

@@ -28,6 +28,9 @@ class RecallBundle(BaseModel):
     actors: list[ActorView]  # on-stage figures
     claims: list[ClaimView]  # relevant claims, truth-annotated
     beliefs: list[BeliefView]  # beliefs held by on-stage figures
+    # claims an on-stage figure BELIEVES but that aren't otherwise on-stage (e.g. a tavern
+    # keeper's rumor about an absent hero) — carried only to render the belief, not as scene facts.
+    belief_claims: list[ClaimView] = Field(default_factory=list)
     memories: list[str] = Field(default_factory=list)  # semantic recall of older beats (docs/04)
 
 
@@ -76,7 +79,19 @@ async def assemble_recall(
     for actor in on_stage:
         beliefs.extend(await store.beliefs_of(branch_id, actor.actor_id))
 
-    return RecallBundle(recent_beats=recent, actors=on_stage, claims=claims, beliefs=beliefs)
+    # A belief about an off-stage subject (a rumor an on-stage NPC holds) still needs its claim
+    # to be rendered — fetch those, separately, so they surface as beliefs and not scene facts.
+    known_ids = {c.claim_id for c in claims}
+    wanted = {b.claim_id for b in beliefs} - known_ids
+    belief_claims = [c for c in all_claims if c.claim_id in wanted]
+
+    return RecallBundle(
+        recent_beats=recent,
+        actors=on_stage,
+        claims=claims,
+        beliefs=beliefs,
+        belief_claims=belief_claims,
+    )
 
 
 def build_narrator_messages(
@@ -90,7 +105,8 @@ def build_narrator_messages(
 ) -> list[Message]:
     facts = [c.statement for c in recall.claims if c.truth == "true"]
     rumors = [c.statement for c in recall.claims if c.truth != "true"]
-    claim_by_id = {c.claim_id: c for c in recall.claims}
+    # belief_claims render on-stage NPCs' beliefs (below) but are NOT scene facts/rumors.
+    claim_by_id = {c.claim_id: c for c in [*recall.claims, *recall.belief_claims]}
     name_by_id = {a.actor_id: a.name for a in recall.actors}
     # Who present believes what — joined to already-recalled claims, no extra queries.
     belief_lines = [

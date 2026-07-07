@@ -105,3 +105,34 @@ def test_unknown_campaign_is_rejected() -> None:
     ):
         pass
     assert excinfo.value.code == 4404  # no such campaign
+
+
+# --- Chronicler mode: the outcome-bundle endpoint (D-25) ---
+
+
+def test_outcome_endpoint_distills_the_bundle() -> None:
+    recorded: dict[str, Any] = {}
+
+    async def report_outcome(campaign_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
+        recorded["campaign"], recorded["bundle"] = campaign_id, bundle
+        return {"committed_events": 4, "commit_id": "c:abc"}
+
+    deps = _fake_deps()
+    deps.report_outcome = report_outcome
+    resp = TestClient(create_app(deps)).post(
+        "/campaigns/camp-1/encounters/e:battle-7/outcome",
+        json={
+            "feats": [{"actor": "a:hero", "description": "split the champion"}],
+            "witnesses": ["a:raider1"],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["committed_events"] == 4
+    assert recorded["bundle"]["encounter_id"] == "e:battle-7"  # path param injected into the bundle
+
+
+def test_outcome_endpoint_501_when_chronicler_disabled() -> None:
+    resp = TestClient(create_app(_fake_deps())).post(  # _fake_deps leaves report_outcome=None
+        "/campaigns/camp-1/encounters/e/outcome", json={}
+    )
+    assert resp.status_code == 501
