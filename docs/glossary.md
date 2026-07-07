@@ -22,7 +22,7 @@ One line per term; the linked doc is the authority. Terms are used *exactly* thi
 | **Edge** | A typed, weighted, temporally-valid relation between entities; the graph, event-sourced | `02`, `07` |
 | **Emitter whitelist** | Per-event-type list of who may emit it; the extractor's hard ceiling | `12` |
 | **Encounter mode** | The only turn-based mode; owned by the ruleset's state machine (combat/initiative) | `05`, `06` |
-| **Entity resolution** | Matching newly named entities against existing ones (name/alias/embedding) before any `*Created` is accepted | `13` |
+| **Entity resolution** | Matching newly named entities against existing ones (name/alias; embedding leg planned) before any `*Created` is accepted | `13` |
 | **EntityMerged / merge map** | Folding a duplicate entity into a survivor; projections resolve through the map, history stays untouched | `12` |
 | **Extractor** | The pipeline role that parses generated prose into ProposedEvents for canonicalization | `05`, `13` |
 | **Fork** | Creating a branch from any commit; carries world state, not campaign-scoped state | `03` |

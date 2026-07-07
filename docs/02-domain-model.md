@@ -5,7 +5,7 @@
 ## Identity and versioning basics
 
 - Every entity has a stable `entity_id` (ULID) that survives across branches — a fork of a world refers to *the same* Duke by the same ID, with diverged state.
-- Entities accumulate `aliases[]` (via `EntityAliasAdded`) — generated prose renames people constantly ("Old Weck" / "Weck" / "the fisherman"), and **entity resolution** matches on name, alias, and embedding before any `*Created` proposal is accepted (`13-contracts.md`). Without this, the extractor breeds duplicate NPCs.
+- Entities accumulate `aliases[]` (via `EntityAliasAdded`) — generated prose renames people constantly ("Old Weck" / "Weck" / "the fisherman"), and **entity resolution** matches on name and alias before any `*Created` proposal is accepted (`13-contracts.md`; an embedding leg + `entity_index` are designed but **not built yet** — the shipped gauntlet resolves on name/alias only). Without this, the extractor breeds duplicate NPCs.
 - Duplicates will slip through anyway: `EntityMerged` folds one id into a survivor through a **merge map** that projections and queries resolve through. Entity ids are never deleted; historical events are never rewritten.
 - Entity *state* is always "state at a point on a timeline branch" — there is no such thing as an entity's state without saying *when and on which branch*. See `03-timeline-and-branching.md`.
 - All models are Pydantic v2; the domain layer is persistence-ignorant.
