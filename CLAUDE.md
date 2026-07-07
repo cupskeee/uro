@@ -37,6 +37,6 @@ Build one coherent, tightly-coupled slice **directly** (don't fan out — layers
 
 **Watch for overclaiming:** trace whether the code actually enforces a guarantee before writing it; prefer "by construction (structural)" vs "by policy / best-effort"; label proxies as proxies. (Reviews caught this 4× in Phase 1.)
 
-## Status (2026-07-06)
+## Status (2026-07-07)
 
-Phase 0 (walking skeleton) + Phase 1 (state engine: recall → narrate → extract → gauntlet → commit → project; claim/belief epistemic layer; pgvector semantic memory; 4 provider adapters; thesis harness) are **code-complete, 71 tests green**. Next: the live thesis run — the owner chose the **OpenAI** path; step-by-step runbook is `docs/live-run.md`. After that, Phase 2 (branching timelines — the signature feature).
+Phase 0 + Phase 1 (state engine: recall → narrate → extract → gauntlet → commit → project; claim/belief epistemic layer; pgvector semantic memory; 4 provider adapters; thesis harness) are **code-complete, 72 tests green**. The **thesis was validated live** via OpenAI — the ablation (`scripts/ablation.sh`, `docs/live-run.md`) showed the full engine recalling a named NPC + plot fact past the recency window while `--bare` forgot them. That run also surfaced extractor over-extraction (flavor → `truth=true`), fixed in Phase 1.5. **Live runs:** the owner's `OPENAI_API_KEY` is not visible to Claude's bash — the owner runs keyed commands, Claude analyzes results from Postgres. Next: **Phase 2 — branching timelines** (the signature feature; fully deterministic, no key needed).

@@ -55,6 +55,10 @@ The bet: state-tracked narration beats a raw transcript. Play the **same intents
 two **fresh** campaigns — full engine vs `--bare` (no state/recall/extraction/memory) —
 and compare. Use fresh campaigns; don't reuse the smoke one.
 
+**Shortcut:** `bash scripts/ablation.sh` (or `MODEL=gpt-4o bash scripts/ablation.sh`) does
+exactly the steps below with a 14-intent script designed to plant early and reference late.
+The manual version:
+
 ```sh
 uv run uro world new "Ablation FULL"          # → $A
 uv run uro world new "Ablation BARE"          # → $B
