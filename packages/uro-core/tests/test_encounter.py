@@ -50,6 +50,29 @@ def test_run_encounter_replays_identically_and_emits_effects() -> None:
     assert [ev.payload for ev in e3] != [ev.payload for ev in e1]
 
 
+def test_acceptance_fight_pc_loses_across_seeds() -> None:
+    # Backs the "deterministic across seeds" claim: with the acceptance stats the PC loses a
+    # multi-round fight for EVERY seed (no draw, no turn-cap) — the outcome is seed-invariant.
+    def bram() -> Combatant:
+        return Combatant(
+            actor_id="a:bram",
+            team="party",
+            sheet=RS.new_character(CharSpec(abilities={"STR": 8, "DEX": 4, "CON": 18}), Rng(0)),
+        )
+
+    def grull() -> Combatant:
+        return Combatant(
+            actor_id="a:grull",
+            team="foes",
+            sheet=RS.new_character(CharSpec(abilities={"STR": 20, "DEX": 14, "CON": 20}), Rng(0)),
+        )
+
+    for seed in range(300):
+        events, outcome = run_encounter(RS, [bram(), grull()], Rng(seed), encounter_id="e")
+        assert outcome.winner_team == "foes" and "a:bram" in outcome.casualties
+        assert sum(1 for e in events if e.event_type == "EncounterTurnTaken") >= 2  # multi-round
+
+
 # --- the acceptance: insult → combat → lost-fight consequences ---
 
 
@@ -222,6 +245,48 @@ async def test_attack_with_no_valid_target_falls_back_to_freeroam(
         ]
     assert "EncounterStarted" not in types and "ModeChanged" not in types  # no fabricated fight
     assert "BeatResolved" in types  # committed as an ordinary free-roam beat
+
+
+async def test_fork_from_marker_after_combat_restores_hp_and_loot(
+    store: PostgresEventStore,
+) -> None:
+    # Exercises the snapshot 'sheets'/'items' RESTORE path (not just replay): a fork from a
+    # MARKER after a fight carries the reduced hp + moved ownership out of the snapshot blob.
+    # Also verifies start_campaign's live starting-item emitter (the PC owns a real item in play).
+    from uro_core.domain.events import actor_damaged, item_transferred
+
+    world = await store.create_world(f"test-{new_id()}")
+    main = world.main_branch_id
+    campaign = await store.start_campaign(
+        world.world_id,
+        main,
+        participant_id="p1",
+        new_pc_name="Xan",
+        new_pc_id="a:x",
+        pc_sheet=_sheet({"CON": 12}),
+        starting_items=["a knife"],  # a real item, created in play (not a test fixture)
+        ruleset_id="uro-basic",
+    )
+    assert campaign.campaign_id is not None
+    knife = (await store.items_owned_by(main, "a:x"))[0]  # the starting item exists
+
+    # simulate a lost fight's persistent effects: Xan downed, the knife looted by Yorn
+    await store.append_beat(
+        main,
+        [
+            actor_created(actor_id="a:y", name="Yorn"),
+            actor_damaged(actor_id="a:x", amount=999, source="a:y"),
+            item_transferred(item_id=knife, from_ref="a:x", to_ref="a:y"),
+        ],
+    )
+    assert (await store.get_sheet(main, "a:x"))["hp"] == 0
+    assert (await store.get_item(main, knife))["owner_ref"] == "a:y"
+
+    # marker snapshots the head; a fork FROM the marker restores state from that snapshot blob
+    await store.create_marker(world.world_id, "after-fight", main)
+    fork = await store.fork_branch(world.world_id, "after-fight", "replay")
+    assert (await store.get_sheet(fork.branch_id, "a:x"))["hp"] == 0  # sheets section restored
+    assert (await store.get_item(fork.branch_id, knife))["owner_ref"] == "a:y"  # items restored
 
 
 async def test_combat_events_project_hp_and_ownership(store: PostgresEventStore) -> None:

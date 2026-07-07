@@ -106,6 +106,7 @@ def world_new(name: str) -> None:
                 participant_id=PARTICIPANT,
                 new_pc_name="Adventurer",
                 pc_sheet=sheet,
+                starting_items=["a traveler's knife"],
                 ruleset_id=ruleset_id,
             )
         finally:
@@ -326,6 +327,7 @@ def campaign_new(
                 adopt_actor_id=adopt,
                 new_pc_name=pc,
                 pc_sheet=pc_sheet,
+                starting_items=["a traveler's knife"] if pc is not None else None,
                 ruleset_id=ruleset_id,
             )
         finally:

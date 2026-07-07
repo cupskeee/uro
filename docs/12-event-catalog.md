@@ -87,7 +87,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Play & campaign
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `CampaignStarted` | campaign_id, branch_id, party[], ruleset@ver, seed | S | |
+| `CampaignStarted` | campaign_id, branch_id, party[], ruleset_id, seed | S | (`ruleset_id` records the governing ruleset; version tracking arrives with world packs, Phase 4) |
 | `CampaignEnded` | campaign_id, outcome, marker_ref | S | usually paired with a marker |
 | `SceneEntered` | place_id, present_actors[], mode | P | |
 | `ModeChanged` | from, to (`freeroam|encounter|downtime`), cause | P R | |

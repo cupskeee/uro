@@ -357,10 +357,14 @@ class Engine:
         cause = CausedBy(kind="player_action")
         events: list[DomainEvent] = []
         for loser in losers:
+            # Use the display name in the claim's prose (recall feeds it to the narrator); keep
+            # the actor id only in subject_refs, never leak a raw a:… id into narration.
+            actor = await self._store.get_actor(branch_id, loser)
+            name = actor.name if actor is not None else loser
             events.append(
                 claim_recorded(
                     claim_id=f"c:{new_id()}",
-                    statement=f"{loser} was beaten down in the brawl and left wounded.",
+                    statement=f"{name} was beaten down in the brawl and left wounded.",
                     subject_refs=[loser],
                     truth="true",
                     origin="mechanics",

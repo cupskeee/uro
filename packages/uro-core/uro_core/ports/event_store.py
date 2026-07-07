@@ -45,6 +45,7 @@ class EventStore(Protocol):
         new_pc_name: str | None = None,
         new_pc_id: str | None = None,
         pc_sheet: dict[str, Any] | None = None,
+        starting_items: list[str] | None = None,
         ruleset_id: str = "",
         seed: int = 0,
     ) -> Campaign:

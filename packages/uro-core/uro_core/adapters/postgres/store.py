@@ -27,6 +27,7 @@ from uro_core.domain.events import (
     campaign_ended,
     campaign_started,
     history_cause,
+    item_created,
     pc_bound,
     pc_released,
     sheet_updated,
@@ -217,6 +218,7 @@ class PostgresEventStore:
         new_pc_name: str | None = None,
         new_pc_id: str | None = None,
         pc_sheet: dict[str, Any] | None = None,
+        starting_items: list[str] | None = None,
         ruleset_id: str = "",
         seed: int = 0,
     ) -> Campaign:
@@ -239,7 +241,11 @@ class PostgresEventStore:
             )
         events.append(
             campaign_started(
-                campaign_id=campaign_id, branch_id=branch_id, party=[pc_actor_id], seed=seed
+                campaign_id=campaign_id,
+                branch_id=branch_id,
+                party=[pc_actor_id],
+                ruleset_id=ruleset_id,
+                seed=seed,
             )
         )
         events.append(
@@ -249,6 +255,9 @@ class PostgresEventStore:
             events.append(
                 sheet_updated(actor_id=pc_actor_id, sheet=pc_sheet, ruleset_id=ruleset_id)
             )
+        # Starting equipment (docs/02) — so items exist in play and a lost fight can loot them.
+        for name in starting_items or []:
+            events.append(item_created(item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id))
         async with self.pool.acquire() as conn, conn.transaction():
             branch = await conn.fetchrow(
                 "SELECT world_id FROM branches WHERE branch_id = $1", branch_id

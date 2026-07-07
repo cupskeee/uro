@@ -48,6 +48,8 @@ class BeatPlan(BaseModel):
     speakers: list[str] = Field(default_factory=list)
     triggers: list[str] = Field(default_factory=list)  # trigger categories the intent falls into
     mechanics: list[PlanMechanic] = Field(default_factory=list)
+    # Advisory only — the pipeline decides the encounter transition from the invoked
+    # `starts_encounter` affordance (mechanics-gated, D-21/D-26), NOT from this field.
     mode_transition: ModeTransition | None = None
     time_cost: int = 0
     narration_directives: str = ""

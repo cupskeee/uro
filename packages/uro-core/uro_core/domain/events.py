@@ -364,6 +364,7 @@ class CampaignStartedPayload(BaseModel):
     campaign_id: str
     branch_id: str
     party: list[str] = Field(default_factory=list)  # PC actor ids
+    ruleset_id: str = ""  # the ruleset this campaign is played under (docs/06, 12)
     seed: int = 0
 
 
@@ -393,6 +394,7 @@ def campaign_started(
     campaign_id: str,
     branch_id: str,
     party: list[str] | None = None,
+    ruleset_id: str = "",
     seed: int = 0,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
@@ -401,7 +403,11 @@ def campaign_started(
         entity_refs=list(party or []),
         caused_by=_default_cause(caused_by),
         payload=CampaignStartedPayload(
-            campaign_id=campaign_id, branch_id=branch_id, party=party or [], seed=seed
+            campaign_id=campaign_id,
+            branch_id=branch_id,
+            party=party or [],
+            ruleset_id=ruleset_id,
+            seed=seed,
         ).model_dump(),
     )
 
