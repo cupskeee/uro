@@ -167,7 +167,12 @@ def world_create(path: str) -> None:
         store = build_store()
         await store.connect()
         try:
-            world = await store.create_world(pack.manifest.name, extra_events=pack_to_events(pack))
+            world = await store.create_world(
+                pack.manifest.name,
+                tone=pack.manifest.tone,
+                prompt_overrides=pack.prompts,
+                extra_events=pack_to_events(pack),
+            )
         finally:
             await store.close()
         typer.echo(f"world: {world.world_id}  ({pack.manifest.name}, grade {report.grade})")

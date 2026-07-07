@@ -20,6 +20,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
 from uro_core.providers.base import Message
 from uro_core.rulesets.base import Affordance
@@ -56,21 +57,13 @@ class BeatPlan(BaseModel):
     suggestions: list[str] = Field(default_factory=list)
 
 
-PLANNER_SYSTEM = (
-    "You are the PLANNER for a text RPG. Read the player's intent and the scene, then output a "
-    "JSON BeatPlan. Classify the intent (intent_class) and decide which MECHANICAL AFFORDANCES "
-    "it invokes. RULES: (1) name only affordances from the AFFORDANCES list. (2) In `triggers`, "
-    "list every trigger category the intent falls into; for EACH such category you MUST add a "
-    "`mechanics` entry invoking an affordance that declares it — an outcome cannot be decided by "
-    "phrasing alone (e.g. talking a guard into standing down is `change_disposition` → invoke "
-    "`persuade`; swinging a blade is `violence` → invoke `attack`). (3) Reference actors by the "
-    "id shown in ON STAGE, or leave `actor` empty to mean the player character. (4) Do NOT "
-    "resolve outcomes or write prose. Output ONLY a JSON object."
-)
-
-
 def build_planner_messages(
-    affordances: list[Affordance], recall: RecallBundle, pc_actor_id: str, intent_text: str
+    affordances: list[Affordance],
+    recall: RecallBundle,
+    pc_actor_id: str,
+    intent_text: str,
+    *,
+    env: PromptEnv | None = None,
 ) -> list[Message]:
     aff_lines = "\n".join(
         f"- {a.id} (ability {a.ability}, triggers {a.trigger_categories}"
@@ -91,7 +84,8 @@ def build_planner_messages(
         '"mode_transition": null or {"to":"encounter","cause":""}, '
         '"time_cost": 0, "narration_directives": "one line of pacing", "suggestions": ["..."]}'
     )
-    return [Message(role="system", content=PLANNER_SYSTEM), Message(role="user", content=user)]
+    system = (env or DEFAULT_ENV).render("planner.system.j2")
+    return [Message(role="system", content=system), Message(role="user", content=user)]
 
 
 def parse_plan(raw: str) -> BeatPlan | None:

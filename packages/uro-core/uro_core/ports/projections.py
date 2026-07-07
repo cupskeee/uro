@@ -37,6 +37,11 @@ class ProjectionQueries(Protocol):
 
     async def edges_from(self, branch_id: str, src: str) -> list[EdgeView]: ...
 
+    async def world_style(self, branch_id: str) -> tuple[str, dict[str, str]]:
+        """The narrator style (tone joined) + prompt-template overrides for a branch's world
+        (docs/09), from its WorldGenesis. ('', {}) for a world created without a pack."""
+        ...
+
     async def get_sheet(self, branch_id: str, actor_id: str) -> dict[str, Any] | None:
         """An actor's ruleset character sheet as a raw dict (docs/06); None if unsheeted."""
         ...

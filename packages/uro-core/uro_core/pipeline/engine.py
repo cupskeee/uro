@@ -44,6 +44,7 @@ from uro_core.pipeline.plan import (
     parse_plan,
     validate_plan,
 )
+from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle, assemble_recall, build_narrator_messages
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
@@ -108,6 +109,17 @@ class Engine:
         # bare = ablation baseline (thesis T1): a raw-transcript GM — no structured/
         # semantic recall, no extraction, no memory. Just the narrator over recent beats.
         self._bare = bare
+        # Per-branch prompt style (tone) + template env, from the world's pack (docs/09). Cached.
+        self._style_cache: dict[str, tuple[str, PromptEnv]] = {}
+
+    async def _prompt_style(self, branch_id: str) -> tuple[str, PromptEnv]:
+        """The world's narrator style + prompt-pack env for a branch (cached). A world created
+        without a pack yields ('', DEFAULT_ENV) — the shipped default templates, no tone."""
+        if branch_id not in self._style_cache:
+            style, overrides = await self._store.world_style(branch_id)
+            env = PromptEnv(overrides) if overrides else DEFAULT_ENV
+            self._style_cache[branch_id] = (style, env)
+        return self._style_cache[branch_id]
 
     async def _recall(self, branch_id: str, intent_text: str) -> RecallBundle:
         """Structured recall + semantic recall of older beats (docs/04).
@@ -184,6 +196,7 @@ class Engine:
         """Decide free-roam vs combat and build the narrator prompt. When the plan invokes an
         encounter-starting affordance (attack), resolve the whole fight deterministically FIRST
         (no LLM), then narrate its outcome — returning the fight's events for the commit stage."""
+        style, env = await self._prompt_style(campaign.branch_id)
         trigger = (
             encounter_trigger(self._ruleset, ctx.plan)
             if (self._ruleset is not None and ctx.plan is not None)
@@ -198,6 +211,8 @@ class Engine:
                     intent_text,
                     mechanics_traces=traces,
                     directives="A fight breaks out — narrate it, honoring these outcomes.",
+                    style=style,
+                    env=env,
                 )
                 return messages, events
         messages = build_narrator_messages(
@@ -205,6 +220,8 @@ class Engine:
             intent_text,
             mechanics_traces=ctx.mechanics_traces,
             directives=ctx.directives,
+            style=style,
+            env=env,
         )
         return messages, None
 
@@ -391,7 +408,8 @@ class Engine:
         assert self._ruleset is not None
         affordances = self._ruleset.affordances()
         known_ids = {a.actor_id for a in recall.actors} | ({pc_actor_id} if pc_actor_id else set())
-        messages = build_planner_messages(affordances, recall, pc_actor_id, intent_text)
+        _, env = await self._prompt_style(campaign.branch_id)
+        messages = build_planner_messages(affordances, recall, pc_actor_id, intent_text, env=env)
         reason = "no plan produced"
         for _ in range(3):  # 1 attempt + 2 re-asks (docs/13)
             started = time.perf_counter()
@@ -476,7 +494,8 @@ class Engine:
         """Extract state from prose through the gauntlet. Failure → narration-only beat
         (docs/13: state integrity is never sacrificed to keep prose, and prose is never
         lost to keep state)."""
-        messages = build_extractor_messages(recall, narration)
+        _, env = await self._prompt_style(branch_id)
+        messages = build_extractor_messages(recall, narration, env=env)
         started = time.perf_counter()
         raw: str | None = None
         try:

@@ -152,12 +152,21 @@ class PostgresEventStore:
     # --- worlds & campaigns ---
 
     async def create_world(
-        self, name: str, *, extra_events: list[DomainEvent] | None = None
+        self,
+        name: str,
+        *,
+        tone: list[str] | None = None,
+        prompt_overrides: dict[str, str] | None = None,
+        extra_events: list[DomainEvent] | None = None,
     ) -> World:
-        """Create a world + its `main` branch. The genesis commit is `WorldGenesis` plus any
-        `extra_events` — world-pack import (docs/09) passes the authored seed events (emitter S)
-        so the authored geography/actors/factions exist as state before any History seeding."""
-        genesis = [world_genesis(name), *(extra_events or [])]
+        """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
+        pack's tone + prompt overrides, docs/09) plus any `extra_events` — world-pack import
+        passes the authored seed events (emitter S) so authored geography/actors/factions exist
+        as state before any History seeding."""
+        genesis = [
+            world_genesis(name, tone=tone, prompt_overrides=prompt_overrides),
+            *(extra_events or []),
+        ]
         async with self.pool.acquire() as conn, conn.transaction():
             world_id = new_id()
             await conn.execute(
@@ -738,6 +747,22 @@ class PostgresEventStore:
                 src,
             )
         return [EdgeView(**dict(r)) for r in rows]
+
+    async def world_style(self, branch_id: str) -> tuple[str, dict[str, str]]:
+        """The narrator style (tone, joined) + prompt-template overrides for a branch's world
+        (docs/09), read from its WorldGenesis. ('', {}) for a world created without a pack."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT e.payload FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "JOIN branches b ON b.world_id = c.world_id "
+                "WHERE b.branch_id = $1 AND e.event_type = 'WorldGenesis' LIMIT 1",
+                branch_id,
+            )
+        if row is None:
+            return "", {}
+        payload = row["payload"]
+        return ", ".join(payload.get("tone", [])), payload.get("prompt_overrides", {})
 
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]:
         """Item ids an actor owns (docs/02) — used to loot a defeated combatant."""

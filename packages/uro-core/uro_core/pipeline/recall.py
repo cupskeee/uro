@@ -17,18 +17,10 @@ import re
 from pydantic import BaseModel, Field
 
 from uro_core.domain.events import BeatResolvedPayload
+from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
 from uro_core.timeline.models import ActorView, BeliefView, ClaimView
-
-_NARRATOR_SYSTEM = (
-    "You are the narrator of a text RPG set in a tavern. Continue the scene in two to "
-    "four sentences of vivid second-person prose. Never speak or decide for the player; "
-    "narrate only what they perceive and how the world responds. You are given ESTABLISHED "
-    "FACTS the world knows to be true and RUMORS that are unverified. If a character asserts "
-    "something that contradicts an established fact, a knowledgeable character present may "
-    "correct them; never present a rumor as settled truth."
-)
 
 
 class RecallBundle(BaseModel):
@@ -93,6 +85,8 @@ def build_narrator_messages(
     *,
     mechanics_traces: list[str] | None = None,
     directives: str = "",
+    style: str = "",
+    env: PromptEnv | None = None,
 ) -> list[Message]:
     facts = [c.statement for c in recall.claims if c.truth == "true"]
     rumors = [c.statement for c in recall.claims if c.truth != "true"]
@@ -132,7 +126,8 @@ def build_narrator_messages(
     if directives:
         context_lines.append(f"DIRECTION: {directives}")
 
-    messages = [Message(role="system", content=_NARRATOR_SYSTEM)]
+    system = (env or DEFAULT_ENV).render("narrator.system.j2", style=style)
+    messages = [Message(role="system", content=system)]
     if context_lines:
         messages.append(Message(role="system", content="\n\n".join(context_lines)))
     for beat in recall.recent_beats:

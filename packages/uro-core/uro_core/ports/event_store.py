@@ -24,10 +24,16 @@ from uro_core.timeline.models import (
 
 class EventStore(Protocol):
     async def create_world(
-        self, name: str, *, extra_events: list[DomainEvent] | None = None
+        self,
+        name: str,
+        *,
+        tone: list[str] | None = None,
+        prompt_overrides: dict[str, str] | None = None,
+        extra_events: list[DomainEvent] | None = None,
     ) -> World:
-        """Create a world: its `main` branch and a `WorldGenesis` genesis commit (plus any
-        `extra_events` — world-pack import passes the authored seed events, docs/09)."""
+        """Create a world: its `main` branch and a `WorldGenesis` genesis commit (carrying the
+        pack's tone + prompt overrides, plus any `extra_events` — world-pack import passes the
+        authored seed events, docs/09)."""
         ...
 
     async def get_world_by_name(self, name: str) -> World | None: ...

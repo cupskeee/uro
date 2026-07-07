@@ -59,6 +59,8 @@ class DomainEvent(BaseModel):
 class WorldGenesisPayload(BaseModel):
     v: int = 1
     world_name: str
+    tone: list[str] = Field(default_factory=list)  # narrator style tags from the pack (docs/09)
+    prompt_overrides: dict[str, str] = Field(default_factory=dict)  # pack prompts/ (filename→j2)
 
 
 class BeatResolvedPayload(BaseModel):
@@ -74,11 +76,20 @@ class BeatResolvedPayload(BaseModel):
 # --- Constructors (the only sanctioned way to mint these events) ---
 
 
-def world_genesis(world_name: str) -> DomainEvent:
+def world_genesis(
+    world_name: str,
+    *,
+    tone: list[str] | None = None,
+    prompt_overrides: dict[str, str] | None = None,
+) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
         caused_by=CausedBy(kind="system"),
-        payload=WorldGenesisPayload(world_name=world_name).model_dump(),
+        payload=WorldGenesisPayload(
+            world_name=world_name,
+            tone=tone or [],
+            prompt_overrides=prompt_overrides or {},
+        ).model_dump(),
     )
 
 

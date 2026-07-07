@@ -43,29 +43,12 @@ from uro_core.domain.events import (
     claim_recorded,
 )
 from uro_core.domain.ids import new_id
+from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.providers.base import Message
 
 _DEFAULT_BELIEF_CONFIDENCE = 0.8  # placeholder until belief-strength modeling (docs/11)
-
-EXTRACTOR_SYSTEM = (
-    "You extract DURABLE world state from RPG narration — the facts a game master would jot "
-    "on an index card, not the scenery. Report only what the prose states; never invent.\n\n"
-    "EXTRACT: named people / places / factions / items; facts about them (identity, role, "
-    "relationships, location, secrets, condition); plot developments; and lasting changes to "
-    "the world.\n\n"
-    "DO NOT EXTRACT (this is flavor, not canon — omit it, or mark durable=false): sensory and "
-    "atmospheric description (weather, lighting, smells, a crackling fire), the player's own "
-    "actions or movements, momentary gestures and mood, and generic scene-setting. When in "
-    "doubt, leave it out — a missed detail costs nothing, but flavor recorded as fact pollutes "
-    "the world state.\n\n"
-    "PROVENANCE: a fact the NARRATOR asserts as real → 'narrator'; something a CHARACTER says "
-    "(quotes or reported speech) → 'dialogue' with that character as 'speaker' (it may be a "
-    "lie). Name a new actor only if the prose explicitly names them. When a statement conflicts "
-    "with a KNOWN CLAIM, put that claim's id in 'contradicts'. Keep statements terse and "
-    "self-contained. Output ONLY a JSON object."
-)
 
 
 class ProposedActor(BaseModel):
@@ -93,7 +76,9 @@ def _name_token(name: str) -> str:
     return f"name:{name.strip().lower()}"
 
 
-def build_extractor_messages(recall: RecallBundle, narration: str) -> list[Message]:
+def build_extractor_messages(
+    recall: RecallBundle, narration: str, *, env: PromptEnv | None = None
+) -> list[Message]:
     known_actors = "\n".join(f"- {a.name} [{a.actor_id}]" for a in recall.actors) or "(none known)"
     known_claims = (
         "\n".join(f"- [{c.claim_id}] ({c.truth}) {c.statement}" for c in recall.claims) or "(none)"
@@ -106,8 +91,9 @@ def build_extractor_messages(recall: RecallBundle, narration: str) -> list[Messa
         '"speaker": name (dialogue only), "contradicts": [known claim ids], '
         '"durable": true for a lasting fact / false for flavor, "confidence": 0..1}]}'
     )
+    system = (env or DEFAULT_ENV).render("extractor.system.j2")
     return [
-        Message(role="system", content=EXTRACTOR_SYSTEM),
+        Message(role="system", content=system),
         Message(role="user", content=user),
     ]
 
