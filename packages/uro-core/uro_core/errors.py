@@ -26,3 +26,8 @@ class PlannerError(UroError):
 class PackError(UroError):
     """A world pack is malformed — bad TOML/YAML, a missing manifest, or a schema violation
     (docs/09). Raised by the parser with a message an author can act on."""
+
+
+class ExportError(UroError):
+    """An export bundle failed hash-chain verification — a commit's recomputed hash does not
+    match the bundle's stored hash, i.e. the bundle was altered in transit (docs/03, 07)."""

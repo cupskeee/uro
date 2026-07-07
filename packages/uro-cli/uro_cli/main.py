@@ -308,6 +308,56 @@ def world_probe(
     _run_async(_run)
 
 
+@world_app.command("export")
+def world_export(
+    world: str,
+    out: str = typer.Option(..., "-o", "--out", help="output bundle path (e.g. ashfall.uwp)"),
+) -> None:
+    """Export a world's whole log to a portable, hash-chain-verified bundle (docs/08)."""
+
+    async def _run() -> None:
+        from pathlib import Path
+
+        store = build_store()
+        await store.connect()
+        try:
+            w = await _world_or_exit(store, world)
+            bundle = await store.export_world(w.world_id)
+        finally:
+            await store.close()
+        Path(out).write_text(bundle.model_dump_json(indent=2))
+        typer.echo(f"exported {w.name!r}: {len(bundle.commits)} commits → {out}")
+
+    _run_async(_run)
+
+
+@world_app.command("import")
+def world_import(path: str) -> None:
+    """Import a world bundle (docs/08): verify its hash chain, then instantiate it as a fresh
+    world. A tampered bundle is rejected before anything is written."""
+
+    async def _run() -> None:
+        from pathlib import Path
+
+        from uro_core.errors import ExportError
+        from uro_core.export import WorldBundle
+
+        bundle = WorldBundle.model_validate_json(Path(path).read_text())
+        store = build_store()
+        await store.connect()
+        try:
+            world = await store.import_world(bundle)
+        except ExportError as exc:
+            typer.echo(f"error: bundle failed verification — {exc}", err=True)
+            raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        typer.echo(f"imported {world.name!r} (chain verified) → world {world.world_id}")
+        typer.echo(f"continue it:  uro campaign new {world.name} --branch main")
+
+    _run_async(_run)
+
+
 @app.command()
 def play(
     campaign_id: str,

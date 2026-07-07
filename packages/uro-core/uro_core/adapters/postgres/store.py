@@ -36,6 +36,16 @@ from uro_core.domain.events import (
 )
 from uro_core.domain.hashing import compute_commit_hash
 from uro_core.domain.ids import new_id
+from uro_core.export import (
+    BundleBranch,
+    BundleCommit,
+    BundleEvent,
+    BundleMarker,
+    WorldBundle,
+    chain_hashes,
+    stamp_chain,
+    verify_bundle,
+)
 from uro_core.metering import LLMCall
 from uro_core.timeline.models import (
     ActorView,
@@ -195,6 +205,148 @@ class PostgresEventStore:
             for event in genesis:
                 await apply_event(conn, branch_id, event)
             return World(world_id=world_id, name=name, main_branch_id=branch_id)
+
+    # --- export / import: a portable, hash-chain-verified world bundle (docs/03, 07, 08) ---
+
+    async def export_world(self, world_id: str) -> WorldBundle:
+        """Serialize a world's whole log — commits (with events), branches, markers — into a
+        bundle stamped with a self-consistent hash chain (verifiable on import)."""
+        async with self.pool.acquire() as conn:
+            world = await conn.fetchrow("SELECT name FROM worlds WHERE world_id = $1", world_id)
+            if world is None:
+                raise ValueError(f"no such world: {world_id}")
+            commit_rows = await conn.fetch(
+                "SELECT commit_id, parent_id, depth FROM commits "
+                "WHERE world_id = $1 ORDER BY depth ASC",
+                world_id,
+            )
+            commits: list[BundleCommit] = []
+            for c in commit_rows:
+                event_rows = await conn.fetch(
+                    "SELECT event_id, seq, event_type, entity_refs, world_time, caused_by, payload "
+                    "FROM events WHERE commit_id = $1 ORDER BY seq ASC",
+                    c["commit_id"],
+                )
+                commits.append(
+                    BundleCommit(
+                        commit_id=c["commit_id"],
+                        parent_id=c["parent_id"],
+                        depth=c["depth"],
+                        events=[
+                            BundleEvent(
+                                event_id=e["event_id"],
+                                seq=e["seq"],
+                                event_type=e["event_type"],
+                                entity_refs=list(e["entity_refs"]),
+                                world_time=e["world_time"],
+                                caused_by=e["caused_by"],
+                                payload=e["payload"],
+                            )
+                            for e in event_rows
+                        ],
+                    )
+                )
+            branch_rows = await conn.fetch(
+                "SELECT branch_id, name, head_commit, forked_from FROM branches "
+                "WHERE world_id = $1",
+                world_id,
+            )
+            marker_rows = await conn.fetch(
+                "SELECT marker_id, name, commit_id FROM markers WHERE world_id = $1", world_id
+            )
+        bundle = WorldBundle(
+            world_name=world["name"],
+            commits=commits,
+            branches=[BundleBranch(**dict(b)) for b in branch_rows],
+            markers=[BundleMarker(**dict(m)) for m in marker_rows],
+        )
+        stamp_chain(bundle)  # self-consistent chain over the exported events
+        return bundle
+
+    async def import_world(self, bundle: WorldBundle) -> World:
+        """Verify a bundle's hash chain, then instantiate it as a FRESH world (structural ids
+        remapped so a same-store re-import is collision-safe). Projections are rebuilt by replay,
+        so the world is immediately queryable and continuable."""
+        verify_bundle(bundle)  # ExportError if altered in transit
+        commit_map = {c.commit_id: new_id() for c in bundle.commits}
+        remapped = [
+            BundleCommit(
+                commit_id=commit_map[c.commit_id],
+                parent_id=commit_map[c.parent_id] if c.parent_id else None,
+                depth=c.depth,
+                events=[
+                    BundleEvent(
+                        event_id=new_id(),
+                        seq=e.seq,
+                        event_type=e.event_type,
+                        entity_refs=e.entity_refs,
+                        world_time=e.world_time,
+                        caused_by=e.caused_by,
+                        payload=e.payload,
+                    )
+                    for e in c.events
+                ],
+            )
+            for c in bundle.commits
+        ]
+        hashes = chain_hashes(remapped)  # fresh, valid chain for the new world
+        async with self.pool.acquire() as conn, conn.transaction():
+            world_id = new_id()
+            await conn.execute(
+                "INSERT INTO worlds (world_id, name) VALUES ($1, $2)", world_id, bundle.world_name
+            )
+            for c in sorted(remapped, key=lambda c: c.depth):
+                await conn.execute(
+                    "INSERT INTO commits (commit_id, world_id, parent_id, commit_hash, depth) "
+                    "VALUES ($1, $2, $3, $4, $5)",
+                    c.commit_id,
+                    world_id,
+                    c.parent_id,
+                    hashes[c.commit_id],
+                    c.depth,
+                )
+                for e in c.events:
+                    await conn.execute(
+                        "INSERT INTO events (event_id, commit_id, seq, event_type, entity_refs, "
+                        "world_time, caused_by, payload) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                        e.event_id,
+                        c.commit_id,
+                        e.seq,
+                        e.event_type,
+                        e.entity_refs,
+                        e.world_time,
+                        e.caused_by,
+                        e.payload,
+                    )
+            branch_map: dict[str, str] = {}
+            for b in bundle.branches:
+                branch_map[b.branch_id] = new_id()
+                await conn.execute(
+                    "INSERT INTO branches (branch_id, world_id, name, head_commit, forked_from) "
+                    "VALUES ($1, $2, $3, $4, $5)",
+                    branch_map[b.branch_id],
+                    world_id,
+                    b.name,
+                    commit_map.get(b.head_commit) if b.head_commit else None,
+                    commit_map.get(b.forked_from) if b.forked_from else None,
+                )
+            for m in bundle.markers:
+                await conn.execute(
+                    "INSERT INTO markers (marker_id, world_id, name, commit_id) "
+                    "VALUES ($1, $2, $3, $4)",
+                    new_id(),
+                    world_id,
+                    m.name,
+                    commit_map[m.commit_id],
+                )
+            for b in bundle.branches:  # rebuild each branch's projections by replay
+                if b.head_commit:
+                    ancestry = await self._ancestry(conn, commit_map[b.head_commit])
+                    await self._materialize_into(conn, branch_map[b.branch_id], ancestry)
+            main = next((b for b in bundle.branches if b.name == "main"), bundle.branches[0])
+            return World(
+                world_id=world_id, name=bundle.world_name, main_branch_id=branch_map[main.branch_id]
+            )
 
     async def get_world_by_name(self, name: str) -> World | None:
         async with self.pool.acquire() as conn:
