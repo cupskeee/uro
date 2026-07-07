@@ -1,0 +1,17 @@
+- id: "a:halbrecht"
+  name: "Duke Halbrecht"
+  tier: 2
+  role: "ruler"
+  faction: "f:duchy"
+  location: "p:vel"
+- id: "a:mera"
+  name: "Mera"
+  tier: 2
+  role: "innkeeper"
+  aliases: ["the barkeep"]
+  location: "p:brinehouse"
+- id: "a:weck"
+  name: "Old Weck"
+  tier: 1
+  role: "dock fisher"
+  location: "p:vel"

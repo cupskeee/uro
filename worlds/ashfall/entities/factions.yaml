@@ -1,0 +1,10 @@
+- id: "f:duchy"
+  name: "The Duchy of Vel"
+  kind: "faction"
+  description: "The failing noble house that still nominally rules the coast."
+  at_war_with: ["f:saltborn"]
+- id: "f:saltborn"
+  name: "The Saltborn"
+  kind: "religion"
+  description: "A drowned-god cult that takes people from the docks."
+  at_war_with: ["f:duchy"]

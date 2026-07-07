@@ -1,0 +1,16 @@
+- id: "a:hen"
+  name: "Hen the Innkeep"
+  tier: 2
+  role: "innkeeper"
+  faction: "f:council"
+  location: "p:oakrest"
+- id: "a:marta"
+  name: "Marta Orchardward"
+  tier: 1
+  role: "orchardkeeper"
+  location: "p:thornwood"
+- id: "a:pip"
+  name: "Pip"
+  tier: 1
+  role: "stableboy"
+  location: "p:oakrest"

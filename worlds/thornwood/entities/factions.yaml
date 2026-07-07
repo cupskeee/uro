@@ -1,0 +1,4 @@
+- id: "f:council"
+  name: "The Village Council"
+  kind: "faction"
+  description: "The handful of elders who settle Thornwood's small disputes over cider."

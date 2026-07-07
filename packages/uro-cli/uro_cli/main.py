@@ -118,6 +118,33 @@ def world_new(name: str) -> None:
     _run_async(_run)
 
 
+@world_app.command("validate")
+def world_validate(path: str) -> None:
+    """Parse a world pack and report its sufficiency (docs/09) — the creator loop, no import."""
+    from uro_core.errors import PackError
+    from uro_core.worldpack.parse import parse_pack
+    from uro_core.worldpack.sufficiency import check_sufficiency
+
+    try:
+        pack = parse_pack(path)
+    except PackError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    report = check_sufficiency(pack)
+    typer.echo(
+        f"world: {pack.manifest.name}  "
+        f"({len(pack.places)} places, {len(pack.actors)} actors, "
+        f"{len(pack.factions)} factions, {len(pack.threads)} conflict seeds)"
+    )
+    typer.echo(f"grade: {report.grade.upper()}")
+    for d in report.dimensions:
+        typer.echo(f"  {'ok ' if d.ok else 'GAP'} {d.name:<10} {d.detail}")
+    if report.grade != "runnable":
+        typer.echo("\ngaps to fix (or run backfill):")
+        for g in report.gaps:
+            typer.echo(f"  - {g}")
+
+
 @app.command()
 def play(
     campaign_id: str,

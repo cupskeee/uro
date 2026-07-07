@@ -21,3 +21,8 @@ class EmptyNarrationError(UroError):
 class PlannerError(UroError):
     """The planner could not produce a valid plan after re-asks; the beat is unrunnable
     (docs/13: a beat without a plan fails, retryable as a fresh beat)."""
+
+
+class PackError(UroError):
+    """A world pack is malformed — bad TOML/YAML, a missing manifest, or a schema violation
+    (docs/09). Raised by the parser with a message an author can act on."""

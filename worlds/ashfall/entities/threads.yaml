@@ -1,0 +1,3 @@
+- id: "t:saltborn-ritual"
+  stakes: "The Saltborn gather to complete a ritual that would drown Vel beneath the tide."
+  state: "active"

@@ -1,0 +1,21 @@
+# Thornwood — a deliberately THIN example pack (docs/09). Grades "thin": everything is present
+# except conflict seeds, so `uro world validate` flags it and the AI backfill pass can fill it.
+
+[world]
+name = "Thornwood"
+tone = ["pastoral", "cozy"]
+
+[content]
+rating = "mild"
+enabled = []
+
+[calendar]
+days_per_year = 360
+seasons = ["spring", "summer", "autumn", "winter"]
+
+[ruleset]
+id = "uro-basic"
+
+[history]
+seed_era = "the-long-peace"
+simulate_years = 50

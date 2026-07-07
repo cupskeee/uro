@@ -1,0 +1,26 @@
+# Ashfall — a rich example world pack (docs/09). Grades "runnable".
+
+[world]
+name = "Ashfall"
+tone = ["grim", "low-magic", "political"]
+
+[content]
+rating = "mature"
+enabled = ["violence", "horror"]
+disabled = ["sexual_content"]
+
+[calendar]
+days_per_year = 360
+seasons = ["thaw", "highsun", "harvest", "longdark"]
+epoch_label = "After the Sundering"
+
+[ruleset]
+id = "uro-basic"
+version = ">=0"
+
+[history]
+seed_era = "aftermath-of-empire"
+simulate_years = 200
+
+[llm.roles]
+narrator = "anthropic:claude-sonnet-5"
