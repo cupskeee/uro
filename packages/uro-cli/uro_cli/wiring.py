@@ -22,8 +22,8 @@ from uro_core.providers.adapters.openai_compat import OpenAICompatProvider
 from uro_core.providers.adapters.stub import StubProvider
 from uro_core.providers.base import LLMProvider
 from uro_core.providers.router import ProviderRouter
+from uro_core.rulesets import registry
 from uro_core.rulesets.base import Ruleset
-from uro_core.rulesets.uro_basic import UroBasic
 
 DEFAULT_DSN = "postgresql://uro:uro@localhost:5433/uro"
 
@@ -38,9 +38,14 @@ def build_store() -> PostgresEventStore:
     return PostgresEventStore(db_dsn())
 
 
-def build_ruleset() -> Ruleset:
-    """The bound ruleset (docs/06). Built-in Uro Basic for now; world packs will select one."""
-    return UroBasic()
+def build_ruleset(
+    ruleset_id: str = "", version: str = "", config: dict[str, Any] | None = None
+) -> Ruleset:
+    """Resolve a campaign's / world pack's declared ruleset to a bound instance via the registry
+    (docs/06, D-30). Empty id → the default (uro-basic); an unknown id raises. The play/campaign
+    paths pass the campaign's or world's recorded id so a PbtA world binds uro_pbta, not the
+    hard-coded default it used to."""
+    return registry.resolve(ruleset_id, version, config)
 
 
 def _config() -> dict[str, Any]:

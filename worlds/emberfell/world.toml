@@ -1,0 +1,23 @@
+# Emberfell — the example pack bound to the ALIEN ruleset (uro_pbta, PbtA 2d6). Proves a world
+# pack selects a NON-d20 ruleset and a campaign plays under it end-to-end (docs/06, D-30). Grades
+# "runnable" (3 actors, a conflict seed, tone, seeded history).
+
+[world]
+name = "Emberfell"
+tone = ["gritty", "frontier", "desperate"]
+
+[content]
+rating = "mature"
+enabled = ["violence"]
+
+[calendar]
+days_per_year = 300
+seasons = ["thaw", "dust", "emberfall", "frost"]
+
+[ruleset]
+id = "uro-pbta"
+version = ">=0"
+
+[history]
+seed_era = "the-strike-that-emptied"
+simulate_years = 40

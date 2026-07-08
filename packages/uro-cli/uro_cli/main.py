@@ -49,9 +49,10 @@ async def _world_or_exit(store: PostgresEventStore, ident: str) -> World:
     return world
 
 
-def _build_pc_sheet() -> tuple[dict[str, Any], str]:
-    """A default character sheet from the bound ruleset, so every PC can be checked (docs/06)."""
-    ruleset = build_ruleset()
+def _build_pc_sheet(ruleset_id: str = "", version: str = "") -> tuple[dict[str, Any], str]:
+    """A default character sheet from the world's bound ruleset, so every PC can be checked
+    (docs/06). `ruleset_id` selects it via the registry — a PbtA world mints a PbtA sheet."""
+    ruleset = build_ruleset(ruleset_id, version)
     return ruleset.new_character(CharSpec(), Rng(0)), ruleset.id
 
 
@@ -184,6 +185,8 @@ def world_create(
                 pack.manifest.name,
                 tone=pack.manifest.tone,
                 prompt_overrides=pack.prompts,
+                ruleset_id=pack.manifest.ruleset.id,
+                ruleset_version=pack.manifest.ruleset.version,
                 extra_events=pack_to_events(pack),
             )
         finally:
@@ -390,7 +393,10 @@ def play(
             engine = Engine(
                 store,
                 build_router(provider, model),
-                ruleset=None if (bare or no_mechanics) else build_ruleset(),
+                # Rebind the campaign's OWN ruleset (D-30) — a PbtA campaign plays under uro_pbta.
+                ruleset=None
+                if (bare or no_mechanics)
+                else build_ruleset(campaign.ruleset_id, campaign.ruleset_version),
                 bare=bare,
             )
 
@@ -435,9 +441,16 @@ def serve(
     ),
     provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
     model: str = typer.Option(None, help="model id for the provider"),
+    ruleset: str = typer.Option(
+        "", help="ruleset id for this server process (default: uro-basic via the registry)"
+    ),
 ) -> None:
     """Run the Uro server (docs/08): a thin FastAPI shell over the engine. Each --token maps to
-    a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop)."""
+    a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop).
+
+    NOTE (PoC limitation): the server binds ONE ruleset per process (--ruleset), since its single
+    Engine is shared across campaigns. Per-campaign rebinding (as the `play`/`dry-run` CLI paths
+    do from campaign.ruleset_id) needs the Engine to resolve the ruleset per beat — deferred."""
     import uvicorn
     from uro_core.pipeline.engine import Engine
     from uro_server.app import create_app, engine_deps
@@ -445,7 +458,7 @@ def serve(
     toks = token or ["local"]
     tokens = {t: f"player-{i + 1}" for i, t in enumerate(toks)}
     store = build_store()
-    engine = Engine(store, build_router(provider, model), ruleset=build_ruleset())
+    engine = Engine(store, build_router(provider, model), ruleset=build_ruleset(ruleset))
     fastapi_app = create_app(engine_deps(store, engine, tokens))
 
     @fastapi_app.on_event("startup")
@@ -642,15 +655,19 @@ def campaign_new(
             if b is None:
                 typer.echo(f"no such branch: {branch}", err=True)
                 raise typer.Exit(1)
-            # Every PC needs a sheet so the mechanics gate can check it (docs/06). A fresh PC
-            # gets one; an adopted actor is sheeted only if it lacks one (a re-adopted former
-            # PC keeps the sheet carried on its branch).
+            # Bind the WORLD's declared ruleset (docs/06, D-30): a PbtA world's campaign is
+            # played under uro_pbta, not the hard-coded default. ('' → registry default.)
+            world_rid, world_rver = await store.world_ruleset(b.branch_id)
+            # Every PC needs a sheet so the mechanics gate can check it. A fresh PC gets one; an
+            # adopted actor is sheeted only if it lacks one (a re-adopted PC keeps its sheet).
             pc_sheet = None
             ruleset_id = ""
             if pc is not None or (
                 adopt is not None and await store.get_sheet(b.branch_id, adopt) is None
             ):
-                pc_sheet, ruleset_id = _build_pc_sheet()
+                pc_sheet, ruleset_id = _build_pc_sheet(world_rid, world_rver)
+            else:
+                ruleset_id = build_ruleset(world_rid, world_rver).id
             campaign = await store.start_campaign(
                 w.world_id,
                 b.branch_id,
@@ -660,6 +677,7 @@ def campaign_new(
                 pc_sheet=pc_sheet,
                 starting_items=["a traveler's knife"] if pc is not None else None,
                 ruleset_id=ruleset_id,
+                ruleset_version=world_rver,
             )
         finally:
             await store.close()
@@ -708,7 +726,11 @@ def dry_run(
             if campaign is None:
                 typer.echo(f"no such campaign: {campaign_id}", err=True)
                 raise typer.Exit(1)
-            engine = Engine(store, build_router(provider, model), ruleset=build_ruleset())
+            engine = Engine(
+                store,
+                build_router(provider, model),
+                ruleset=build_ruleset(campaign.ruleset_id, campaign.ruleset_version),
+            )
             events = await engine.preview_beat(campaign, PARTICIPANT, intent)
         finally:
             await store.close()

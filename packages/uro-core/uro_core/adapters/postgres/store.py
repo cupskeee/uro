@@ -170,6 +170,8 @@ class PostgresEventStore:
         *,
         tone: list[str] | None = None,
         prompt_overrides: dict[str, str] | None = None,
+        ruleset_id: str = "",
+        ruleset_version: str = "",
         extra_events: list[DomainEvent] | None = None,
     ) -> World:
         """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
@@ -177,7 +179,13 @@ class PostgresEventStore:
         passes the authored seed events (emitter S) so authored geography/actors/factions exist
         as state before any History seeding."""
         genesis = [
-            world_genesis(name, tone=tone, prompt_overrides=prompt_overrides),
+            world_genesis(
+                name,
+                tone=tone,
+                prompt_overrides=prompt_overrides,
+                ruleset_id=ruleset_id,
+                ruleset_version=ruleset_version,
+            ),
             *(extra_events or []),
         ]
         async with self.pool.acquire() as conn, conn.transaction():
@@ -419,7 +427,8 @@ class PostgresEventStore:
     async def get_campaign(self, campaign_id: str) -> Campaign | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT campaign_id, world_id, branch_id FROM campaigns WHERE campaign_id = $1",
+                "SELECT campaign_id, world_id, branch_id, ruleset_id, ruleset_version "
+                "FROM campaigns WHERE campaign_id = $1",
                 campaign_id,
             )
         return Campaign(**dict(row)) if row else None
@@ -438,6 +447,7 @@ class PostgresEventStore:
         pc_sheet: dict[str, Any] | None = None,
         starting_items: list[str] | None = None,
         ruleset_id: str = "",
+        ruleset_version: str = "",
         seed: int = 0,
     ) -> Campaign:
         """Create a campaign on a branch and bind its PC — either ADOPT an existing world
@@ -463,6 +473,7 @@ class PostgresEventStore:
                 branch_id=branch_id,
                 party=[pc_actor_id],
                 ruleset_id=ruleset_id,
+                ruleset_version=ruleset_version,
                 seed=seed,
             )
         )
@@ -493,13 +504,22 @@ class PostgresEventStore:
                         f"cannot adopt unknown actor {adopt_actor_id!r} on this branch"
                     )
             await conn.execute(
-                "INSERT INTO campaigns (campaign_id, world_id, branch_id) VALUES ($1, $2, $3)",
+                "INSERT INTO campaigns (campaign_id, world_id, branch_id, ruleset_id, "
+                "ruleset_version) VALUES ($1, $2, $3, $4, $5)",
                 campaign_id,
                 world_id,
                 branch_id,
+                ruleset_id,
+                ruleset_version,
             )
             await self._append(conn, branch_id, events)
-        return Campaign(campaign_id=campaign_id, world_id=world_id, branch_id=branch_id)
+        return Campaign(
+            campaign_id=campaign_id,
+            world_id=world_id,
+            branch_id=branch_id,
+            ruleset_id=ruleset_id,
+            ruleset_version=ruleset_version,
+        )
 
     async def end_campaign(
         self, campaign_id: str, marker_name: str, *, outcome: str = ""
@@ -972,6 +992,23 @@ class PostgresEventStore:
             return "", {}
         payload = row["payload"]
         return ", ".join(payload.get("tone", [])), payload.get("prompt_overrides", {})
+
+    async def world_ruleset(self, branch_id: str) -> tuple[str, str]:
+        """The (ruleset_id, ruleset_version) a branch's world declares, read from its WorldGenesis
+        (docs/06). ('', '') for a world created without a pack → the registry default (uro-basic).
+        A campaign started on the branch binds this, so the pack's ruleset flows to play."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT e.payload FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "JOIN branches b ON b.world_id = c.world_id "
+                "WHERE b.branch_id = $1 AND e.event_type = 'WorldGenesis' LIMIT 1",
+                branch_id,
+            )
+        if row is None:
+            return "", ""
+        payload = row["payload"]
+        return payload.get("ruleset_id", ""), payload.get("ruleset_version", "")
 
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]:
         """Item ids an actor owns (docs/02) — used to loot a defeated combatant."""

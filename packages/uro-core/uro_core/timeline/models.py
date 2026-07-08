@@ -59,6 +59,8 @@ class Campaign(BaseModel):
     campaign_id: str
     world_id: str
     branch_id: str
+    ruleset_id: str = ""  # the ruleset this campaign is bound to (docs/06); "" → registry default
+    ruleset_version: str = ""
 
 
 # --- Projection read-models (docs/02, 07). Materialized state at a branch head. ---

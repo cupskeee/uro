@@ -32,7 +32,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### World & places
 | event_type | payload (beyond `v`) | emit | notes |
 |---|---|---|---|
-| `WorldGenesis` | world_name, tone[], prompt_overrides{} | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) |
+| `WorldGenesis` | world_name, tone[], prompt_overrides{}, ruleset_id, ruleset_version | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) + its declared ruleset (`06`, D-30 — a campaign started on the world binds it) |
 | `PlaceCreated` | place entity, tier of detail | X H S | extractor may create Sites only |
 | `PlaceStateChanged` | place_id, changes{} | X H A | population, government ref, economy flavor |
 | `TerrainChanged` | place_id, description, effects[] | H R S | the meteor crater; slow-layer physical change. Mid-play, History emits it as a **thread's consequence-on-resolution** (`02`), `caused_by=player_action` — this is how a player-triggered cataclysm is recorded during a campaign (not extractor/pipeline) |
@@ -87,7 +87,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Play & campaign
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `CampaignStarted` | campaign_id, branch_id, party[], ruleset_id, seed | S | (`ruleset_id` records the governing ruleset; version tracking arrives with world packs, Phase 4) |
+| `CampaignStarted` | campaign_id, branch_id, party[], ruleset_id, ruleset_version, seed | S | pins the governing ruleset id **and version** (D-30) so a later play/fork rebinds the same ruleset via the registry (`06`) |
 | `CampaignEnded` | campaign_id, outcome, marker_ref | S | usually paired with a marker |
 | `SceneEntered` | place_id, present_actors[], mode | P | |
 | `ModeChanged` | from, to (`freeroam|encounter|downtime`), cause | P R | |

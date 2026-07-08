@@ -1,0 +1,17 @@
+- id: "a:cass"
+  name: "Cass Holloway"
+  tier: 2
+  role: "claim-boss"
+  faction: "f:company"
+  location: "p:emberfell"
+- id: "a:river"
+  name: "River"
+  tier: 2
+  role: "free-digger"
+  faction: "f:diggers"
+  location: "p:emberfell"
+- id: "a:doc"
+  name: "Doc Venn"
+  tier: 1
+  role: "sawbones"
+  location: "p:emberfell"

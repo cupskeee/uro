@@ -1,0 +1,10 @@
+- id: "f:company"
+  name: "The Holloway Company"
+  kind: "faction"
+  description: "Owns the deeds, the gallows, and most of the guns in Emberfell."
+  at_war_with: ["f:diggers"]
+- id: "f:diggers"
+  name: "The Free Diggers"
+  kind: "faction"
+  description: "Wildcat miners who worked the Deep Vein before the Company claimed it."
+  at_war_with: ["f:company"]

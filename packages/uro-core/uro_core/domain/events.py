@@ -61,6 +61,8 @@ class WorldGenesisPayload(BaseModel):
     world_name: str
     tone: list[str] = Field(default_factory=list)  # narrator style tags from the pack (docs/09)
     prompt_overrides: dict[str, str] = Field(default_factory=dict)  # pack prompts/ (filename→j2)
+    ruleset_id: str = ""  # the pack's declared ruleset (docs/06); "" → the default (uro-basic)
+    ruleset_version: str = ""
 
 
 class BeatResolvedPayload(BaseModel):
@@ -81,6 +83,8 @@ def world_genesis(
     *,
     tone: list[str] | None = None,
     prompt_overrides: dict[str, str] | None = None,
+    ruleset_id: str = "",
+    ruleset_version: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
@@ -89,6 +93,8 @@ def world_genesis(
             world_name=world_name,
             tone=tone or [],
             prompt_overrides=prompt_overrides or {},
+            ruleset_id=ruleset_id,
+            ruleset_version=ruleset_version,
         ).model_dump(),
     )
 
@@ -376,6 +382,7 @@ class CampaignStartedPayload(BaseModel):
     branch_id: str
     party: list[str] = Field(default_factory=list)  # PC actor ids
     ruleset_id: str = ""  # the ruleset this campaign is played under (docs/06, 12)
+    ruleset_version: str = ""  # pinned at creation so a later play/fork rebinds the same ruleset
     seed: int = 0
 
 
@@ -406,6 +413,7 @@ def campaign_started(
     branch_id: str,
     party: list[str] | None = None,
     ruleset_id: str = "",
+    ruleset_version: str = "",
     seed: int = 0,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
@@ -418,6 +426,7 @@ def campaign_started(
             branch_id=branch_id,
             party=party or [],
             ruleset_id=ruleset_id,
+            ruleset_version=ruleset_version,
             seed=seed,
         ).model_dump(),
     )
