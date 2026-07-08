@@ -103,3 +103,29 @@ Other reserved: `AdmitDecision.QUEUED` (proposal-window arbiter), `TEMPLATE_API_
 the transactional outbox + async event bus (docs/07 — the shipped model is inline-projector-in-txn),
 `uro world delete` (privacy wipe), persisted probe reports, the full REST management surface, the
 per-campaign expected-head concurrency guard, consequence-gating (D-21), the `entity_index` (OQ-3).
+
+## Live validation results (2026-07-09, `scripts/postpoc_validate.sh`, default gpt-4o-mini)
+
+First live run of the post-PoC phases. Owner ran the harness; analyzed from Postgres.
+
+- **Phase 6 (PbtA) — binding & sheet PASS; live conflict-routing FAIL; extraction leak.**
+  ✅ Campaign bound `uro-pbta`; PC sheet is genuinely PbtA (`{stats,harm,conditions,xp}`, no hp/ac);
+  8 beats played, recall/extraction/memory built state (27 claims, 6 beliefs). ❌ **No mechanical
+  conflict committed** — the "go aggro / seize by force" intent produced no `EncounterStarted`: the
+  live planner didn't route it to the `seize_by_force` (starts-encounter) affordance (or emitted an
+  unresolvable target). The engine path is proven (`test_alien_acceptance`), so this is a live
+  small-model planner-routing gap on the PbtA move vocab (same class as the P3 ~50% freeform
+  failure). ⚠️ **Consistency gap** (the thesis's own failure mode, surfaced): the narrator wrote a
+  brawl + injuries ("bruises across your ribs") and the extractor canonized them `truth=true`, but
+  the PC sheet shows `harm=0` — narration-asserted state diverged from mechanical state because no
+  fight ran. ⚠️ **Flavor over-extraction confirmed live**: 21/27 claims `truth=true`, many transient
+  atmosphere ("Cass is puffing on a cigar", "determination smoldering") — the known, unfixed P1.5
+  follow-up, worse in a combat-flavor scene.
+- **Phase 8 (Chronicler) — clean PASS.** feat `truth=unknown`/`origin=external`; Mera holds the
+  war-story rumor at conf **0.272**, traceable `mera ← townsfolk(0.495) ← raider1(0.900)`; the live
+  narrator **retold it hedged** ("*They say*… can you believe it?" / "the truth? Who knows?"), not
+  settled fact — the confidence→phrasing→narrator path works end-to-end with a real model. (Minor:
+  the narrator added extra rumor flavor — harmless as `truth=unknown` dialogue testimony.)
+- **Tooling gap:** `llm_calls` stores only a `prompt_hash`, not prompts/responses — so the live
+  planner-routing failure can't be pinned from Postgres alone (need response capture / a recorded
+  mode to debug which failure it was).
