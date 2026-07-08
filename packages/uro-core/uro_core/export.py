@@ -60,12 +60,30 @@ class BundleMarker(BaseModel):
     commit_id: str
 
 
+class BundleEmbedding(BaseModel):
+    content_hash: str
+    vector: str  # pgvector text form '[...]' (content-hash-shared; never recomputed)
+
+
+class BundleMemory(BaseModel):
+    branch_id: str
+    commit_id: str
+    content_hash: str
+    kind: str
+    text: str
+    entity_refs: list[str] = Field(default_factory=list)
+
+
 class WorldBundle(BaseModel):
     v: int = 1
     world_name: str
     commits: list[BundleCommit] = Field(default_factory=list)
     branches: list[BundleBranch] = Field(default_factory=list)
     markers: list[BundleMarker] = Field(default_factory=list)
+    # Semantic-memory cache (docs/07): carried so an import keeps long-range recall, symmetric
+    # with copy-on-fork. Aux/best-effort — NOT part of manifest_hash (the authoritative log is).
+    embeddings: list[BundleEmbedding] = Field(default_factory=list)
+    memory: list[BundleMemory] = Field(default_factory=list)
     manifest_hash: str = ""  # binds world_name + branch/marker structure + commit hashes
 
 

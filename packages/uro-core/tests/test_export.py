@@ -103,6 +103,26 @@ async def test_export_import_roundtrip_and_continue(store: PostgresEventStore) -
     assert result.commit_id
 
 
+async def test_export_import_carries_semantic_memory(store: PostgresEventStore) -> None:
+    # Cross-phase (P1 memory x P5 export): an import must keep long-range recall, like a fork does —
+    # else the flagship P1 recall thesis silently breaks on the imported world.
+    world = await store.create_world("MemWorld")
+    campaign = await store.start_campaign(
+        world.world_id, world.main_branch_id, participant_id="p1", new_pc_name="A", new_pc_id="a:a"
+    )
+    engine = Engine(
+        store, ProviderRouter(bindings={}, default=_Stub())
+    )  # narrates "The pier groans…"
+    await engine.run_beat(campaign, "p1", "I look around")  # populates memory_index + embeddings
+
+    query = hashing_embedding("The pier groans under the grey tide.")
+    assert await store.search(world.main_branch_id, query, 3)  # the source recalls it
+
+    dst = await store.import_world(await store.export_world(world.world_id))
+    hits = await store.search(dst.main_branch_id, query, 3)
+    assert hits and any("pier" in h.text for h in hits)  # ...and so does the import
+
+
 async def test_tampered_bundle_is_rejected_before_write(store: PostgresEventStore) -> None:
     pack = parse_pack(WORLDS / "ashfall")
     src = await store.create_world(pack.manifest.name, extra_events=pack_to_events(pack))

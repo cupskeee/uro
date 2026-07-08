@@ -25,7 +25,17 @@ Anything a *platform* would build: user accounts and social features, world/asse
 
 ## Status
 
-**Phase 0 + Phase 1 are code-complete** (72 tests), and the **core thesis is validated live**: in an ablation run, the full engine's narrator recalled a named NPC and a plot fact ~11 beats later — past the recency window — while the `--bare` (raw-transcript) arm forgot them entirely. What runs today: the full beat pipeline — structured + semantic recall → narration → extraction → validation gauntlet → commit → projections — with a claim/belief epistemic layer (an NPC can lie without corrupting world truth), pgvector semantic memory, four LLM provider adapters (stub, OpenAI-compatible, Anthropic, with per-role routing), and a thesis harness (`--bare` ablation + `uro consistency`). Reproduce it: [docs/live-run.md](docs/live-run.md) / `scripts/ablation.sh` (needs an API key). Signature feature next: **branching timelines** (Phase 2). See [10-roadmap.md](docs/10-roadmap.md).
+**All five PoC phases are code-complete** (165 tests green, fully deterministic in CI), and the **core thesis is validated live**: in an ablation run the full engine's narrator recalled a named NPC and a plot fact ~11 beats later — past the recency window — while the `--bare` (raw-transcript) arm forgot them entirely.
+
+What runs today, phase by phase (each with a passing acceptance test):
+
+- **P1 — state engine:** the beat pipeline (structured + semantic recall → narration → extraction → validation gauntlet → commit → projections) with a claim/belief epistemic layer (an NPC can lie without corrupting world truth), pgvector semantic memory, four provider adapters (stub / OpenAI-compatible / Anthropic, per-role routing).
+- **P2 — branching timelines:** markers, snapshots, copy-on-fork, materialize-at-any-commit, per-branch PC binding, time-skip — the **meteor test** (one event log; continue / new-life / what-if forks coexist, no special-casing).
+- **P3 — mechanics:** a pluggable, deterministic ruleset port + Uro Basic (d20, seeded RNG, encounter mode); a fight replays byte-identically — the **insult→combat→consequences** acceptance.
+- **P4 — worlds:** the world-pack format + sufficiency check + AI backfill, import + procedural History seeding (seed 42 ≠ 43 on identical geography), prompt-template packs, capability probes.
+- **P5 — server & federation:** a WS play server (broadcast, token auth), export/import with hash-chain verification, off-screen belief/rumor propagation, and Chronicler mode — the **war-story test** (an external battle's feat ripples to witnesses; a tavern NPC retells a traceable rumor).
+
+The live-model legs (thesis, planner, backfill/probe) are run separately with an API key — CI never makes live LLM calls. Reproduce the thesis: [docs/live-run.md](docs/live-run.md) / `scripts/ablation.sh`. See [10-roadmap.md](docs/10-roadmap.md) for the post-PoC horizon.
 
 ## Quickstart
 

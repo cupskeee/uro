@@ -60,7 +60,8 @@ async def assemble_recall(
     on_stage = [
         a
         for a in actors_all
-        if _mentions(haystack, a.name) or any(_mentions(haystack, al) for al in a.aliases)
+        if a.status != "dead"  # a dead actor is not a live present character (docs/02)
+        and (_mentions(haystack, a.name) or any(_mentions(haystack, al) for al in a.aliases))
     ]
     on_stage_ids = {a.actor_id for a in on_stage}
 

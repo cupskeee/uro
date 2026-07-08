@@ -39,8 +39,10 @@ from uro_core.domain.ids import new_id
 from uro_core.export import (
     BundleBranch,
     BundleCommit,
+    BundleEmbedding,
     BundleEvent,
     BundleMarker,
+    BundleMemory,
     WorldBundle,
     chain_hashes,
     stamp_chain,
@@ -256,19 +258,39 @@ class PostgresEventStore:
             marker_rows = await conn.fetch(
                 "SELECT marker_id, name, commit_id FROM markers WHERE world_id = $1", world_id
             )
+            # Carry the semantic-memory cache so recall survives an import (symmetric with fork).
+            branch_ids = [b["branch_id"] for b in branch_rows]
+            memory_rows = await conn.fetch(
+                "SELECT branch_id, commit_id, content_hash, kind, text, entity_refs "
+                "FROM memory_index WHERE branch_id = ANY($1::text[])",
+                branch_ids,
+            )
+            hashes = list({r["content_hash"] for r in memory_rows})
+            emb_rows = (
+                await conn.fetch(
+                    "SELECT content_hash, vector::text AS vector FROM embeddings "
+                    "WHERE content_hash = ANY($1::text[])",
+                    hashes,
+                )
+                if hashes
+                else []
+            )
         bundle = WorldBundle(
             world_name=world["name"],
             commits=commits,
             branches=[BundleBranch(**dict(b)) for b in branch_rows],
             markers=[BundleMarker(**dict(m)) for m in marker_rows],
+            embeddings=[BundleEmbedding(**dict(e)) for e in emb_rows],
+            memory=[BundleMemory(**dict(m)) for m in memory_rows],
         )
         stamp_chain(bundle)  # self-consistent chain over the exported events
         return bundle
 
     async def import_world(self, bundle: WorldBundle) -> World:
         """Verify a bundle's hash chain, then instantiate it as a FRESH world (structural ids
-        remapped so a same-store re-import is collision-safe). Projections are rebuilt by replay,
-        so the world is immediately queryable and continuable."""
+        remapped so a same-store re-import is collision-safe). Projections are rebuilt by replay and
+        the semantic-memory cache is re-inserted from the bundle (replay can't rebuild it) — so the
+        world is immediately queryable, has long-range recall, and is continuable."""
         verify_bundle(bundle)  # ExportError if altered in transit
         commit_map = {c.commit_id: new_id() for c in bundle.commits}
         remapped = [
@@ -345,6 +367,28 @@ class PostgresEventStore:
                 if b.head_commit:
                     ancestry = await self._ancestry(conn, commit_map[b.head_commit])
                     await self._materialize_into(conn, branch_map[b.branch_id], ancestry)
+            # Re-insert the semantic-memory cache (replay can't rebuild it — it needs the embedder).
+            # Embeddings are content-hash-shared; membership rows carry the branch/commit remap.
+            for emb in bundle.embeddings:
+                await conn.execute(
+                    "INSERT INTO embeddings (content_hash, vector) VALUES ($1, $2::vector) "
+                    "ON CONFLICT (content_hash) DO NOTHING",
+                    emb.content_hash,
+                    emb.vector,
+                )
+            for mem in bundle.memory:
+                await conn.execute(
+                    "INSERT INTO memory_index "
+                    "(memory_id, branch_id, content_hash, kind, text, entity_refs, commit_id) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    new_id(),
+                    branch_map[mem.branch_id],
+                    mem.content_hash,
+                    mem.kind,
+                    mem.text,
+                    mem.entity_refs,
+                    commit_map[mem.commit_id],
+                )
             main = next((b for b in bundle.branches if b.name == "main"), bundle.branches[0])
             return World(
                 world_id=world_id, name=bundle.world_name, main_branch_id=branch_map[main.branch_id]
@@ -1095,7 +1139,7 @@ class PostgresEventStore:
     async def get_actor(self, branch_id: str, actor_id: str) -> ActorView | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT actor_id, name, tier, role, aliases FROM proj_actors "
+                "SELECT actor_id, name, tier, role, aliases, status FROM proj_actors "
                 "WHERE branch_id = $1 AND actor_id = $2",
                 branch_id,
                 actor_id,
@@ -1105,7 +1149,7 @@ class PostgresEventStore:
     async def find_actor_by_name(self, branch_id: str, name: str) -> ActorView | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT actor_id, name, tier, role, aliases FROM proj_actors "
+                "SELECT actor_id, name, tier, role, aliases, status FROM proj_actors "
                 "WHERE branch_id = $1 AND (lower(name) = lower($2) "
                 "  OR lower($2) = ANY(SELECT lower(a) FROM unnest(aliases) AS a)) "
                 # exact name beats an alias-only match; then tier; actor_id is a stable tiebreak.
@@ -1118,7 +1162,7 @@ class PostgresEventStore:
     async def list_actors(self, branch_id: str) -> list[ActorView]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT actor_id, name, tier, role, aliases FROM proj_actors "
+                "SELECT actor_id, name, tier, role, aliases, status FROM proj_actors "
                 "WHERE branch_id = $1 ORDER BY tier DESC, name ASC",
                 branch_id,
             )

@@ -180,6 +180,13 @@ async def _actor_damaged(conn: asyncpg.Connection, branch_id: str, p: dict[str, 
 
 
 async def _actor_died(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # A lifecycle trace on proj_actors, independent of any sheet — so a sheet-less casualty
+    # (History NPC, Chronicler death) is still recorded dead and drops off recall's on-stage set.
+    await conn.execute(
+        "UPDATE proj_actors SET status = 'dead' WHERE branch_id = $1 AND actor_id = $2",
+        branch_id,
+        p["actor_id"],
+    )
     # Ensure hp is 0 (usually already, from the killing blow). Death vs. downed is narrative.
     await conn.execute(
         "UPDATE proj_sheets SET sheet = jsonb_set(sheet, '{hp}', to_jsonb(0)) "
@@ -313,7 +320,7 @@ async def apply_event(conn: asyncpg.Connection, branch_id: str, event: DomainEve
 # above would have produced). Keeping both here preserves that invariant end-to-end.
 
 _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
-    "actors": ("actor_id", "name", "tier", "role", "aliases"),
+    "actors": ("actor_id", "name", "tier", "role", "aliases", "status"),
     "claims": ("claim_id", "statement", "subject_refs", "truth", "origin"),
     "beliefs": ("actor_id", "claim_id", "confidence", "learned_from"),
     "places": ("place_id", "name", "kind", "status", "description"),

@@ -70,6 +70,7 @@ class ActorView(BaseModel):
     tier: int
     role: str
     aliases: list[str]
+    status: str = "alive"  # alive | dead (docs/02; a death trace independent of the sheet)
 
 
 class ClaimView(BaseModel):

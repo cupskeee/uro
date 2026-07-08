@@ -122,3 +122,20 @@ async def test_war_story_no_survivors_no_rumor(store: PostgresEventStore) -> Non
     assert any("champion" in c.statement for c in await store.claims_about(branch, "a:hero"))
     # ...but with no survivors, nobody ever heard of it: Mera holds no belief about it
     assert await store.beliefs_of(branch, "a:mera") == []
+
+
+async def test_chronicler_casualty_is_recorded_dead(store: PostgresEventStore) -> None:
+    # Cross-phase (P1 recall x P3 ActorDied x P5 Chronicler): a sheet-less casualty must leave a
+    # queryable death trace — else recall keeps surfacing the dead champion as a live NPC.
+    from uro_core.chronicler import OutcomeBundle, distill_outcome
+    from uro_core.pipeline.recall import assemble_recall
+
+    branch = await _world_with_rumor_mill(store)  # a:champion is created sheet-less
+    assert (await store.get_actor(branch, "a:champion")).status == "alive"
+
+    outcome = OutcomeBundle(encounter_id="e:1", casualties=["a:champion"])
+    await store.append_beat(branch, await distill_outcome(store, branch, outcome))
+
+    assert (await store.get_actor(branch, "a:champion")).status == "dead"  # a real death trace
+    recall = await assemble_recall(store, branch, "I look for the champion", 5)
+    assert not any(a.actor_id == "a:champion" for a in recall.actors)  # not surfaced as present
