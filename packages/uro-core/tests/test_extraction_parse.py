@@ -1,6 +1,18 @@
 """Extractor response parsing + the whitelist-by-schema property (no DB)."""
 
-from uro_core.pipeline.extraction import parse_extraction
+from uro_core.pipeline.extraction import canonical_name, parse_extraction
+
+
+def test_canonical_name_folds_articles_case_and_whitespace() -> None:
+    # the observed live split: "the woman" / "woman" / "The Woman" must canonicalize to one entity
+    assert canonical_name("the woman") == "woman"
+    assert canonical_name("The  Woman ") == "woman"
+    assert canonical_name("A Guard") == "guard"
+    assert canonical_name("the Duke") == "duke"
+    # ...but partial words and article-less names are untouched (no over-merging)
+    assert canonical_name("another") == "another"  # not "other"
+    assert canonical_name("theater") == "theater"
+    assert canonical_name("Marla") == "marla"
 
 
 def test_parses_plain_json() -> None:

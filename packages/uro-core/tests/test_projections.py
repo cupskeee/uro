@@ -61,6 +61,20 @@ async def test_find_actor_by_name_precedence_and_alias_casing(store: PostgresEve
     assert hit is not None and hit.actor_id == "a:weck"
 
 
+async def test_find_actor_by_name_resolves_canonical_variants(store: PostgresEventStore) -> None:
+    # Entity resolution (the observed live "the woman"/"woman" split): a leading article +
+    # case/whitespace variance resolves to ONE actor, without over-merging distinct entities.
+    branch = await _branch(store)
+    await store.append_beat(branch, [actor_created(actor_id="a:woman", name="the woman", tier=1)])
+    for variant in ("woman", "The Woman", "  the   woman "):
+        hit = await store.find_actor_by_name(branch, variant)
+        assert hit is not None and hit.actor_id == "a:woman", variant
+
+    await store.append_beat(branch, [actor_created(actor_id="a:man", name="the man", tier=1)])
+    assert (await store.find_actor_by_name(branch, "woman")).actor_id == "a:woman"  # not merged
+    assert (await store.find_actor_by_name(branch, "man")).actor_id == "a:man"
+
+
 async def test_actor_promotion_updates_tier(store: PostgresEventStore) -> None:
     branch = await _branch(store)
     await store.append_beat(branch, [actor_created(actor_id="a:weck", name="Old Weck", tier=1)])

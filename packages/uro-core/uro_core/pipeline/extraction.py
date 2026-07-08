@@ -31,6 +31,7 @@ narrator being the trusted tier. Do not read this as a hard security boundary.
 from __future__ import annotations
 
 import json
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -72,8 +73,20 @@ class Extraction(BaseModel):
     claims: list[ProposedClaim] = Field(default_factory=list)
 
 
+# Entity-name canonicalization: fold case/whitespace and strip a leading article, so an actor
+# extracted once as "the woman" and later mentioned as "woman" (or "The Duke"/"the Duke") resolves
+# to ONE entity instead of splitting (found live). The `\s+` guards partial words ("another",
+# "theater" are untouched). Mirrors the SQL in find_actor_by_name; kept safe/conservative —
+# semantic matches ("hooded stranger" ≈ "stranger") are the embedding entity_index's job (OQ-3).
+_ARTICLE_RE = re.compile(r"^(the|a|an)\s+")
+
+
+def canonical_name(name: str) -> str:
+    return _ARTICLE_RE.sub("", " ".join(name.strip().lower().split()))
+
+
 def _name_token(name: str) -> str:
-    return f"name:{name.strip().lower()}"
+    return f"name:{canonical_name(name)}"
 
 
 def build_extractor_messages(
@@ -126,7 +139,7 @@ async def run_gauntlet(
     name_to_ref: dict[str, str] = {}
 
     async def resolve(name: str, *, create: bool, role: str = "") -> str | None:
-        key = name.strip().lower()
+        key = canonical_name(name)  # "the woman" and "woman" dedup to one entity within a beat
         if not key:
             return None
         if key in name_to_ref:

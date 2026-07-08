@@ -1147,12 +1147,19 @@ class PostgresEventStore:
         return ActorView(**dict(row)) if row else None
 
     async def find_actor_by_name(self, branch_id: str, name: str) -> ActorView | None:
+        # Match on the CANONICAL form (lower, collapsed whitespace, leading article stripped) so
+        # "woman" resolves to a prior "the woman" (mirrors extraction.canonical_name). An exact
+        # case-insensitive name still wins the tiebreak over a canonical-only or alias match.
+        def canon(col: str) -> str:
+            # mirror extraction.canonical_name: lower → collapse+trim whitespace → strip article
+            collapsed = f"btrim(regexp_replace(lower({col}), '\\s+', ' ', 'g'))"
+            return f"regexp_replace({collapsed}, '^(the|a|an)\\s+', '')"
+
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT actor_id, name, tier, role, aliases, status FROM proj_actors "
-                "WHERE branch_id = $1 AND (lower(name) = lower($2) "
-                "  OR lower($2) = ANY(SELECT lower(a) FROM unnest(aliases) AS a)) "
-                # exact name beats an alias-only match; then tier; actor_id is a stable tiebreak.
+                f"WHERE branch_id = $1 AND ({canon('name')} = {canon('$2')} OR {canon('$2')} = "
+                f"ANY(SELECT {canon('a')} FROM unnest(aliases) AS a)) "
                 "ORDER BY (lower(name) = lower($2)) DESC, tier DESC, actor_id ASC LIMIT 1",
                 branch_id,
                 name,
