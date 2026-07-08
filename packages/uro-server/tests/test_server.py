@@ -234,3 +234,36 @@ def test_party_arbiter_round_robin_over_the_ws_channel() -> None:
         # now player-2 holds → their intent runs
         b.send_json({"type": "intent", "text": "now me"})
         assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"
+
+
+def test_a_failed_beat_still_rotates_the_party_token() -> None:
+    # cross-phase review: a deterministically-failing turn-holder must NOT wedge the party — the
+    # token still rotates on beat_failed, so the next participant can act.
+    from uro_core.session import PartyArbiter
+
+    async def always_fail(campaign_id: str, participant: str, text: str):  # type: ignore[no-untyped-def]
+        raise RuntimeError("boom")
+        yield ""  # pragma: no cover — makes this an async generator
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return campaign_id == "camp-1"
+
+    deps = ServerDeps(
+        resolve_participant=lambda t: _TOKENS.get(t),
+        campaign_exists=campaign_exists,
+        run_beat=always_fail,
+    )
+    app = create_app(deps, arbiter=PartyArbiter())
+    client = TestClient(app)
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,  # player-1 (holder)
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,  # player-2
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")
+        # player-1 (holder) submits → beat FAILS; the token must rotate to player-2 anyway
+        a.send_json({"type": "intent", "text": "boom"})
+        assert _recv_until(a, "beat_failed")[-1]["participant_id"] == "player-1"
+        # player-2 now holds → their intent runs (also fails) — NOT a not_your_turn (rotation held)
+        b.send_json({"type": "intent", "text": "boom"})
+        assert _recv_until(a, "beat_failed")[-1]["participant_id"] == "player-2"

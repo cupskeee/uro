@@ -639,16 +639,33 @@ class PostgresEventStore:
     async def pc_for_participant(self, campaign_id: str, participant_id: str) -> str | None:
         """The active PC a SPECIFIC participant drives (docs/08, OQ-7) — proj_pcs keyed on
         participant_id. This is how a party of N each get their own PC: a beat by participant P is
-        planned/resolved as P's PC. None if P has no active binding (caller falls back to solo)."""
+        planned/resolved as P's PC. None if P has no active binding (caller falls back to solo).
+        Scoped to the campaign's OWN branch (like campaign_pc) so a fork-copied proj_pcs row on a
+        sibling branch can't leak into another branch's resolution (cross-phase review P7-P2)."""
         async with self.pool.acquire() as conn:
             actor_id = await conn.fetchval(
-                "SELECT actor_id FROM proj_pcs "
-                "WHERE campaign_id = $1 AND participant_id = $2 AND active "
-                "ORDER BY actor_id LIMIT 1",
+                "SELECT p.actor_id FROM proj_pcs p "
+                "JOIN campaigns c ON c.campaign_id = p.campaign_id AND c.branch_id = p.branch_id "
+                "WHERE p.campaign_id = $1 AND p.participant_id = $2 AND p.active "
+                "ORDER BY p.actor_id LIMIT 1",
                 campaign_id,
                 participant_id,
             )
         return str(actor_id) if actor_id is not None else None
+
+    async def campaign_pcs(self, campaign_id: str) -> list[str]:
+        """All active PC actor ids bound to a campaign, on its own branch (OQ-7). The engine uses
+        the COUNT to decide an UNBOUND participant's fallback: 0 → a no-PC (Phase-1) campaign, act
+        with no PC; 1 → safe solo fallback; ≥2 → a PARTY, where an unbound participant is refused
+        rather than silently driving another player's PC (cross-phase review P7-P2/P3)."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT p.actor_id FROM proj_pcs p "
+                "JOIN campaigns c ON c.campaign_id = p.campaign_id AND c.branch_id = p.branch_id "
+                "WHERE p.campaign_id = $1 AND p.active ORDER BY p.actor_id",
+                campaign_id,
+            )
+        return [str(r["actor_id"]) for r in rows]
 
     async def bind_pc(
         self,
@@ -706,6 +723,18 @@ class PostgresEventStore:
                 )
                 if known is None:
                     raise ValueError(f"cannot adopt unknown actor {adopt_actor_id!r} on branch")
+                # Do not let a second participant adopt an actor already an ACTIVE PC: the
+                # projector's actor-keyed PCBound upsert would silently reassign it, clobbering
+                # the first participant's binding (P7-P2 review). Two players can't share a PC.
+                taken = await conn.fetchval(
+                    "SELECT 1 FROM proj_pcs WHERE branch_id = $1 AND actor_id = $2 AND active",
+                    branch_id,
+                    adopt_actor_id,
+                )
+                if taken is not None:
+                    raise ValueError(
+                        f"actor {adopt_actor_id!r} is already an active PC — pick another to adopt"
+                    )
             await self._append(conn, branch_id, events)
         return pc_actor_id
 

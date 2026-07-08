@@ -109,6 +109,7 @@ def build_narrator_messages(
     recall: RecallBundle,
     intent_text: str,
     *,
+    pc_actor_id: str = "",
     mechanics_traces: list[str] | None = None,
     directives: str = "",
     style: str = "",
@@ -130,6 +131,14 @@ def build_narrator_messages(
     ]
 
     context_lines = []
+    # In a party (OQ-7), multiple PCs are on stage — tell the narrator WHOSE action the intent is,
+    # so it doesn't attribute the swing to the wrong PC (cross-phase review P7xP1). Solo: harmless.
+    acting_name = name_by_id.get(pc_actor_id)
+    if acting_name:
+        context_lines.append(
+            f"ACTING CHARACTER: the player's intent below is {acting_name}'s action — "
+            f"narrate it as {acting_name}."
+        )
     if recall.memories:
         context_lines.append(
             "YOU RECALL (from earlier in the campaign):\n"

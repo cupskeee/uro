@@ -28,7 +28,12 @@ from uro_core.domain.events import (
     sheet_updated,
 )
 from uro_core.domain.ids import new_id
-from uro_core.errors import EmptyNarrationError, PlannerError, ProviderError
+from uro_core.errors import (
+    EmptyNarrationError,
+    PlannerError,
+    ProviderError,
+    UnboundParticipantError,
+)
 from uro_core.metering import LLMCall
 from uro_core.pipeline.encounter import run_encounter
 from uro_core.pipeline.extraction import (
@@ -218,6 +223,7 @@ class Engine:
                 messages = build_narrator_messages(
                     ctx.recall,
                     intent_text,
+                    pc_actor_id=ctx.pc_actor_id,
                     mechanics_traces=traces,
                     directives="A fight breaks out — narrate it, honoring these outcomes.",
                     style=style,
@@ -227,6 +233,7 @@ class Engine:
         messages = build_narrator_messages(
             ctx.recall,
             intent_text,
+            pc_actor_id=ctx.pc_actor_id,
             mechanics_traces=ctx.mechanics_traces,
             directives=ctx.directives,
             style=style,
@@ -256,11 +263,23 @@ class Engine:
         )
 
     async def _acting_pc(self, campaign: Campaign, participant_id: str) -> str:
-        """The PC the submitting participant drives (OQ-7), or the solo/first PC as a fallback."""
+        """The PC the submitting participant drives (OQ-7). If the participant is bound, that's it.
+        If unbound, fall back to the campaign's PC ONLY when the campaign is SOLO (exactly one PC)
+        — in a PARTY an unbound participant must NOT silently drive another player's PC (cross-phase
+        review P7xP2/P3); the beat is refused so they must `uro campaign join` first."""
         pc = await self._store.pc_for_participant(campaign.campaign_id, participant_id)
-        if pc is None:
-            pc = await self._store.campaign_pc(campaign.campaign_id)
-        return pc or ""
+        if pc:
+            return pc
+        # Unbound participant. Decide by how many PCs the campaign has:
+        pcs = await self._store.campaign_pcs(campaign.campaign_id)
+        if len(pcs) == 1:
+            return pcs[0]  # SOLO fallback — the one PC is safe to act as
+        if len(pcs) >= 2:  # PARTY — refuse rather than silently drive another player's PC
+            raise UnboundParticipantError(
+                f"participant {participant_id!r} has no PC in this party campaign — "
+                f"run `uro campaign join` to bind one before taking a turn"
+            )
+        return ""  # no PC bound at all (a Phase-1 / narration-only campaign) — act with no PC
 
     async def preview_beat(
         self, campaign: Campaign, participant_id: str, intent_text: str
@@ -382,6 +401,12 @@ class Engine:
         # A real encounter needs two DISTINCT, KNOWN actors on OPPOSING sides. PC identity only
         # attributes consequences; it does not decide the split (so NPC-vs-NPC works too).
         if not aggressor or not defender or aggressor == defender:
+            return None
+        # No auto-resolved PvP (cross-phase review P7xP3): a party member's single beat must NOT
+        # down + loot ANOTHER player's PC with no agency. If the target is another active PC, fall
+        # back to free-roam (the clash is narrated, not mechanically auto-resolved). Consensual PvP
+        # is future work behind the same seam.
+        if await self._store.is_pc(branch, defender):
             return None
 
         setup: list[DomainEvent] = []

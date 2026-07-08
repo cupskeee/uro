@@ -210,6 +210,11 @@ async def _run_and_broadcast(
                 "error": str(exc),
             },
         )
+        # A failed turn STILL yields the token (cross-phase review P7xP3): otherwise a
+        # deterministically-failing holder (e.g. an unbound participant) would wedge the whole
+        # party forever. The trade-off — a transient failure costs a turn — is acceptable; the
+        # player gets the token back next round.
+        await arbiter.beat_committed(campaign_id, participant, "")
         return
     await hub.publish(
         campaign_id,

@@ -8,9 +8,11 @@ participants on their own PCs and assert each beat is planned/gated/attributed a
 
 from collections.abc import AsyncIterator
 
+import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import actor_created, item_created, sheet_updated
 from uro_core.domain.ids import new_id
+from uro_core.errors import UnboundParticipantError
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.stub import hashing_embedding
 from uro_core.providers.base import CompletionRequest
@@ -102,9 +104,34 @@ async def test_beat_is_planned_as_the_submitting_participants_pc(store: Postgres
     await engine.run_beat(campaign, "p2", "I look around")
     assert "a:bob" in rec.planner_prompts[-1] and "a:alice" not in rec.planner_prompts[-1]
 
-    # an UNBOUND participant falls back to the campaign's solo PC (first active), never crashes
-    await engine.run_beat(campaign, "p_ghost", "I look around")
-    assert "a:alice" in rec.planner_prompts[-1]  # a:alice is the first active PC
+
+async def test_unbound_participant_is_refused_in_a_party_but_falls_back_solo(
+    store: PostgresEventStore,
+) -> None:
+    # In a PARTY, an unbound participant must NOT silently drive another player's PC — it is refused
+    # (cross-phase review). In SOLO (one PC), an unbound submitter safely falls back to that one PC.
+    _, party = await _two_pc_campaign(store)  # two PCs → a party
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Recorder()), ruleset=RS)
+    with pytest.raises(UnboundParticipantError):
+        await engine.run_beat(party, "p_ghost", "I look around")
+
+    world = await store.create_world(f"solo-{new_id()}")  # one PC → solo
+    solo = await store.start_campaign(
+        world.world_id,
+        world.main_branch_id,
+        participant_id="p1",
+        new_pc_name="Solo",
+        new_pc_id="a:solo",
+        pc_sheet=_sheet({"STR": 12}),
+        ruleset_id="uro-basic",
+    )
+    assert await store.campaign_pcs(solo.campaign_id) == ["a:solo"]  # solo → one PC
+    assert len(await store.campaign_pcs(party.campaign_id)) == 2  # a party → multiple PCs
+    rec = _Recorder()
+    await Engine(store, ProviderRouter(bindings={}, default=rec), ruleset=RS).run_beat(
+        solo, "some_other_id", "I look around"
+    )
+    assert "a:solo" in rec.planner_prompts[-1]  # solo fallback is safe (only one PC)
 
 
 # --- the encounter is fought/attributed as the acting participant's PC ---
@@ -201,3 +228,55 @@ async def test_party_arbiter_departure_passes_the_token() -> None:
 async def test_party_arbiter_empty_roster_admits() -> None:
     a = PartyArbiter()  # no one noted joined (e.g. a direct in-process call) → degenerate admit
     assert await a.admit("c", "p1", "x") == AdmitDecision.ADMITTED
+
+
+# --- cross-phase review fixes: PvP guard, adopt-clobber guard, roster refcount ---
+
+
+async def test_pvp_is_not_auto_resolved(store: PostgresEventStore) -> None:
+    # A party member's single beat must NOT auto-resolve a fight against ANOTHER player's PC
+    # (down + loot with no agency). Attacking another active PC falls back to free-roam.
+    world, campaign = await _two_pc_campaign(store)  # a:alice (p1), a:bob (p2), both sheeted PCs
+    plan = (
+        '{"intent_class":"action","triggers":["violence"],'
+        '"mechanics":[{"affordance":"attack","target":"a:bob"}]}'
+    )
+    rec = _Recorder(plan)
+    result = await Engine(store, ProviderRouter(bindings={}, default=rec), ruleset=RS).run_beat(
+        campaign, "p1", "I swing at Bob"
+    )
+    async with store.pool.acquire() as conn:
+        types = [
+            r["event_type"]
+            for r in await conn.fetch(
+                "SELECT event_type FROM events WHERE commit_id = $1", result.commit_id
+            )
+        ]
+    assert "EncounterStarted" not in types and "ModeChanged" not in types  # PvP not auto-resolved
+    assert "BeatResolved" in types  # committed as an ordinary free-roam beat
+    assert (await store.get_sheet(world.main_branch_id, "a:bob"))["hp"] > 0  # Bob is unharmed
+
+
+async def test_bind_pc_rejects_adopting_an_already_active_pc(store: PostgresEventStore) -> None:
+    # Two players can't share a PC: adopting an actor already an active PC would clobber the first
+    # participant's binding via the projector's actor-keyed upsert — so it is refused.
+    _, campaign = await _two_pc_campaign(store)  # a:alice is p1's active PC
+    with pytest.raises(ValueError, match="already an active PC"):
+        await store.bind_pc(campaign.campaign_id, "p3", adopt_actor_id="a:alice")
+    # p1's binding is intact — no clobber
+    assert await store.pc_for_participant(campaign.campaign_id, "p1") == "a:alice"
+
+
+async def test_party_arbiter_refcounts_connections() -> None:
+    # A second connection for the same participant, then closing ONE, must not drop them from the
+    # ring (a second device / an overlapping reconnect).
+    a = PartyArbiter()
+    await a.note_joined("c", "p1")
+    await a.note_joined("c", "p2")
+    await a.note_joined("c", "p1")  # p1's second connection
+    await a.note_left("c", "p1")  # one of p1's two closes — p1 stays in the ring
+    assert await a.admit("c", "p1", "x") == AdmitDecision.ADMITTED  # still the holder
+    await a.note_left("c", "p1")  # p1's last connection closes — now truly gone
+    # ring is now [p2]; p2 holds, p1 is not a member
+    assert await a.admit("c", "p2", "x") == AdmitDecision.ADMITTED
+    assert await a.admit("c", "p1", "x") == AdmitDecision.NOT_YOUR_TURN

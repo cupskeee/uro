@@ -92,6 +92,10 @@ class PartyArbiter:
     def __init__(self) -> None:
         self._ring: dict[str, list[str]] = {}  # campaign_id → participants in join order
         self._turn: dict[str, int] = {}  # campaign_id → index of the current turn-holder
+        # campaign_id → participant_id → live connection count. A participant is in the ring while
+        # they hold ≥1 connection, so a second device / an overlapping reconnect closing one socket
+        # does not drop a still-connected player from the round (cross-phase review P5xP7).
+        self._conns: dict[str, dict[str, int]] = {}
 
     def _holder(self, campaign_id: str) -> str | None:
         ring = self._ring.get(campaign_id) or []
@@ -106,11 +110,18 @@ class PartyArbiter:
         return AdmitDecision.NOT_YOUR_TURN
 
     async def note_joined(self, campaign_id: str, participant_id: str) -> None:
-        ring = self._ring.setdefault(campaign_id, [])
-        if participant_id not in ring:
-            ring.append(participant_id)
+        conns = self._conns.setdefault(campaign_id, {})
+        conns[participant_id] = conns.get(participant_id, 0) + 1
+        if conns[participant_id] == 1:  # first connection → enter the ring
+            self._ring.setdefault(campaign_id, []).append(participant_id)
 
     async def note_left(self, campaign_id: str, participant_id: str) -> None:
+        conns = self._conns.get(campaign_id, {})
+        if participant_id in conns:
+            conns[participant_id] -= 1
+            if conns[participant_id] > 0:
+                return  # still connected on another socket — keep them in the ring
+            del conns[participant_id]
         ring = self._ring.get(campaign_id)
         if not ring or participant_id not in ring:
             return
