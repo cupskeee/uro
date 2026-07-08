@@ -18,7 +18,10 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Protocol
 
-from pydantic import BaseModel, Field
+# NOTE (consolidation, 2026-07-09): the speculative `Session`/`Participant` Pydantic models that
+# once lived here were REMOVED as dead code — nothing constructed them. The live per-campaign
+# roster is tracked by the arbiter (PartyArbiter._ring) + the server's SessionHub; the acting
+# participant's PC is resolved from proj_pcs via store.pc_for_participant (7.1), not a model here.
 
 
 class AdmitDecision(StrEnum):
@@ -29,18 +32,6 @@ class AdmitDecision(StrEnum):
     NOT_YOUR_TURN = "not_your_turn"  # valid, but another participant holds the turn — hold/retry
     REJECTED = "rejected"  # refused (e.g. invalid/vetoed) — do not retry
     QUEUED = "queued"  # reserved: a proposal-window arbiter holds it until the window closes
-
-
-class Participant(BaseModel):
-    participant_id: str
-    actor_id: str | None = None  # the PC this participant drives (None until bound to one)
-
-
-class Session(BaseModel):
-    """A live connection context over a persistent campaign (docs/08). Not the story itself."""
-
-    campaign_id: str
-    participants: list[Participant] = Field(default_factory=list)
 
 
 class TurnArbiter(Protocol):

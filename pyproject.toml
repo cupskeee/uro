@@ -61,6 +61,12 @@ source_modules = [
     "uro_core.engines",
     "uro_core.pipeline",
     "uro_core.memory",
+    # pure logic behind the ports — added in the 2026-07-09 consolidation to close a coverage gap
+    # (they held no forbidden imports, so this is enforcement, not a fix).
+    "uro_core.session",
+    "uro_core.chronicler",
+    "uro_core.export",
+    "uro_core.metering",
 ]
 forbidden_modules = [
     "fastapi",
