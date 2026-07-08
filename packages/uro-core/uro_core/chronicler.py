@@ -44,7 +44,6 @@ from uro_core.domain.events import (
     item_transferred,
 )
 from uro_core.engines.actor import propagate_belief
-from uro_core.pipeline.extraction import canonical_name
 from uro_core.ports.projections import ProjectionQueries
 
 _MAX_LIST = 64  # cap on feats / casualties / loot per bundle (anti-abuse; docs/13, OQ-12)
@@ -100,12 +99,14 @@ async def distill_outcome(
 
     async def resolve(ref: str) -> str | None:
         """Entity-resolve a bundle ref to a KNOWN actor id (never mint one — an external game
-        cannot create actors), or None."""
+        cannot create actors), or None. Pass the RAW name to find_actor_by_name (it canonicalizes
+        internally): passing a pre-canonicalized value would defeat its exact-name tiebreak and
+        could attribute a feat to a different duplicate than the extractor resolves to (P8-P1)."""
         if not ref:
             return None
         if await store.get_actor(branch_id, ref) is not None:
             return ref
-        match = await store.find_actor_by_name(branch_id, canonical_name(ref) or ref)
+        match = await store.find_actor_by_name(branch_id, ref)
         return match.actor_id if match is not None else None
 
     # --- feats → testimony + a witness rumor cascade (deterministic ids → idempotent replay) ---

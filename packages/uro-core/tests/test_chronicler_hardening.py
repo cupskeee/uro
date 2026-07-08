@@ -174,3 +174,28 @@ async def test_replaying_a_bundle_is_idempotent(store: PostgresEventStore) -> No
     assert len(feats) == 1  # deterministic claim id → upsert, not duplicate
     beliefs = await store.beliefs_of(branch, "a:raider")
     assert len([b for b in beliefs if b.claim_id == feats[0].claim_id]) == 1
+
+
+async def test_feat_actor_resolves_like_the_extractor_exact_name_wins(
+    store: PostgresEventStore,
+) -> None:
+    # P8xP1 cross-phase fix: feat.actor must resolve via find_actor_by_name the SAME way the P1
+    # extractor does — raw name, so the exact-name tiebreak wins over a canonical-only duplicate.
+    world = await store.create_world(f"dup-{new_id()}")
+    branch = world.main_branch_id
+    await store.append_beat(
+        branch,
+        [
+            actor_created(actor_id="a:strexact", name="The Stranger", tier=2),
+            actor_created(actor_id="a:strdup", name="Stranger", tier=1),  # same canonical form
+        ],
+    )
+    bundle = OutcomeBundle(
+        encounter_id="e:dup",
+        participants=["a:strexact"],  # only the exact-name actor is in the cast
+        feats=[Feat(actor="The Stranger", description="The Stranger turned the rout")],
+    )
+    await store.append_beat(branch, await distill_outcome(store, branch, bundle))
+    # the feat attaches to the EXACT-name actor (a:strexact), in cast — not the canonical dup
+    assert any("rout" in c.statement for c in await store.claims_about(branch, "a:strexact"))
+    assert not any("rout" in c.statement for c in await store.claims_about(branch, "a:strdup"))
