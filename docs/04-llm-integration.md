@@ -76,7 +76,7 @@ Scoring (D-24): probe outputs are graded by the **judge role** against per-probe
 
 Context assembly for any beat combines:
 
-1. **Structured recall (primary):** direct state queries — present actors' profiles/beliefs, place state, active threads, claims linked to entities on stage. The knowledge graph answers "what is true" *precisely*; this always beats semantic search when refs exist.
+1. **Structured recall (primary):** direct state queries. **As built (`pipeline/recall.py`):** on-stage actors (name/alias-matched, dead excluded), their beliefs, and claims linked to those entities — assembled deterministically. *Place-state and active-thread recall are the design intent but NOT yet assembled into the prompt* (only actors/claims/beliefs + semantic memories are). The knowledge graph answers "what is true" *precisely*; this always beats semantic search when refs exist.
 2. **Semantic recall (secondary):** pgvector search over embedded memories (chronicle entries, T3 actor journals, past scene synopses) for "what is *relevant*" — thematic echoes, old promises, foreshadowing. (The `embedder` role is also *designed* to maintain a separate corpus of entity name/alias strings for entity resolution — see `07` `entity_index` and `13`; same role, different index — **not built yet**.)
 3. **Recency window:** last few beats verbatim.
 4. **Compression:** summarizer role periodically folds old beats into synopses (per campaign) and journal entries (per T3 actor); originals stay in the log — compression affects *recall*, never *truth*.

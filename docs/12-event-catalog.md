@@ -2,6 +2,8 @@
 
 The canonical registry of domain event types. Everything the engine "knows" is a projection of these (`03-timeline-and-branching.md`, `07-persistence-and-events.md`); this file is the vocabulary. **Version 0 — living**, but with process: an event type does not exist until it has (1) an entry here, (2) a Pydantic payload model in `uro_core/domain/events.py`, (3) projector handling, and (4) an emitter whitelist entry. No inline invention of event types in code.
 
+> **Reserved rows (honest status, 2026-07-09):** several catalogued types have full plumbing (payload + projector handler) but **no live emitter yet** — they are the forward contract, not shipped behavior: `ClaimTruthChanged`, `ActorPromoted`, `TerrainChanged`, `PlaceStateChanged`, `EdgeUpdated`/`EdgeRemoved` (the meteor's `PlaceDestroyed` and mid-play thread consequences are author/test-driven today, not History-emitted — OQ-8). `ActorDamaged` is **legacy** (no live emitter; a replay-compat handler is retained for pre-D-30 logs — harm now flows via `SheetUpdated`). See [16-honesty-ledger.md](16-honesty-ledger.md) for the proven/reserved map.
+
 ## Envelope (every event)
 
 Matches the `events` DDL in `07`:

@@ -55,7 +55,9 @@ Also stored: `llm_calls` (prompt hash, response, tokens, latency, stage tag — 
 
 ## Events in motion (bus)
 
-MVP: **in-process async event bus** (projection updates, simulation triggers subscribe to committed beats) + a transactional **outbox table** written in the same transaction as the commit. That's the whole story until the engine is distributed. When `uro-server` scales beyond one process, an outbox relay targets **NATS JetStream** (first choice: tiny single binary locally, managed offerings live) or Redis Streams; Kafka is explicitly overkill (D-13). Because publishing already goes through the outbox port, this swap touches zero core code.
+**As built (honest):** projections are updated by the projector **inline, in the same transaction as the commit** (`store._append` → `apply_event`) — the rebuild-by-replay invariant holds and nothing races, but there is **no async event bus and no `outbox` table yet** (both were the MVP sketch below; NOT built). Live streaming to clients is the server's per-connection `SessionHub` fan-out, not an outbox relay.
+
+*Planned (not built):* an **in-process async event bus** + a transactional **outbox table** so simulation triggers/relays subscribe to committed beats; when `uro-server` scales beyond one process, an outbox relay targets **NATS JetStream** or Redis Streams (Kafka is overkill, D-13). Publishing would move behind an outbox port so the swap touches zero core code.
 
 ## Export packs (the sharing primitive)
 
@@ -72,4 +74,4 @@ Import validates schema versions and replays. Hash verification depends on the e
 
 - Credentials: encrypted at rest, excluded from exports/logs (see `04-llm-integration.md`).
 - Story content: lives only in this database and in requests to explicitly-bound model endpoints; no telemetry.
-- Wipe: `uro world delete` hard-deletes the world's events, projections, embeddings, and llm_calls.
+- Wipe (planned, NOT built): a `uro world delete` that hard-deletes the world's events, projections, embeddings, and llm_calls — the privacy commitment; no such command ships yet.

@@ -1,6 +1,6 @@
 # CLAUDE.md — working in this repo
 
-Uro Engine: a headless, game-agnostic AI-RPG **engine** PoC (git-is-to-GitHub as Uro-is-to-a-game/platform). Python 3.12, `uv` workspace. Full design in `docs/` — read `docs/15-walkthroughs.md` for the map, `docs/10-roadmap.md` for status, `docs/decisions.md` (D-1..D-28) for why things are the way they are. **The docs are authoritative; when code and docs disagree, fix one to match the other in the same commit.**
+Uro Engine: a headless, game-agnostic AI-RPG **engine** PoC (git-is-to-GitHub as Uro-is-to-a-game/platform). Python 3.12, `uv` workspace. Full design in `docs/` — read `docs/15-walkthroughs.md` for the map, `docs/10-roadmap.md` for status, `docs/16-honesty-ledger.md` for the honest proven/proxy/stub-only/deferred map, `docs/decisions.md` (D-1..D-32) for why things are the way they are. **The docs are authoritative; when code and docs disagree, fix one to match the other in the same commit.**
 
 ## Layout
 

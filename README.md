@@ -25,7 +25,7 @@ Anything a *platform* would build: user accounts and social features, world/asse
 
 ## Status
 
-**All five PoC phases are code-complete** (165 tests green, fully deterministic in CI), and the **core thesis is validated live**: in an ablation run the full engine's narrator recalled a named NPC and a plot fact ~11 beats later — past the recency window — while the `--bare` (raw-transcript) arm forgot them entirely.
+**All five PoC phases plus three post-PoC phases are code-complete** (215 tests green, fully deterministic in CI), and the **core thesis was validated live once** (with caveats): in an ablation run the full engine built durable state and re-surfaced an established NPC + world facts past the recency window while the `--bare` (raw-transcript) arm built nothing and drifted. For the honest map of what is *proven* vs *proxy* vs *stub-only* vs *deferred*, see [16-honesty-ledger.md](docs/16-honesty-ledger.md).
 
 What runs today, phase by phase (each with a passing acceptance test):
 
@@ -34,8 +34,11 @@ What runs today, phase by phase (each with a passing acceptance test):
 - **P3 — mechanics:** a pluggable, deterministic ruleset port + Uro Basic (d20, seeded RNG, encounter mode); a fight replays byte-identically — the **insult→combat→consequences** acceptance.
 - **P4 — worlds:** the world-pack format + sufficiency check + AI backfill, import + procedural History seeding (seed 42 ≠ 43 on identical geography), prompt-template packs, capability probes.
 - **P5 — server & federation:** a WS play server (broadcast, token auth), export/import with hash-chain verification, off-screen belief/rumor propagation, and Chronicler mode — the **war-story test** (an external battle's feat ripples to witnesses; a tavern NPC retells a traceable rumor).
+- **P6 — the alien ruleset:** a deliberately non-d20 second built-in (`uro_pbta`: 2d6, harm clock, moves) through the *same* port — proving the ruleset port is genuinely game-agnostic (OQ-13 → D-30).
+- **P7 — multiplayer:** per-participant PCs + a round-robin `PartyArbiter` behind the `TurnArbiter` port (OQ-7 → D-31).
+- **P8 — Chronicler hardening:** `distill_outcome` is now trust-scoped — an external bundle can't kill/loot/first-hand-witness a PC or a T2+ actor, loot needs real ownership, replays are idempotent (OQ-12 → D-32).
 
-The live-model legs (thesis, planner, backfill/probe) are run separately with an API key — CI never makes live LLM calls. Reproduce the thesis: [docs/live-run.md](docs/live-run.md) / `scripts/ablation.sh`. See [10-roadmap.md](docs/10-roadmap.md) for the post-PoC horizon.
+The live-model legs (thesis, planner, backfill/probe, and the post-PoC phases) are run separately with an API key — CI never makes live LLM calls. Reproduce: [docs/live-run.md](docs/live-run.md) / `scripts/ablation.sh` (thesis) + `scripts/postpoc_validate.sh` (P6/P8). Honest status: [16-honesty-ledger.md](docs/16-honesty-ledger.md); horizon: [10-roadmap.md](docs/10-roadmap.md).
 
 ## Quickstart
 
