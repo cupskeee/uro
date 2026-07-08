@@ -58,6 +58,13 @@ class ProjectionQueries(Protocol):
 
     async def campaign_pc(self, campaign_id: str) -> str | None: ...
 
+    async def pc_for_participant(self, campaign_id: str, participant_id: str) -> str | None:
+        """The active PC a SPECIFIC participant drives on a campaign (docs/08, OQ-7) — the actor a
+        beat by that participant is planned and resolved as. Multiplayer: a party of N participants
+        each drive their own PC; the pipeline keys off the ACTING participant, not one campaign-wide
+        PC (`campaign_pc` is only the solo fallback). None if the participant has no binding."""
+        ...
+
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]: ...
 
     async def get_item(self, branch_id: str, item_id: str) -> dict[str, Any] | None: ...

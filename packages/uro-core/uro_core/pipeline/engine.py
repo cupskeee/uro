@@ -79,6 +79,9 @@ class _Context(BaseModel):
     mechanics_traces: list[str] = Field(default_factory=list)
     directives: str = ""
     suggestions: list[str] = Field(default_factory=list)
+    # The PC the ACTING participant drives this beat (OQ-7) — resolved once from participant_id and
+    # reused by planning, the mechanics gate, and the encounter aggressor. "" = no bound PC.
+    pc_actor_id: str = ""
 
 
 def _hash_messages(messages: list[Message]) -> str:
@@ -165,7 +168,7 @@ class Engine:
         self, campaign: Campaign, participant_id: str, intent_text: str
     ) -> BeatResult:
         """Resolve one beat and commit it (narration + extracted state, or a resolved fight)."""
-        ctx = await self._context(campaign, intent_text)
+        ctx = await self._context(campaign, participant_id, intent_text)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         started = time.perf_counter()
         chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
@@ -184,7 +187,7 @@ class Engine:
         (e.g. Ctrl-C mid-stream) the commit is intentionally skipped: nothing partial
         enters the append-only log, so a resumed session simply never saw that beat.
         """
-        ctx = await self._context(campaign, intent_text)
+        ctx = await self._context(campaign, participant_id, intent_text)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         started = time.perf_counter()
         collected: list[str] = []
@@ -231,13 +234,16 @@ class Engine:
         )
         return messages, None
 
-    async def _context(self, campaign: Campaign, intent_text: str) -> _Context:
+    async def _context(self, campaign: Campaign, participant_id: str, intent_text: str) -> _Context:
         """Context assembly [1] + (when a ruleset is bound) plan [2] + mechanics gate [3].
-        The plan/gate run before any prose streams, so a re-ask replan is still free (docs/13)."""
+        The plan/gate run before any prose streams, so a re-ask replan is still free (docs/13).
+        The acting PC is resolved from the SUBMITTING participant (OQ-7 party play): a beat by
+        participant P is planned/gated as P's PC — falling back to the campaign's solo PC when P
+        has no binding (single-player, or an unseated observer)."""
         recall = await self._recall(campaign.branch_id, intent_text)
+        pc_actor_id = await self._acting_pc(campaign, participant_id)
         if self._ruleset is None or self._bare:
-            return _Context(recall=recall)
-        pc_actor_id = await self._store.campaign_pc(campaign.campaign_id) or ""
+            return _Context(recall=recall, pc_actor_id=pc_actor_id)
         plan = await self._plan(campaign, intent_text, recall, pc_actor_id)
         checks = await self._mechanics(campaign, plan, recall, pc_actor_id)
         return _Context(
@@ -246,7 +252,15 @@ class Engine:
             mechanics_traces=[c.trace for c in checks],
             directives=plan.narration_directives,
             suggestions=plan.suggestions,
+            pc_actor_id=pc_actor_id,
         )
+
+    async def _acting_pc(self, campaign: Campaign, participant_id: str) -> str:
+        """The PC the submitting participant drives (OQ-7), or the solo/first PC as a fallback."""
+        pc = await self._store.pc_for_participant(campaign.campaign_id, participant_id)
+        if pc is None:
+            pc = await self._store.campaign_pc(campaign.campaign_id)
+        return pc or ""
 
     async def preview_beat(
         self, campaign: Campaign, participant_id: str, intent_text: str
@@ -254,7 +268,7 @@ class Engine:
         """Dry-run a beat (docs/09 creator loop): run the full pipeline — plan, narrate, extract —
         but DO NOT commit. Returns the would-be events for inspection (the event diff). Nothing
         enters the append-only log, so the campaign state is untouched."""
-        ctx = await self._context(campaign, intent_text)
+        ctx = await self._context(campaign, participant_id, intent_text)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         started = time.perf_counter()
         chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
@@ -360,7 +374,9 @@ class Engine:
         free-roam rather than fabricating a won encounter against no one (review 3.3)."""
         assert self._ruleset is not None
         branch = campaign.branch_id
-        pc_id = await self._store.campaign_pc(campaign.campaign_id) or ""
+        # The acting participant's PC (OQ-7) — so P3's attack loots/injures on P3's PC, not the
+        # campaign's first PC. Resolved once in _context, reused here.
+        pc_id = ctx.pc_actor_id
         aggressor = trigger.actor or pc_id
         defender = trigger.target
         # A real encounter needs two DISTINCT, KNOWN actors on OPPOSING sides. PC identity only

@@ -624,8 +624,9 @@ class PostgresEventStore:
         return [r["actor_id"] for r in rows]
 
     async def campaign_pc(self, campaign_id: str) -> str | None:
-        """The (first active) PC actor bound to a campaign — the actor a free-roam check acts
-        as, and whose sheet the mechanics gate reads."""
+        """The (first active) PC actor bound to a campaign — the SOLO fallback (docs/08). In a
+        party (OQ-7) the pipeline resolves the ACTING participant's PC via `pc_for_participant`;
+        this stays for single-participant play and as the fallback when a submitter is unbound."""
         async with self.pool.acquire() as conn:
             actor_id = await conn.fetchval(
                 "SELECT p.actor_id FROM proj_pcs p "
@@ -634,6 +635,79 @@ class PostgresEventStore:
                 campaign_id,
             )
         return str(actor_id) if actor_id is not None else None
+
+    async def pc_for_participant(self, campaign_id: str, participant_id: str) -> str | None:
+        """The active PC a SPECIFIC participant drives (docs/08, OQ-7) — proj_pcs keyed on
+        participant_id. This is how a party of N each get their own PC: a beat by participant P is
+        planned/resolved as P's PC. None if P has no active binding (caller falls back to solo)."""
+        async with self.pool.acquire() as conn:
+            actor_id = await conn.fetchval(
+                "SELECT actor_id FROM proj_pcs "
+                "WHERE campaign_id = $1 AND participant_id = $2 AND active "
+                "ORDER BY actor_id LIMIT 1",
+                campaign_id,
+                participant_id,
+            )
+        return str(actor_id) if actor_id is not None else None
+
+    async def bind_pc(
+        self,
+        campaign_id: str,
+        participant_id: str,
+        *,
+        adopt_actor_id: str | None = None,
+        new_pc_name: str | None = None,
+        new_pc_id: str | None = None,
+        pc_sheet: dict[str, Any] | None = None,
+        starting_items: list[str] | None = None,
+        ruleset_id: str = "",
+    ) -> str:
+        """Seat an ADDITIONAL participant's PC on a LIVE campaign (docs/08, OQ-7) — the party-join
+        path `start_campaign` only did for the first participant. Adopt an existing branch actor or
+        create a fresh PC; emits (ActorCreated if fresh) + PCBound (+ SheetUpdated + starting items)
+        in one commit. Idempotent: returns the existing PC if the participant is already bound.
+        Returns the bound PC actor_id."""
+        existing = await self.pc_for_participant(campaign_id, participant_id)
+        if existing is not None:
+            return existing  # already seated — a re-join is a no-op
+        if (adopt_actor_id is None) == (new_pc_name is None):
+            raise ValueError("bind_pc needs exactly one of adopt_actor_id / new_pc_name")
+        campaign = await self.get_campaign(campaign_id)
+        if campaign is None:
+            raise KeyError(f"unknown campaign {campaign_id!r}")
+        branch_id = campaign.branch_id
+        events: list[DomainEvent] = []
+        if adopt_actor_id is not None:
+            pc_actor_id = adopt_actor_id
+        else:
+            pc_actor_id = new_pc_id or new_id()
+            events.append(
+                actor_created(actor_id=pc_actor_id, name=new_pc_name or "", tier=2, role="pc")
+            )
+        events.append(
+            pc_bound(actor_id=pc_actor_id, participant_id=participant_id, campaign_id=campaign_id)
+        )
+        if pc_sheet is not None:
+            events.append(
+                sheet_updated(
+                    actor_id=pc_actor_id,
+                    sheet=pc_sheet,
+                    ruleset_id=ruleset_id or campaign.ruleset_id,
+                )
+            )
+        for name in starting_items or []:
+            events.append(item_created(item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id))
+        async with self.pool.acquire() as conn, conn.transaction():
+            if adopt_actor_id is not None:
+                known = await conn.fetchval(
+                    "SELECT 1 FROM proj_actors WHERE branch_id = $1 AND actor_id = $2",
+                    branch_id,
+                    adopt_actor_id,
+                )
+                if known is None:
+                    raise ValueError(f"cannot adopt unknown actor {adopt_actor_id!r} on branch")
+            await self._append(conn, branch_id, events)
+        return pc_actor_id
 
     async def current_world_time(self, branch_id: str) -> int:
         """The branch's latest in-fiction day (max over its ancestry; 0 if unset)."""
