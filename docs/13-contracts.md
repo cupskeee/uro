@@ -21,7 +21,8 @@ class BeatState(BaseModel):
     # accumulated by stages
     recall: RecallBundle | None        # [1] structured + semantic + recency (04)
     plan: BeatPlan | None              # [2]
-    mechanics: list[CheckResult | Effect] = []   # [3]
+    mechanics: list[CheckResult | Effect] = []   # [3] CheckResult.outcome is a ruleset-graded
+                                       #   band (D-30): d20 {failure,success}; PbtA {miss,partial,full}
     drafts: list[NarrationChunk] = []  # [4] streamed to client as produced
     proposals: list[ProposedEvent] = []# [5]
     result: CommitId | EventDiff | BeatFailure | None   # [6] diff when dry_run

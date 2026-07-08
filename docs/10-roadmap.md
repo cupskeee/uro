@@ -88,9 +88,18 @@ Multi-model per-role bindings go in `uro.toml` (`[llm.roles] narrator = "anthrop
 
 **Acceptance:** two CLI clients (two tokens) attached to one campaign both receive the same streamed beats; a world exported from one machine imports and continues on another. Plus **the war-story test**: a toy external battle in which the PC's spectacular feat has surviving enemy witnesses — beats later, a tavern NPC retells it as a hedged, low-confidence rumor (the feat is recorded as `truth=unknown` testimony, not canon), with the belief chain traceable back to those witnesses; re-run the same battle with zero survivors and nobody ever mentions it.
 
+## Phase 6 — The alien ruleset ★ the game-agnosticism proof (post-PoC, first up)
+
+*The engine's core claim (D-1: game-agnostic, git:GitHub) was backed by exactly ONE d20 ruleset. This phase settles OQ-13 → D-30 by adding a deliberately non-d20 second built-in and forcing every leaked d20 assumption out of the "generic" port.*
+
+- **inc 6.1 (port generalization):** `rulesets/base.py` made game-agnostic — opaque `dict` sheets, a ruleset-declared graded `CheckResult.outcome` (replacing binary `success`), no DC in the port, opaque `EncounterState`, open action/effect kinds, harm via the ruleset's opaque final `SheetUpdated` (projector `{hp}` hardcodes deleted). `uro_basic` refactored to own its d20 shape (meteor + encounter replay stay byte-identical); `uro_pbta` added (2d6 vs 7/10, harm clock, moves, advance-by-failing). A 7-surface leak audit found 64 assumptions; building uro_pbta in lockstep forced each out (leak report in D-30).
+- **inc 6.3 (registry & binding):** a ruleset registry resolves a pack's `ruleset = "id@version"` → a bound `Ruleset`; `WorldGenesis` records it, `CampaignStarted` pins id+version (migration 013), `play`/`dry-run` rebind from the campaign. `worlds/emberfell` is the PbtA example pack. (No 6.2 — the port generalization was one cohesive slice, not two.)
+
+**Acceptance** (deterministic, no key): a PbtA campaign, bound via the registry, plays a conflict beat whose **7-9 partial success leaves a persistent, canonical consequence** (an `Exposed` condition / a filled harm clock) a binary d20 result cannot express — carried across a fork; d20 and PbtA rulesets coexist in one build with irreconcilable harm shapes (hp vs a clock) through the identical runner. **Automated in `packages/uro-core/tests/test_alien_acceptance.py` — PASSING.**
+
 ## Post-PoC horizon (unordered, deliberately unscheduled)
 
-Multiplayer `PartyArbiter` (OQ-7) · full Chronicler-mode ingestion contract beyond the toy proof (OQ-12) · module/scripting system for packs · graph/vector store swap-ins if scale demands · additional rulesets (`srd51`) · NATS-backed distribution · subscription-OAuth auth strategies if ever reconsidered (removed at D-16) · anything platform-shaped (which is someone else's repo).
+Multiplayer `PartyArbiter` (OQ-7) · full Chronicler-mode ingestion contract beyond the toy proof (OQ-12) · module/scripting system for packs · graph/vector store swap-ins if scale demands · more rulesets (`srd51` — a d20 sibling; the alien-ruleset generality probe itself is DONE, Phase 6/D-30) · NATS-backed distribution · subscription-OAuth auth strategies if ever reconsidered (removed at D-16) · anything platform-shaped (which is someone else's repo).
 
 ## Standing engineering practices (all phases)
 

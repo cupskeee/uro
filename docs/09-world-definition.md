@@ -48,9 +48,10 @@ epoch_label = "After the Sundering"   # single epoch for date rendering. Named n
                                       # a History-layer concept, not derived from the day counter.
 
 [ruleset]
-id = "uro-basic"             # or any installed plugin
-version = ">=0.1"
-[ruleset.config]             # ruleset-specific knobs
+id = "uro-basic"             # resolved via the ruleset registry (06, D-30); "uro-pbta" for the
+version = ">=0.1"            #   alien PbtA build. A campaign started on the world PINS this, so
+[ruleset.config]             #   play/fork rebinds the same ruleset. Example: worlds/emberfell
+                             #   (id="uro-pbta") plays under the 2d6 system, worlds/ashfall d20.
 
 [history]
 seed_era = "aftermath-of-empire"   # hint to the History service
