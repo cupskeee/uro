@@ -111,6 +111,13 @@ class Engine:
         # Per-branch prompt style (tone) + template env, from the world's pack (docs/09). Cached.
         self._style_cache: dict[str, tuple[str, PromptEnv]] = {}
 
+    @property
+    def ruleset_id(self) -> str:
+        """The id of the bound ruleset ('' if none). Lets a caller (e.g. the server) detect a
+        campaign pinned to a DIFFERENT ruleset than this Engine holds, and reject gracefully
+        instead of crashing deep in sheet validation (D-30 per-campaign binding)."""
+        return self._ruleset.id if self._ruleset is not None else ""
+
     async def _prompt_style(self, branch_id: str) -> tuple[str, PromptEnv]:
         """The world's narrator style + prompt-pack env for a branch (cached). A world created
         without a pack yields ('', DEFAULT_ENV) — the shipped default templates, no tone."""

@@ -522,8 +522,8 @@ def adaptation_applied(
 
 # --- Character sheets (docs/06, 12; ruleset-owned) ---
 #
-# The ruleset owns the sheet's SEMANTICS (docs/06 sheet_schema); the store records it opaquely,
-# though the pipeline currently reads it via the shared port Sheet (port-fixed shape, OQ-13).
+# The ruleset owns the sheet's SHAPE and SEMANTICS (docs/06 sheet_schema); the store AND the
+# pipeline treat it as a fully opaque dict — the port fixes no shape (D-30, OQ-13 settled).
 # Emitter R S. The PoC stores the FULL sheet per update (a whole-sheet replace, not the
 # catalog's incremental "sheet_patch") — simplest sound rule until mechanics need partial patches.
 

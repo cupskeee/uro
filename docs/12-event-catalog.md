@@ -97,7 +97,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Encounter (ruleset-driven)
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `EncounterStarted` | encounter_id, participants[], initiative[] | R E | E: the parking handoff that opens an external-resolver-owned encounter (Uro decides *to* park via `ModeChanged` P/R; `EncounterStarted` marks the boundary where authority passes to E) |
+| `EncounterStarted` | encounter_id, participants[] | R E | no `initiative` field (removed D-30 — turn ordering is ruleset-internal; d20 has initiative, PbtA does not). E: the parking handoff that opens an external-resolver-owned encounter (Uro decides *to* park via `ModeChanged` P/R; `EncounterStarted` marks the boundary where authority passes to E) |
 | `EncounterTurnTaken` | encounter_id, actor_id, action, result, trace | R | trace = human-readable roll math for narration; external resolvers report bundles, not turns |
 | `EncounterEnded` | encounter_id, outcome | R E | E: outcome bundle — participants, witnesses, casualties, notable feats |
 

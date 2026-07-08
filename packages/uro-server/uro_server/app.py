@@ -53,6 +53,15 @@ def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> S
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             return
+        # The server binds ONE ruleset per process (docs/08 deferral); a campaign pinned to a
+        # DIFFERENT ruleset would otherwise crash deep in sheet validation. Reject up front with a
+        # clear diagnostic instead (D-30 per-campaign binding; the CLI play path rebinds correctly).
+        if campaign.ruleset_id and engine.ruleset_id and campaign.ruleset_id != engine.ruleset_id:
+            raise ValueError(
+                f"campaign {campaign_id} is bound to ruleset {campaign.ruleset_id!r}, but this "
+                f"server runs {engine.ruleset_id!r} — start `uro serve --ruleset "
+                f"{campaign.ruleset_id}` (one ruleset per server process)"
+            )
         async for chunk in engine.run_beat_stream(campaign, participant, text):
             yield chunk
 
@@ -171,12 +180,27 @@ async def _run_and_broadcast(
         campaign_id, {"type": "beat_started", "participant_id": participant, "intent": text}
     )
     chunks: list[str] = []
-    async for chunk in deps.run_beat(campaign_id, participant, text):
-        chunks.append(chunk)
+    try:
+        async for chunk in deps.run_beat(campaign_id, participant, text):
+            chunks.append(chunk)
+            await hub.publish(
+                campaign_id,
+                {"type": "narration_chunk", "participant_id": participant, "text": chunk},
+            )
+    except Exception as exc:
+        # A beat failure (e.g. a ruleset mismatch, a provider error) must NOT crash the WS
+        # connection — broadcast a graceful failure and keep the session alive (mirrors the CLI
+        # play loop's "beat failed; nothing was saved"). Nothing was committed (pre-commit crash).
         await hub.publish(
             campaign_id,
-            {"type": "narration_chunk", "participant_id": participant, "text": chunk},
+            {
+                "type": "beat_failed",
+                "participant_id": participant,
+                "intent": text,
+                "error": str(exc),
+            },
         )
+        return
     await hub.publish(
         campaign_id,
         {

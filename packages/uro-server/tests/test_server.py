@@ -143,3 +143,62 @@ def test_outcome_endpoint_501_when_chronicler_disabled() -> None:
         "/campaigns/camp-1/encounters/e/outcome?token=tok-a", json={}
     )
     assert resp.status_code == 501
+
+
+# --- Phase 6 (D-30) cross-phase seam (P6 x P5): per-campaign ruleset pin vs one-Engine server ---
+
+
+def test_beat_failure_is_broadcast_not_a_ws_crash() -> None:
+    # A beat that raises (e.g. a ruleset mismatch, a provider error) must degrade to a graceful
+    # 'beat_failed' broadcast, keeping the session alive — not crash the WS connection.
+    async def boom(campaign_id: str, participant: str, text: str):  # type: ignore[no-untyped-def]
+        raise RuntimeError("kaboom")
+        yield ""  # pragma: no cover — makes this an async generator
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return campaign_id == "camp-1"
+
+    deps = ServerDeps(
+        resolve_participant=lambda t: _TOKENS.get(t),
+        campaign_exists=campaign_exists,
+        run_beat=boom,
+    )
+    with TestClient(create_app(deps)).websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        _recv_until(ws, "participant_joined")
+        ws.send_json({"type": "intent", "text": "I swing"})
+        msgs = _recv_until(ws, "beat_failed")
+        failed = msgs[-1]
+        assert failed["error"] == "kaboom" and failed["intent"] == "I swing"
+        # the connection is still alive — another intent still gets a fresh beat_failed
+        ws.send_json({"type": "intent", "text": "again"})
+        assert _recv_until(ws, "beat_failed")[-1]["intent"] == "again"
+
+
+async def test_engine_deps_rejects_a_ruleset_mismatch_with_a_clear_error() -> None:
+    # engine_deps.run_beat must reject a campaign pinned to a DIFFERENT ruleset than the server's
+    # single Engine holds — with a diagnostic naming both, not a raw ValidationError from deep in
+    # sheet validation (P6 per-campaign pin x P5 one-ruleset server).
+    from uro_core.pipeline.engine import Engine
+    from uro_core.providers.adapters.stub import StubProvider
+    from uro_core.providers.router import ProviderRouter
+    from uro_core.rulesets.uro_basic import UroBasic
+    from uro_core.timeline.models import Campaign
+    from uro_server.app import engine_deps
+
+    class _FakeStore:
+        async def get_campaign(self, campaign_id: str) -> Campaign:
+            return Campaign(
+                campaign_id=campaign_id,
+                world_id="w",
+                branch_id="b",
+                ruleset_id="uro-pbta",  # pinned to the alien ruleset
+                ruleset_version=">=0",
+            )
+
+    store = _FakeStore()
+    engine = Engine(store, ProviderRouter(bindings={}, default=StubProvider()), ruleset=UroBasic())
+    deps = engine_deps(store, engine, _TOKENS)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="uro-pbta"):
+        async for _ in deps.run_beat("camp-1", "player-1", "I seize the vein"):
+            pass
