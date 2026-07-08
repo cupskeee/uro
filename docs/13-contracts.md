@@ -52,7 +52,7 @@ Canon corruption via prompt injection is a first-class threat: player text feeds
 | Tier | Source | May become |
 |---|---|---|
 | 0 | Engine state, ruleset results, world-pack seeds | Authoritative; only events change it |
-| 1 | External resolver telemetry (Chronicler mode outcome bundles, D-25) | Mechanical facts (deaths, transfers) commit directly *within the encounter's declared domain*; interpretations (feats → claims) commit as **`truth=unknown` testimony** + witness-scoped beliefs, never protected canon. *PoC: the extractor gauntlet is not yet applied to feat testimony (OQ-12)* |
+| 1 | External resolver telemetry (Chronicler mode outcome bundles, D-25, **D-32**) | Mechanical facts (deaths, transfers) commit directly ONLY *within the declared domain*, now ENFORCED (D-32): a bundle can't kill/loot/first-hand-witness a PC or a T2+ named actor (→ downgraded to `truth=unknown` testimony) or a bystander outside its declared `participants`; loot needs real ownership; feat.actor is entity-resolved; bundles are size-capped and replay-idempotent. Interpretations (feats → claims) commit as **`truth=unknown` testimony** + witness-scoped beliefs, never protected canon. *Still deferred (OQ-12): a persisted parked-encounter registry (non-self-attested scope) + full bundle schema/time-mapping — "the full contract waits for a real external game."* |
 | 2 | Narrator output (scene/outcome prose) | `truth=true` claims — subject to the gauntlet below |
 | 3 | Dialogue output (any character speaking) | Testimony: `ClaimRecorded truth=unknown` + `BeliefChanged` for speaker/listeners |
 | 4 | Player intent text / PC speech | **Never evidence.** |

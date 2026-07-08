@@ -31,7 +31,9 @@ async def _world_with_rumor_mill(store: PostgresEventStore) -> str:
         branch,
         [
             actor_created(actor_id="a:hero", name="Sable the wizard", tier=2),
-            actor_created(actor_id="a:champion", name="The warband champion", tier=2),
+            # the champion is a defeated enemy COMBATANT (T1) the external game is authoritative
+            # over — so its death commits; a T2+ named figure would downgrade to testimony (D-32).
+            actor_created(actor_id="a:champion", name="The warband champion", tier=1),
             actor_created(actor_id="a:raider1", name="A scarred raider", tier=1),
             actor_created(actor_id="a:raider2", name="A young raider", tier=1),
             actor_created(actor_id="a:townsfolk", name="A road pedlar", tier=1),
@@ -133,7 +135,10 @@ async def test_chronicler_casualty_is_recorded_dead(store: PostgresEventStore) -
     branch = await _world_with_rumor_mill(store)  # a:champion is created sheet-less
     assert (await store.get_actor(branch, "a:champion")).status == "alive"
 
-    outcome = OutcomeBundle(encounter_id="e:1", casualties=["a:champion"])
+    # the champion must be a DECLARED combatant for its death to commit (D-32 scope).
+    outcome = OutcomeBundle(
+        encounter_id="e:1", participants=["a:champion"], casualties=["a:champion"]
+    )
     await store.append_beat(branch, await distill_outcome(store, branch, outcome))
 
     assert (await store.get_actor(branch, "a:champion")).status == "dead"  # a real death trace

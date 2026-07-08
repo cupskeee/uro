@@ -216,11 +216,17 @@ async def _item_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, A
 
 
 async def _item_transferred(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # Ownership-guarded (D-32): when `from_ref` is given, the move applies only if it is the CURRENT
+    # owner — so a stale or REPLAYED transfer (e.g. a re-POSTed Chronicler bundle) no-ops instead of
+    # re-assigning. An empty from_ref keeps the legacy unconditional behavior (a transfer that
+    # doesn't declare a source).
     await conn.execute(
-        "UPDATE proj_items SET owner_ref = $3 WHERE branch_id = $1 AND item_id = $2",
+        "UPDATE proj_items SET owner_ref = $3 "
+        "WHERE branch_id = $1 AND item_id = $2 AND ($4 = '' OR owner_ref = $4)",
         branch_id,
         p["item_id"],
         p.get("to_ref", ""),
+        p.get("from_ref", ""),
     )
 
 
