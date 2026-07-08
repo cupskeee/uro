@@ -202,3 +202,35 @@ async def test_engine_deps_rejects_a_ruleset_mismatch_with_a_clear_error() -> No
     with pytest.raises(ValueError, match="uro-pbta"):
         async for _ in deps.run_beat("camp-1", "player-1", "I seize the vein"):
             pass
+
+
+# --- Phase 7 (OQ-7 → D-31): PartyArbiter round-robin over the WS play channel ---
+
+
+def test_party_arbiter_round_robin_over_the_ws_channel() -> None:
+    # Two connected participants share one campaign; free-roam turns rotate round-robin. The
+    # holder's intent runs; an out-of-turn intent is told NOT_YOUR_TURN (not rejected); the token
+    # rotates on beat_committed. Read all broadcasts off ONE socket (fan-out reaches both).
+    from uro_core.session import PartyArbiter
+
+    app = create_app(_fake_deps(), arbiter=PartyArbiter())
+    client = TestClient(app)
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,  # player-1 joins first
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,  # player-2 second
+    ):
+        _recv_until(a, "participant_joined")  # a sees its own join
+        _recv_until(a, "participant_joined")  # ...and player-2's join → roster [player-1, player-2]
+
+        # player-2 acts out of turn (player-1 holds) → NOT_YOUR_TURN, no beat
+        b.send_json({"type": "intent", "text": "me first"})
+        nyt = _recv_until(a, "not_your_turn")[-1]
+        assert nyt["participant_id"] == "player-2"
+
+        # player-1 (the holder) acts → a beat commits, and the token rotates to player-2
+        a.send_json({"type": "intent", "text": "my turn"})
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-1"
+
+        # now player-2 holds → their intent runs
+        b.send_json({"type": "intent", "text": "now me"})
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"

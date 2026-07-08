@@ -28,9 +28,7 @@ How does world time behave when a post-MVP party splits pace (one PC in downtime
 Prices, trade, scarcity — simulated, narrated, or ruleset-delegated?
 *For now:* narrated flavor + ruleset-priced transactions; no simulation.
 
-**OQ-7 · Multiplayer free-roam arbitration** *(explicitly deferred at D-9)*
-Encounter mode self-arbitrates via initiative; free-roam with 4 players does not. Proposal windows? GM-player role? Consensus prompts? This is a design problem *and* a UX problem, and it's the first thing to brainstorm when multiplayer becomes real.
-*For now:* `SoloArbiter` only.
+*(OQ-7 · multiplayer free-roam arbitration — **SETTLED → D-31**, Phase 7. `PartyArbiter` implements ROUND-ROBIN turn ownership behind a widened `TurnArbiter` port; the pipeline resolves each beat as the acting participant's PC (`pc_for_participant`); `bind_pc`/`uro campaign join` seats a party. Proposal-window / consensus / GM-player arbiters remain future implementations behind the same port — the genuinely-open part stays open, but the seam is proven. Moved to `decisions.md` per process.)*
 
 **OQ-8 · History adaptation triggers**
 After a major event, *which* threads/claims get re-evaluated? Full-world sweeps won't scale; entity-neighborhood graphs (blast radius via edges) seem right but need a distance metric.

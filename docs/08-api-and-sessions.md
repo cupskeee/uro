@@ -29,19 +29,19 @@ GET    /usage?world=&campaign=&stage=   token/latency metering
 GET    /healthz
 ```
 
-The WebSocket channel carries: client→server `intent`, `encounter_action` *(future — encounters auto-resolve in the PoC, D-29)*, `pin_actor`; server→client `narration_chunk`, `scene_update`, `mechanics_result`, `mode_change`, `beat_committed`, `suggestions`, `participant_*`. Message envelope always includes `campaign_id`, `beat_id`, and `participant_id` — that last one is the multiplayer seam (below).
+The WebSocket channel carries: client→server `intent`, `encounter_action` *(future — encounters auto-resolve in the PoC, D-29)*, `pin_actor`; server→client `narration_chunk`, `scene_update`, `mechanics_result`, `mode_change`, `beat_started`, `beat_committed`, `beat_failed`, `not_your_turn` *(round-robin turn arbitration, D-31)*, `intent_rejected`, `suggestions`, `participant_*`. Message envelope always includes `campaign_id`, `beat_id`, and `participant_id` — that last one is the multiplayer seam (below).
 
 Beat results may carry `suggestions[]` — 2–4 affordance-grounded next-action hints emitted by the planner at no extra LLM cost (D-23). **Free-text intent is canonical**; suggestions are hints clients may ignore entirely (the CLI renders them dimmed), never a constrained choice list.
 
-## Session model — single-player now, multiplayer-shaped
+## Session model — multiplayer (round-robin, D-31)
 
-Owner requirement: heavy emphasis on single-player MVP, **architecturally prepared** for multiplayer lobbies. The preparation is structural, not speculative code:
+Owner requirement: single-player MVP, **architecturally prepared** for multiplayer. Phase 7 (OQ-7 → D-31) made the preparation real — a single-player leak audit (35 findings) proved the "shaped-for-MP" seam had leaked single-player assumptions (the pipeline planned every beat as one campaign-wide PC; `admit` was a bare bool; `Session`/`Participant` were dead-wired), and building a real `PartyArbiter` forced them out.
 
-- **Campaign ≠ Session.** A *campaign* is the persistent story (branch, party, mode). A *session* is a live connection context: `session(campaign_id, participants[])`. MVP: exactly one session per campaign, one participant. Nothing anywhere assumes party size 1.
-- **Participants, not "the player."** Every intent, beat, and event `caused_by` carries a `participant_id` mapped to a PC actor. Single-player is the degenerate case of a participant list of one.
-- **Arbitration port.** Beat admission goes through a `TurnArbiter` interface. MVP implementation: `SoloArbiter` (always admit). Multiplayer later means writing `PartyArbiter` (free-roam: proposal window/consensus — genuinely open, OQ-7; encounter mode: initiative order already arbitrates) — a new arbiter, not a rewrite.
+- **Campaign ≠ Session.** A *campaign* is the persistent story (branch, party, mode). A *session* is a live connection context. A campaign's PARTY is now real: `start_campaign` seats the first participant's PC; `bind_pc` / `uro campaign join` seats each additional participant on their OWN PC (one `PCBound` per participant). ~~Nothing anywhere assumes party size 1~~ — corrected: it *did* (`campaign_pc` was singular); now the pipeline resolves the acting participant's PC via `pc_for_participant`, with `campaign_pc` kept only as the solo fallback.
+- **Participants, not "the player."** Every intent, beat, and event `caused_by` carries a `participant_id` mapped to a PC actor — and a beat is now PLANNED and RESOLVED as the submitting participant's PC (the planner "YOU ARE actor X", the mechanics gate, the encounter aggressor). Single-player is the degenerate one-participant case.
+- **Arbitration port.** Beat admission goes through the `TurnArbiter` port: `admit -> AdmitDecision` (`ADMITTED` / `NOT_YOUR_TURN` / `REJECTED`; `QUEUED` reserved) + a `note_joined`/`note_left`/`beat_committed` lifecycle. `SoloArbiter` always admits; `PartyArbiter` (D-31) rotates one turn token per campaign over the connected roster in join order (only the holder is admitted; the token advances on `beat_committed`). Turn state is **session-only** (not event-sourced — a turn token is a live-connection concern, not campaign history). Proposal-window / consensus / GM-player arbiters remain future implementations behind the same port (OQ-7's genuinely-open part); encounter mode still self-arbitrates via initiative.
 - **Broadcast-shaped output.** Server→client messages are addressed to a session and fan out to all its connections; with one connection this is invisible, with four it's already correct.
-- **What MVP deliberately does NOT build:** lobby discovery, invitations, per-participant hidden information, voice/chat. All platform or post-MVP.
+- **What is deliberately NOT built (deferred):** proposal-window/consensus arbiters; auto-binding a PC on WS-join (`uro campaign join` pre-seats the party); an optimistic-concurrency `expected_head` guard (round-robin serializes turns, so concurrent free-for-all beats aren't reachable); lobby discovery, invitations, per-participant hidden information, voice/chat (platform/post-MVP).
 
 ## Auth & identity
 

@@ -18,7 +18,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from starlette.websockets import WebSocketState
 from uro_core.pipeline.engine import Engine
 from uro_core.ports.projections import EngineStore
-from uro_core.session import SoloArbiter, TurnArbiter
+from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter
 
 from uro_server.sessions import SessionHub
 
@@ -126,6 +126,7 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             return
         await ws.accept()
         queue = hub.subscribe(campaign_id)
+        await arb.note_joined(campaign_id, participant)  # add to the arbiter's turn roster (OQ-7)
         await hub.publish(
             campaign_id, {"type": "participant_joined", "participant_id": participant}
         )
@@ -143,6 +144,7 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         finally:
             forward.cancel()
             hub.unsubscribe(campaign_id, queue)
+            await arb.note_left(campaign_id, participant)  # drop from the turn roster (OQ-7)
             await hub.publish(
                 campaign_id, {"type": "participant_left", "participant_id": participant}
             )
@@ -171,7 +173,15 @@ async def _run_and_broadcast(
     (docs/08 broadcast-shaped output) — so every connected client sees the SAME beat."""
     if not text.strip():
         return
-    if not await arbiter.admit(campaign_id, participant, text):
+    decision = await arbiter.admit(campaign_id, participant, text)
+    if decision == AdmitDecision.NOT_YOUR_TURN:
+        # Valid intent, but another participant holds the turn (round-robin, OQ-7) — tell the
+        # client to hold; it is NOT rejected, so a client may retry when the token rotates.
+        await hub.publish(
+            campaign_id, {"type": "not_your_turn", "participant_id": participant, "text": text}
+        )
+        return
+    if decision != AdmitDecision.ADMITTED:  # REJECTED (or a reserved QUEUED) → no beat now
         await hub.publish(
             campaign_id, {"type": "intent_rejected", "participant_id": participant, "text": text}
         )
@@ -210,3 +220,5 @@ async def _run_and_broadcast(
             "narration": "".join(chunks).strip(),
         },
     )
+    # The beat committed — let the arbiter rotate the turn token to the next participant (OQ-7).
+    await arbiter.beat_committed(campaign_id, participant, "")

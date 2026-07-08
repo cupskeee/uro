@@ -18,6 +18,7 @@ from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets.base import CharSpec
 from uro_core.rulesets.rng import Rng
 from uro_core.rulesets.uro_basic import UroBasic
+from uro_core.session import AdmitDecision, PartyArbiter, SoloArbiter
 
 RS = UroBasic()
 
@@ -141,3 +142,62 @@ async def test_encounter_aggressor_is_the_acting_participants_pc(store: Postgres
     await _run("p2")
     assert (await store.get_sheet(main, "a:bob"))["hp"] == 0  # Bob fought and lost
     assert (await store.get_sheet(main, "a:alice"))["hp"] > 0  # Alice never entered the fight
+
+
+# --- the PartyArbiter: round-robin turn ownership (OQ-7 → D-31) ---
+
+
+async def test_solo_arbiter_always_admits() -> None:
+    a = SoloArbiter()
+    assert await a.admit("c", "p1", "x") == AdmitDecision.ADMITTED
+    await a.note_joined("c", "p1")  # no-ops, never raise
+    await a.beat_committed("c", "p1", "b")
+    assert await a.admit("c", "anyone", "x") == AdmitDecision.ADMITTED
+
+
+async def test_party_arbiter_rotates_the_turn_on_each_committed_beat() -> None:
+    a = PartyArbiter()
+    for p in ("p1", "p2", "p3"):
+        await a.note_joined("c", p)
+    # p1 holds first (join order); the others must wait
+    assert await a.admit("c", "p1", "x") == AdmitDecision.ADMITTED
+    assert await a.admit("c", "p2", "x") == AdmitDecision.NOT_YOUR_TURN
+    assert await a.admit("c", "p3", "x") == AdmitDecision.NOT_YOUR_TURN
+    # a committed beat rotates the token p1 → p2 → p3 → p1
+    order = []
+    for _ in range(6):
+        holder = None
+        for p in ("p1", "p2", "p3"):
+            if await a.admit("c", p, "x") == AdmitDecision.ADMITTED:
+                holder = p
+                break
+        assert holder is not None
+        order.append(holder)
+        await a.beat_committed("c", holder, "b")
+    assert order == ["p1", "p2", "p3", "p1", "p2", "p3"]  # deterministic round-robin
+
+
+async def test_party_arbiter_isolates_campaigns() -> None:
+    a = PartyArbiter()
+    await a.note_joined("c1", "p1")
+    await a.note_joined("c2", "p2")
+    assert await a.admit("c1", "p1", "x") == AdmitDecision.ADMITTED
+    assert await a.admit("c2", "p2", "x") == AdmitDecision.ADMITTED  # each campaign its own ring
+
+
+async def test_party_arbiter_departure_passes_the_token() -> None:
+    a = PartyArbiter()
+    for p in ("p1", "p2", "p3"):
+        await a.note_joined("c", p)
+    # a NON-holder leaving does not disturb the holder
+    await a.note_left("c", "p3")
+    assert await a.admit("c", "p1", "x") == AdmitDecision.ADMITTED
+    # the HOLDER leaving: the turn passes to a surviving member (not orphaned)
+    await a.note_left("c", "p1")  # roster now [p2]; the token must land on p2
+    assert await a.admit("c", "p2", "x") == AdmitDecision.ADMITTED
+    assert await a.admit("c", "px", "x") == AdmitDecision.NOT_YOUR_TURN  # a non-member never holds
+
+
+async def test_party_arbiter_empty_roster_admits() -> None:
+    a = PartyArbiter()  # no one noted joined (e.g. a direct in-process call) → degenerate admit
+    assert await a.admit("c", "p1", "x") == AdmitDecision.ADMITTED

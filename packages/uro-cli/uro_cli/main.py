@@ -470,13 +470,17 @@ def serve(
     do from campaign.ruleset_id) needs the Engine to resolve the ruleset per beat — deferred."""
     import uvicorn
     from uro_core.pipeline.engine import Engine
+    from uro_core.session import PartyArbiter
     from uro_server.app import create_app, engine_deps
 
     toks = token or ["local"]
     tokens = {t: f"player-{i + 1}" for i, t in enumerate(toks)}
     store = build_store()
     engine = Engine(store, build_router(provider, model), ruleset=build_ruleset(ruleset))
-    fastapi_app = create_app(engine_deps(store, engine, tokens))
+    # More than one token → a party: round-robin free-roam turns (OQ-7, D-31). One token → solo
+    # (create_app defaults to SoloArbiter). Seat each participant's PC via `uro campaign join`.
+    arbiter = PartyArbiter() if len(tokens) > 1 else None
+    fastapi_app = create_app(engine_deps(store, engine, tokens), arbiter=arbiter)
 
     @fastapi_app.on_event("startup")
     async def _startup() -> None:
@@ -721,6 +725,50 @@ def campaign_end(
         finally:
             await store.close()
         typer.echo(f"campaign ended; marker {m.name!r} → commit {m.commit_id[:8]}")
+
+    _run_async(_run)
+
+
+@campaign_app.command("join")
+def campaign_join(
+    campaign_id: str,
+    participant: str = typer.Option(..., "--participant", help="joining participant id"),
+    adopt: str = typer.Option(None, "--adopt", help="adopt an existing actor as this PC"),
+    pc: str = typer.Option(None, "--pc", help="create a fresh PC with this name"),
+) -> None:
+    """Seat an ADDITIONAL participant on a live campaign, binding their OWN PC (docs/08, OQ-7) —
+    the party-join path. Round-robin free-roam then rotates turns across the party (`uro serve`
+    with multiple --token spins up a PartyArbiter)."""
+
+    async def _run() -> None:
+        if (adopt is None) == (pc is None):
+            typer.echo("provide exactly one of --adopt <actor_id> or --pc <name>", err=True)
+            raise typer.Exit(1)
+        store = build_store()
+        await store.connect()
+        try:
+            campaign = await store.get_campaign(campaign_id)
+            if campaign is None:
+                typer.echo(f"no such campaign: {campaign_id}", err=True)
+                raise typer.Exit(1)
+            # Sheet a fresh PC (or an adopted actor lacking one) from the campaign's bound ruleset.
+            pc_sheet = None
+            if pc is not None or (
+                adopt is not None and await store.get_sheet(campaign.branch_id, adopt) is None
+            ):
+                pc_sheet, _ = _build_pc_sheet(campaign.ruleset_id, campaign.ruleset_version)
+            actor = await store.bind_pc(
+                campaign_id,
+                participant,
+                adopt_actor_id=adopt,
+                new_pc_name=pc,
+                pc_sheet=pc_sheet,
+                starting_items=["a traveler's knife"] if pc is not None else None,
+                ruleset_id=campaign.ruleset_id,
+            )
+        finally:
+            await store.close()
+        typer.echo(f"joined: participant {participant!r} → PC {actor}")
 
     _run_async(_run)
 
