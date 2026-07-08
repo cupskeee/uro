@@ -169,7 +169,14 @@ def validate_plan(
             errors.append(f"target references unknown actor {t!r}")
 
     # D-21: every trigger category the planner recognized must be invoked by some affordance.
+    # ONLY the ruleset's DECLARED trigger vocabulary is governed — a small model routinely invents
+    # non-mechanical categories ("social", "movement"; found live). Those can't dodge a check (no
+    # affordance, no check), so ignoring them preserves D-21 for real triggers while not failing a
+    # beat over the planner's mislabelling.
+    declared = {t for a in affordances for t in a.trigger_categories}
     for trig in plan.triggers:
+        if trig not in declared:
+            continue
         if not any(
             trig in aff_by_id[m.affordance].trigger_categories
             for m in plan.mechanics

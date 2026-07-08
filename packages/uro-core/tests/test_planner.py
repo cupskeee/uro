@@ -59,6 +59,17 @@ def test_validate_plan_enforces_trigger_coverage() -> None:
     assert validate_plan(good, _AFF, {"a:pc"}) == []
 
 
+def test_validate_plan_ignores_invented_trigger_categories() -> None:
+    # A small model routinely invents NON-mechanical trigger categories (found live: gpt-4o-mini
+    # emitting "social"/"movement"). D-21 governs only the ruleset's DECLARED vocabulary — an
+    # invented category has no affordance, hence no check to dodge, so it must not fail the beat.
+    invented = BeatPlan(triggers=["social", "movement"], mechanics=[])
+    assert validate_plan(invented, _AFF, set()) == []
+    # ...but a real, declared trigger with no mechanic still fails (D-21 preserved for real checks).
+    real = BeatPlan(triggers=["violence"], mechanics=[])
+    assert any("D-21" in e for e in validate_plan(real, _AFF, set()))
+
+
 # --- mechanics gate (deterministic; docs/06) ---
 
 
