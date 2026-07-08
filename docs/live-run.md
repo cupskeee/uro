@@ -105,3 +105,38 @@ Use it as a regression trend across changes, not as absolute proof.
 - gpt-4o-mini follows the extractor's strict-JSON instruction well; if you swap in a weaker
   model and `consistency` shows `0/0` on beats that clearly asserted facts, the extractor
   JSON is likely failing to parse (watch stderr for the "not parseable JSON" warning).
+
+## 6. Post-PoC live validation (Phases 6–8)
+
+The post-PoC phases (alien ruleset, multiplayer, Chronicler hardening) are proven only by
+**deterministic** tests — CI never calls a live model. This exercises the LLM-in-the-loop legs
+with a real one; the owner runs it, Claude analyzes from Postgres.
+
+```
+export OPENAI_API_KEY=...              # (or MODEL=gpt-4o for sharper prose)
+bash scripts/postpoc_validate.sh
+```
+
+- **Leg A — Phase 6 (uro_pbta).** Creates an Emberfell campaign bound to the PbtA ruleset and
+  plays ~8 intents live. What to look for: the LIVE planner picks PbtA **moves** (not d20 verbs);
+  an aggressive intent triggers a **2d6 conflict**; the narrator weaves 7-9 *partial* outcomes.
+  Analyze: `campaigns.ruleset_id = 'uro-pbta'`; the PC sheet in `proj_sheets` carries
+  `stats`/`harm`/`conditions` and **no** `hp`/`ac`; a conflict commits `EncounterStarted` +
+  `EncounterTurnTaken.result ∈ {miss,partial,full}`; claims/beliefs built from real narration.
+- **Leg B — Phase 8 (Chronicler).** Seeds an external toy battle whose feat becomes a witness
+  rumor (`scripts/warstory_live.py`, deterministic), then asks a **live** narrator to retell it.
+  What to look for: the third-hand, low-confidence belief surfaces as a **hedged rumor** in real
+  prose, not settled fact. Analyze: the feat is `truth=unknown`/`origin=external`; Mera's belief
+  confidence is low; the Leg-B transcript in `events` retells it hedged. (The scope/protection
+  itself is deterministic — see `tests/test_chronicler_hardening.py`.)
+- **Phase 7 (multiplayer) — manual, two terminals.** Round-robin arbitration is deterministic
+  (tested), but to see it live: `uro campaign new <world> --pc Ash`, `uro campaign join <cid>
+  --participant player-2 --pc Bane`, then `uro serve --token tok-a --token tok-b` in one
+  terminal and `uro connect <cid> --token tok-a` / `--token tok-b` in two others. Only the
+  turn-holder's intent runs; the other sees `not your turn`; the token rotates each committed beat.
+
+Analysis queries (Claude, no key): `docker compose exec postgres psql -U uro -d uro` then e.g.
+`SELECT ruleset_id FROM campaigns WHERE campaign_id='<id>';`, `SELECT sheet FROM proj_sheets
+WHERE actor_id='a:ash';`, `SELECT event_type,payload FROM events e JOIN commits c ON
+c.commit_id=e.commit_id JOIN branches b ON b.world_id=c.world_id WHERE b.branch_id='<branch>'
+ORDER BY c.depth, e.seq;`.

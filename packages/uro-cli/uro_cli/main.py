@@ -525,6 +525,10 @@ def connect(
                             typer.echo(msg["text"], nl=False)
                         elif kind == "beat_committed":
                             typer.echo(f"\n  ✓ [{msg['participant_id']}] {msg['intent']!r}\n")
+                        elif kind == "not_your_turn":
+                            typer.echo("  · not your turn — another player holds it (round-robin)")
+                        elif kind == "beat_failed":
+                            typer.echo(f"\n  ✗ beat failed: {msg['error']}")
                         elif kind in ("participant_joined", "participant_left"):
                             typer.echo(f"  · {msg['participant_id']} {kind.split('_')[1]}")
 
