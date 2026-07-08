@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import actor_created, sheet_updated
 from uro_core.domain.ids import new_id
+from uro_core.export import verify_bundle
 from uro_core.pipeline.encounter import run_encounter
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.stub import hashing_embedding
@@ -209,3 +210,38 @@ async def test_pbta_fight_through_the_pipeline(store: PostgresEventStore) -> Non
     ash = PbtaSheet.model_validate(await store.get_sheet(main, "a:ash"))
     bane = PbtaSheet.model_validate(await store.get_sheet(main, "a:bane"))
     assert not bane.in_fight or not ash.in_fight  # a decisive result persisted
+
+
+# --- 5. cross-phase cohesion: a PbtA world survives export/import (P6 x P5) ---
+
+
+async def test_pbta_world_survives_export_import(store: PostgresEventStore) -> None:
+    # A PbtA world's ruleset binding + opaque (hp-less) sheets must round-trip through export/import
+    # exactly as a fork does — the whole stack is ruleset-agnostic, so the Phase-5 export machinery
+    # replays PbtA events with no special-casing. (Cohesion check the phase-end review flagged as
+    # untested; verified here rather than assumed.)
+    src = await store.create_world(
+        f"Ember-{new_id()}", ruleset_id="uro-pbta", ruleset_version=">=0"
+    )
+    await store.append_beat(
+        src.main_branch_id,
+        [
+            actor_created(actor_id="a:river", name="River", tier=2),
+            sheet_updated(
+                actor_id="a:river",
+                sheet={**_pbta(2), "harm": 3, "conditions": ["Exposed"]},
+                ruleset_id="uro-pbta",
+            ),
+        ],
+    )
+    bundle = await store.export_world(src.world_id)
+    verify_bundle(bundle)  # self-consistent hash chain
+    dst = await store.import_world(bundle)
+    assert dst.world_id != src.world_id  # a fresh instance
+
+    # the ruleset binding survived (WorldGenesis carried it) and rebinds on the imported world
+    assert await store.world_ruleset(dst.main_branch_id) == ("uro-pbta", ">=0")
+    # the opaque PbtA sheet replayed verbatim — harm clock + condition intact, still no hp
+    river = await store.get_sheet(dst.main_branch_id, "a:river")
+    assert river is not None and river["harm"] == 3 and river["conditions"] == ["Exposed"]
+    assert "hp" not in river
