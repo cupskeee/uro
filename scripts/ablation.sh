@@ -41,7 +41,10 @@ I ask whether anyone here would dispute what the Duke and his men have been clai
 
 run_arm () {  # $1 = campaign id, rest = extra play flags
   local cid="$1"; shift
-  { printf '%s\n' "$INTENTS"; echo /quit; } | uv run uro play "$cid" --provider openai "${MODEL_FLAG[@]}" "$@"
+  # ${arr[@]+"${arr[@]}"} — expands to nothing (not an "unbound variable" error) when the array
+  # is empty under `set -u` on bash 3.2 (macOS default); to its elements when MODEL was set.
+  { printf '%s\n' "$INTENTS"; echo /quit; } \
+    | uv run uro play "$cid" --provider openai ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} "$@"
 }
 
 echo "=================== FULL arm ($A) ==================="; run_arm "$A"
