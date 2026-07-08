@@ -24,7 +24,7 @@ RS = UroBasic()
 
 
 def _sheet(abilities: dict[str, int], tier: int = 1) -> dict:
-    return RS.new_character(CharSpec(abilities=abilities, weapon_tier=tier), Rng(0)).model_dump()
+    return RS.new_character(CharSpec(data={"abilities": abilities, "weapon_tier": tier}), Rng(0))
 
 
 # --- pure encounter runner: deterministic replay + effect events ---
@@ -35,7 +35,7 @@ def test_run_encounter_replays_identically_and_emits_effects() -> None:
     foe = Combatant(
         actor_id="a:foe",
         team="foes",
-        sheet=RS.new_character(CharSpec(abilities={"CON": 8}), Rng(0)),
+        sheet=RS.new_character(CharSpec(data={"abilities": {"CON": 8}}), Rng(0)),
     )
     e1, o1 = run_encounter(RS, [pc, foe], Rng(42), encounter_id="e:1")
     e2, o2 = run_encounter(RS, [pc, foe], Rng(42), encounter_id="e:1")
@@ -44,7 +44,8 @@ def test_run_encounter_replays_identically_and_emits_effects() -> None:
     assert o1.winner_team in ("party", "foes")
     assert e1[0].event_type == "EncounterStarted" and e1[-1].event_type == "EncounterEnded"
     assert any(ev.event_type == "EncounterTurnTaken" for ev in e1)
-    assert any(ev.event_type == "ActorDamaged" for ev in e1)  # a hit landed → damage event
+    # harm reaches the timeline as the ruleset's OPAQUE final sheet (D-30), not a typed hp event
+    assert any(ev.event_type == "SheetUpdated" for ev in e1)
     # a different seed produces a different fight
     e3, _ = run_encounter(RS, [pc, foe], Rng(7), encounter_id="e:1")
     assert [ev.payload for ev in e3] != [ev.payload for ev in e1]
@@ -57,19 +58,23 @@ def test_acceptance_fight_pc_loses_across_seeds() -> None:
         return Combatant(
             actor_id="a:bram",
             team="party",
-            sheet=RS.new_character(CharSpec(abilities={"STR": 8, "DEX": 4, "CON": 18}), Rng(0)),
+            sheet=RS.new_character(
+                CharSpec(data={"abilities": {"STR": 8, "DEX": 4, "CON": 18}}), Rng(0)
+            ),
         )
 
     def grull() -> Combatant:
         return Combatant(
             actor_id="a:grull",
             team="foes",
-            sheet=RS.new_character(CharSpec(abilities={"STR": 20, "DEX": 14, "CON": 20}), Rng(0)),
+            sheet=RS.new_character(
+                CharSpec(data={"abilities": {"STR": 20, "DEX": 14, "CON": 20}}), Rng(0)
+            ),
         )
 
     for seed in range(300):
         events, outcome = run_encounter(RS, [bram(), grull()], Rng(seed), encounter_id="e")
-        assert outcome.winner_team == "foes" and "a:bram" in outcome.casualties
+        assert outcome.winner_team == "foes" and "a:bram" in outcome.out_of_fight
         assert sum(1 for e in events if e.event_type == "EncounterTurnTaken") >= 2  # multi-round
 
 
@@ -253,7 +258,7 @@ async def test_fork_from_marker_after_combat_restores_hp_and_loot(
     # Exercises the snapshot 'sheets'/'items' RESTORE path (not just replay): a fork from a
     # MARKER after a fight carries the reduced hp + moved ownership out of the snapshot blob.
     # Also verifies start_campaign's live starting-item emitter (the PC owns a real item in play).
-    from uro_core.domain.events import actor_damaged, item_transferred
+    from uro_core.domain.events import item_transferred
 
     world = await store.create_world(f"test-{new_id()}")
     main = world.main_branch_id
@@ -270,12 +275,13 @@ async def test_fork_from_marker_after_combat_restores_hp_and_loot(
     assert campaign.campaign_id is not None
     knife = (await store.items_owned_by(main, "a:x"))[0]  # the starting item exists
 
-    # simulate a lost fight's persistent effects: Xan downed, the knife looted by Yorn
+    # simulate a lost fight's persistent effects: Xan downed (opaque final sheet), knife looted
+    downed = {**(await store.get_sheet(main, "a:x") or {}), "hp": 0}
     await store.append_beat(
         main,
         [
             actor_created(actor_id="a:y", name="Yorn"),
-            actor_damaged(actor_id="a:x", amount=999, source="a:y"),
+            sheet_updated(actor_id="a:x", sheet=downed, ruleset_id="uro-basic"),
             item_transferred(item_id=knife, from_ref="a:x", to_ref="a:y"),
         ],
     )
@@ -290,23 +296,34 @@ async def test_fork_from_marker_after_combat_restores_hp_and_loot(
 
 
 async def test_combat_events_project_hp_and_ownership(store: PostgresEventStore) -> None:
-    # Direct check of the effect→projection wiring the acceptance rides on.
-    from uro_core.domain.events import actor_damaged, item_transferred
+    # Direct check of the effect→projection wiring the acceptance rides on: harm reaches the
+    # projection as the ruleset's OPAQUE final sheet (SheetUpdated), never a typed hp event (D-30).
+    from uro_core.domain.events import item_transferred
 
     world = await store.create_world(f"test-{new_id()}")
     main = world.main_branch_id
+    sheet = _sheet({"CON": 12})
     await store.append_beat(
         main,
         [
             actor_created(actor_id="a:x", name="X"),
-            sheet_updated(actor_id="a:x", sheet=_sheet({"CON": 12}), ruleset_id="uro-basic"),
+            sheet_updated(actor_id="a:x", sheet=sheet, ruleset_id="uro-basic"),
             item_created(item_id="i:1", name="ring", owner_ref="a:x"),
         ],
     )
     start_hp = (await store.get_sheet(main, "a:x"))["hp"]
-    await store.append_beat(main, [actor_damaged(actor_id="a:x", amount=3, source="a:y")])
-    assert (await store.get_sheet(main, "a:x"))["hp"] == start_hp - 3  # damage reduced hp
-    await store.append_beat(main, [actor_damaged(actor_id="a:x", amount=999, source="a:y")])
-    assert (await store.get_sheet(main, "a:x"))["hp"] == 0  # clamped at 0, never negative
+    await store.append_beat(
+        main,
+        [
+            sheet_updated(
+                actor_id="a:x", sheet={**sheet, "hp": start_hp - 3}, ruleset_id="uro-basic"
+            )
+        ],
+    )
+    assert (await store.get_sheet(main, "a:x"))["hp"] == start_hp - 3  # opaque sheet replaced
+    await store.append_beat(
+        main, [sheet_updated(actor_id="a:x", sheet={**sheet, "hp": 0}, ruleset_id="uro-basic")]
+    )
+    assert (await store.get_sheet(main, "a:x"))["hp"] == 0
     await store.append_beat(main, [item_transferred(item_id="i:1", from_ref="a:x", to_ref="a:y")])
     assert (await store.get_item(main, "i:1"))["owner_ref"] == "a:y"  # ownership moved

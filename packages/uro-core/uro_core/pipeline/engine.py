@@ -55,7 +55,6 @@ from uro_core.rulesets.base import (
     Combatant,
     EncounterOutcome,
     Ruleset,
-    Sheet,
 )
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import Campaign
@@ -369,13 +368,11 @@ class Engine:
                 return None  # a ref that is not a known actor → not a real fight
             sheet_dict = await self._store.get_sheet(branch, actor_id)
             if sheet_dict is None:  # a known-but-unsheeted combatant gets a default sheet, logged
-                sheet_dict = self._ruleset.new_character(CharSpec(), Rng(0)).model_dump()
+                sheet_dict = self._ruleset.new_character(CharSpec(), Rng(0))
                 setup.append(
                     sheet_updated(actor_id=actor_id, sheet=sheet_dict, ruleset_id=self._ruleset.id)
                 )
-            combatants.append(
-                Combatant(actor_id=actor_id, team=team, sheet=Sheet.model_validate(sheet_dict))
-            )
+            combatants.append(Combatant(actor_id=actor_id, team=team, sheet=sheet_dict))
 
         encounter_id = f"e:{new_id()}"
         rng = await self._beat_rng(campaign)

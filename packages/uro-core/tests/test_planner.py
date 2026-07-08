@@ -27,7 +27,8 @@ _AFF = RS.affordances()
 
 
 def _pc_sheet(abilities: dict[str, int] | None = None) -> dict:
-    return RS.new_character(CharSpec(abilities=abilities), Rng(0)).model_dump()
+    data = {"abilities": abilities} if abilities else {}
+    return RS.new_character(CharSpec(data=data), Rng(0))
 
 
 # --- plan validation (deterministic; docs/13, D-21) ---
@@ -78,9 +79,10 @@ def test_resolve_mechanics_resolves_a_check_deterministically() -> None:
     sheets = {"a:pc": _pc_sheet({"CHA": 16})}
     r1 = resolve_mechanics(RS, plan, sheets, "a:pc", Rng(5))
     r2 = resolve_mechanics(RS, plan, sheets, "a:pc", Rng(5))
-    assert len(r1) == 1 and r1[0].ability == "CHA" and r1[0].modifier == 3  # CHA 16 → +3
+    assert len(r1) == 1 and r1[0].detail["modifier"] == 3  # CHA 16 → +3
+    assert r1[0].outcome in ("success", "failure")  # d20's 2-tier graded ladder
     assert r1[0].model_dump() == r2[0].model_dump()  # same seed → same result
-    assert r1[0].dc == RS.dc_for("medium")  # persuade is a medium-difficulty affordance
+    assert r1[0].detail["dc"] == 15  # persuade is a medium-difficulty affordance (DC 15)
 
 
 def test_resolve_mechanics_skips_encounter_and_unsheeted() -> None:

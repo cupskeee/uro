@@ -1,165 +1,167 @@
 """Ruleset PORT — the interface + data contracts (docs/06).
 
 Mechanics live behind this port; the core ring (pipeline) imports only these types and
-the `Ruleset` Protocol, never a concrete ruleset (import-linter bans `rulesets.uro_basic`).
-Built-in "Uro Basic" implements it. Everything here is deterministic value data — rolls
-come from the injected `Rng`, so a beat replays identically (docs/10). Contract discipline
-mirrors the event catalog: these shapes are versioned and changed with the code that uses
-them. Caveat (OQ-13): shaped against one d20 ruleset so far — d20 assumptions (ability
-scores, HP/AC) may have leaked into the "generic" contract until an alien ruleset is tried.
+the `Ruleset` Protocol, never a concrete ruleset (import-linter bans `rulesets.uro_basic`,
+`rulesets.uro_pbta`). Everything here is deterministic value data — rolls come from the
+injected `Rng`, so a beat replays identically (docs/10).
+
+GAME-AGNOSTIC BY CONSTRUCTION (OQ-13 → D-30). This port names NO game vocabulary: no
+abilities, no hit points, no armour class, no DC, no attack/defend, no damage. A character
+SHEET is an opaque `dict` whose shape each ruleset owns and validates internally (the same way
+the store/projector already persist it, docs/07); a check yields a ruleset-declared graded
+`outcome` string (d20 says {failure,success}; a PbtA 2d6 system says {miss,partial,full} — the
+7-9 partial that a `bool` could not hold); encounter STATE is an opaque ruleset subclass the
+runner never introspects. Two structurally-different built-ins prove it: `uro_basic` (d20:
+ability scores, hp/ac, initiative attrition) and `uro_pbta` (PbtA: 4 stats, a harm clock,
+move exchanges). Any d20 word appearing here again is a regression — it belongs in a ruleset.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.rng import Rng
 
-Ability = Literal["STR", "DEX", "CON", "INT", "WIS", "CHA"]
-ABILITIES: tuple[Ability, ...] = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
-
-# Difficulty tiers (docs/06). A plan/affordance names a tier; the ruleset maps it to a DC.
-Difficulty = Literal["easy", "medium", "hard"]
-DIFFICULTY_DC: dict[Difficulty, int] = {"easy": 10, "medium": 15, "hard": 20}
+# A character sheet is OPAQUE to the core: an arbitrary JSON object whose shape the bound
+# ruleset defines and validates. The port neither reads nor writes its fields.
+Sheet = dict[str, Any]
 
 
 # --- character model ---
 
 
-class Sheet(BaseModel):
-    """A character sheet. `abilities` are the six scores; modifiers derive as (score-10)//2."""
-
-    abilities: dict[str, int]
-    max_hp: int
-    hp: int
-    ac: int
-    level: int = Field(default=1, ge=1)
-    proficiency: int = 2
-    weapon_tier: int = Field(default=1, ge=1)  # damage-die tier: 1→d6, 2→d8, 3→d10
-
-    def modifier(self, ability: str) -> int:
-        return (self.abilities.get(ability, 10) - 10) // 2
-
-    @property
-    def conscious(self) -> bool:
-        return self.hp > 0
-
-
 class CharSpec(BaseModel):
-    """Input to `new_character`: explicit ability scores (or ruleset defaults) + level/gear."""
+    """Ruleset-opaque character-creation input. The ruleset interprets `data` (uro_basic reads
+    `abilities`/`level`/`weapon_tier`; uro_pbta reads its stat spread + playbook)."""
 
-    abilities: dict[str, int] | None = None
-    level: int = Field(default=1, ge=1)
-    weapon_tier: int = Field(default=1, ge=1)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class Award(BaseModel):
-    """Input to `progression` — a minimal level-up award for the PoC."""
+    """Ruleset-opaque advancement input — the port fixes NO advancement vocabulary. d20 sends
+    `{"levels": 1}` (advance by winning); PbtA sends `{"xp": 1}` (mark XP on a miss — advance by
+    failing). Neither is privileged by the port."""
 
-    levels: int = Field(default=0, ge=0)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 # --- free-roam checks ---
 
 
 class Affordance(BaseModel):
-    """A mechanically-backed verb the planner may invoke (docs/06, D-21). `trigger_categories`
-    are intent classes that MUST route through this affordance — plan validation enforces that
-    deterministically GIVEN the planner's honest classification (docs/13); a misclassified
-    intent can still slip through, and consequence gating (the backstop) is not built yet."""
+    """A mechanically-backed verb the planner may invoke (docs/06, D-21). `stat` is a
+    ruleset-defined key (NOT a fixed ability enum); `difficulty` is a ruleset-opaque hint the
+    ruleset resolves however it likes (uro_basic: easy/medium/hard→DC; uro_pbta: ignored, 2d6 is
+    self-scaling). `trigger_categories` are intent classes that MUST route through this affordance
+    — plan validation enforces that deterministically given the planner's honest classification
+    (docs/13); a misclassified intent can still slip through (consequence gating not built)."""
 
     id: str
-    ability: Ability
-    difficulty: Difficulty = "medium"
+    stat: str = ""  # ruleset stat key the check rolls against ("" → ruleset default)
+    difficulty: str = ""  # ruleset-opaque difficulty hint
     trigger_categories: list[str] = Field(default_factory=list)
     starts_encounter: bool = False
     description: str = ""
 
 
 class CheckRequest(BaseModel):
+    """Input to `resolve_check`, ruleset-neutral: the opaque sheet, the stat key, the opaque
+    difficulty hint, and a `modifiers` bag for ruleset-specific knobs (uro_basic reads
+    `advantage`/`disadvantage`). The ruleset owns ALL resolution — there is no DC here."""
+
     sheet: Sheet
-    ability: Ability
-    dc: int
-    advantage: bool = False
-    disadvantage: bool = False
+    stat: str = ""
+    difficulty: str = ""
+    modifiers: dict[str, Any] = Field(default_factory=dict)
 
 
 class CheckResult(BaseModel):
-    success: bool
-    ability: str
-    roll: int  # the d20 face used (after advantage/disadvantage)
-    modifier: int
-    total: int
-    dc: int
-    trace: str  # human-readable roll math for the narrator to weave in (docs/06)
+    """A resolved check. `outcome` is a ruleset-declared graded band (the generalization that
+    replaced d20's binary `success: bool` — so a 2d6 system's miss/partial/full survives). The
+    pipeline reads only `trace` (→ the narrator); `detail` carries ruleset specifics (the roll,
+    the DC, the 2d6 sum…) for debugging without shaping the contract."""
+
+    outcome: str
+    trace: str
+    detail: dict[str, Any] = Field(default_factory=dict)
 
 
 # --- encounter mode ---
 
 
 class Combatant(BaseModel):
+    """A participant handed to `start_encounter` — actor id, team, and the opaque sheet. No
+    initiative/hp here: how (or whether) turns are ordered is ruleset-internal state."""
+
     actor_id: str
-    team: str  # e.g. "party" | "foes" — is_over checks whether a team is wiped
+    team: str  # e.g. "party" | "foes"; the ruleset's is_over decides what a decided fight means
     sheet: Sheet
-    initiative: int = 0
 
 
 class EncounterCtx(BaseModel):
-    """Everything `start_encounter` needs: the combatants (sheets + teams), pre-initiative."""
-
     encounter_id: str
     combatants: list[Combatant]
 
 
 class EncounterState(BaseModel):
-    """The turn-loop's serializable state (parkable for async/Chronicler resolution, D-25)."""
+    """OPAQUE, ruleset-owned turn/exchange state. The port carries only the id; each ruleset
+    SUBCLASSES this with whatever it needs — uro_basic adds combatants/order/round/turn_index
+    (initiative attrition); uro_pbta adds its move-exchange bookkeeping (no rounds). The runner
+    (pipeline/encounter.py) NEVER introspects it: it advances the fight only through
+    `current_actor`/`npc_action`/`resolve_action`/`is_over`/`sheets`. Was a d20-shaped struct
+    (order/turn_index/round) before D-30."""
+
+    model_config = ConfigDict(extra="allow")
 
     encounter_id: str
-    combatants: dict[str, Combatant]  # by actor_id, carrying current hp
-    order: list[str]  # actor_ids in initiative order
-    turn_index: int = 0
-    round: int = 1
-    over: bool = False
-
-    def current_actor(self) -> str:
-        return self.order[self.turn_index]
-
-
-ActionKind = Literal["attack", "defend", "flee"]
 
 
 class ActionSpec(BaseModel):
-    kind: ActionKind
-    targets: list[str] = Field(default_factory=list)  # legal target actor_ids
+    """A legal action offered on an actor's turn. `kind` is a ruleset-defined verb string (d20:
+    attack/defend/flee; PbtA: a move name)."""
+
+    kind: str
+    targets: list[str] = Field(default_factory=list)
 
 
 class Action(BaseModel):
-    kind: ActionKind
+    kind: str
     actor_id: str
     target_id: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)  # ruleset extras
 
 
 class Effect(BaseModel):
-    """A mechanical outcome of an action. The pipeline maps each to an R-emitted domain
-    event (ActorDamaged / ActorDied / …, docs/12) so mechanics are timeline citizens."""
+    """A mechanical outcome of an action, ruleset-shaped. `kind` is ruleset-defined (uro_basic:
+    damage/death; uro_pbta: condition/harm). The runner does NOT map effects to typed events —
+    harm reaches the timeline through the ruleset-computed final SHEET (a `SheetUpdated`), so the
+    port never assumes an hp scalar. Effects survive only as the human-readable `trace` and a
+    coarse `result` label on `EncounterTurnTaken`."""
 
-    kind: Literal["damage", "death"]
-    actor_id: str  # the affected actor
-    amount: int = 0
-    source: str = ""  # attacker actor_id or cause
+    kind: str
+    actor_id: str
+    payload: dict[str, Any] = Field(default_factory=dict)
     trace: str = ""
 
 
 class EncounterOutcome(BaseModel):
-    winner_team: str | None
-    survivors: list[str]
-    casualties: list[str]
+    """A decided encounter. `winner_team` (or None for a draw) + `out_of_fight` (actors removed
+    — downed/dead/fled, the ruleset decides what that means) + `survivors`. No 'casualties' as a
+    death claim: whether out-of-fight means dead is the ruleset's call and the caller's (a lost
+    brawl → wounded, not a corpse)."""
+
+    winner_team: str | None = None
+    survivors: list[str] = Field(default_factory=list)
+    out_of_fight: list[str] = Field(default_factory=list)
+    detail: dict[str, Any] = Field(default_factory=dict)
 
 
 class Ruleset(Protocol):
-    """The mechanics plugin (docs/06). Deterministic: every random draw comes from `rng`."""
+    """The mechanics plugin (docs/06). Deterministic: every random draw comes from `rng`. The
+    core ring depends only on this Protocol; concrete rulesets are wired at the composition root
+    and bound per world/campaign (docs/06, the registry — inc 6.2)."""
 
     id: str
     version: str
@@ -172,14 +174,16 @@ class Ruleset(Protocol):
 
     def affordances(self) -> list[Affordance]: ...
 
-    def dc_for(self, difficulty: Difficulty) -> int:
-        """Map an affordance's difficulty tier to a numeric DC — the mechanics gate uses this
-        to build a CheckRequest from an affordance without knowing the ruleset's DC scale."""
-        ...
-
     def resolve_check(self, req: CheckRequest, rng: Rng) -> CheckResult: ...
 
+    # --- encounter mode (the runner drives the loop through these; the state is opaque) ---
+
     def start_encounter(self, ctx: EncounterCtx, rng: Rng) -> EncounterState: ...
+
+    def current_actor(self, state: EncounterState) -> str | None:
+        """The actor to act next, or None when the encounter is decided — this is how the runner
+        walks turns without knowing the ruleset's turn structure (initiative vs move-exchange)."""
+        ...
 
     def legal_actions(self, state: EncounterState, actor_id: str) -> list[ActionSpec]: ...
 
@@ -190,3 +194,9 @@ class Ruleset(Protocol):
     ) -> tuple[EncounterState, list[Effect]]: ...
 
     def is_over(self, state: EncounterState) -> EncounterOutcome | None: ...
+
+    def sheets(self, state: EncounterState) -> dict[str, Sheet]:
+        """The current opaque sheet of every combatant, by actor_id — the runner persists these
+        as `SheetUpdated` at encounter end, so ruleset-shaped harm (hp, a harm clock, conditions)
+        reaches projections without the pipeline knowing the sheet's shape."""
+        ...

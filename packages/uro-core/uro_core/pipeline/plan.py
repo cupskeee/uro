@@ -66,7 +66,7 @@ def build_planner_messages(
     env: PromptEnv | None = None,
 ) -> list[Message]:
     aff_lines = "\n".join(
-        f"- {a.id} (ability {a.ability}, triggers {a.trigger_categories}"
+        f"- {a.id} (stat {a.stat}, triggers {a.trigger_categories}"
         f"{', STARTS AN ENCOUNTER' if a.starts_encounter else ''}): {a.description}"
         for a in affordances
     )

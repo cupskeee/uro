@@ -52,7 +52,7 @@ async def _world_or_exit(store: PostgresEventStore, ident: str) -> World:
 def _build_pc_sheet() -> tuple[dict[str, Any], str]:
     """A default character sheet from the bound ruleset, so every PC can be checked (docs/06)."""
     ruleset = build_ruleset()
-    return ruleset.new_character(CharSpec(), Rng(0)).model_dump(), ruleset.id
+    return ruleset.new_character(CharSpec(), Rng(0)), ruleset.id
 
 
 @app.callback()
