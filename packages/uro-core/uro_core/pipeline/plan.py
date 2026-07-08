@@ -78,6 +78,12 @@ def build_planner_messages(
         f"YOU (the player character) ARE actor {pc_actor_id or '(unknown)'}.\n\n"
         f"AFFORDANCES:\n{aff_lines}\n\nON STAGE:\n{present}\n\n"
         f"PLAYER INTENT: {intent_text}\n\n"
+        # Two rules the live run showed a small planner needs spelled out: pick the encounter
+        # affordance when the intent is violent, and use the bracketed ids for actor/target.
+        "RULES: If the intent attacks, fights, or takes something by force from someone ON STAGE, "
+        "you MUST include a mechanic whose affordance is the one marked STARTS AN ENCOUNTER, with "
+        "`target` set to that actor. For `actor`/`target`, use the exact bracketed id from "
+        "ON STAGE (e.g. a:cass) — never a bare name.\n\n"
         'Return JSON: {"intent_class": "dialogue|action|movement|examine|meta", '
         '"targets": [ids], "triggers": [categories], '
         '"mechanics": [{"affordance","actor","target","context"}], '

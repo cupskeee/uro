@@ -281,6 +281,17 @@ class Engine:
             )
         return ""  # no PC bound at all (a Phase-1 / narration-only campaign) — act with no PC
 
+    async def _resolve_ref(self, branch_id: str, ref: str) -> str:
+        """A plan actor/target ref → a KNOWN actor id, or "" if unresolvable. A known id passes
+        through; a NAME the planner emitted ("Cass") is entity-resolved via find_actor_by_name
+        (which canonicalizes internally, like the extractor/Chronicler). Never mints an actor."""
+        if not ref:
+            return ""
+        if await self._store.get_actor(branch_id, ref) is not None:
+            return ref
+        match = await self._store.find_actor_by_name(branch_id, ref)
+        return match.actor_id if match is not None else ""
+
     async def preview_beat(
         self, campaign: Campaign, participant_id: str, intent_text: str
     ) -> list[DomainEvent]:
@@ -396,10 +407,15 @@ class Engine:
         # The acting participant's PC (OQ-7) — so P3's attack loots/injures on P3's PC, not the
         # campaign's first PC. Resolved once in _context, reused here.
         pc_id = ctx.pc_actor_id
-        aggressor = trigger.actor or pc_id
-        defender = trigger.target
+        # ENTITY-RESOLVE the plan's refs (live-run finding, 2026-07-09): a small planner routinely
+        # names the target ("Cass") instead of emitting its id ("a:cass"), which used to fall
+        # through get_actor and silently drop the fight to free-roam. Resolve name→id (reusing the
+        # extractor/Chronicler resolver) so "seize by force from Cass" actually forms the encounter.
+        aggressor = await self._resolve_ref(branch, trigger.actor or pc_id)
+        defender = await self._resolve_ref(branch, trigger.target)
         # A real encounter needs two DISTINCT, KNOWN actors on OPPOSING sides. PC identity only
-        # attributes consequences; it does not decide the split (so NPC-vs-NPC works too).
+        # attributes consequences; it does not decide the split (so NPC-vs-NPC works too). An
+        # unresolvable ref came back "" here → no fight forms (falls back to free-roam).
         if not aggressor or not defender or aggressor == defender:
             return None
         # No auto-resolved PvP (cross-phase review P7xP3): a party member's single beat must NOT

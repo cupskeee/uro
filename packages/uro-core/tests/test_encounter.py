@@ -354,3 +354,80 @@ async def test_legacy_actor_damaged_still_rebuilds_hp_on_replay(store: PostgresE
     head = await store.get_branch(main)
     fork = await store.fork_branch(world.world_id, head.head_commit, "replay-legacy")
     assert (await store.get_sheet(fork.branch_id, "a:leg"))["hp"] == start_hp - 4
+
+
+async def test_planner_target_by_name_still_forms_the_encounter(store: PostgresEventStore) -> None:
+    # Live-run fix (2026-07-09): a small planner names the target ("Grull") instead of its id
+    # ("a:grull"). _resolve_encounter now entity-resolves the ref, so the fight still forms
+    # (previously it fell through get_actor and dropped silently to free-roam).
+    world = await store.create_world(f"name-{new_id()}")
+    main = world.main_branch_id
+    campaign = await store.start_campaign(
+        world.world_id,
+        main,
+        participant_id="p1",
+        new_pc_name="Bram",
+        new_pc_id="a:bram",
+        pc_sheet=_sheet({"STR": 8, "DEX": 4, "CON": 18}),
+        ruleset_id="uro-basic",
+    )
+    await store.append_beat(
+        main,
+        [
+            actor_created(actor_id="a:grull", name="Grull", tier=2, role="brute"),
+            sheet_updated(
+                actor_id="a:grull",
+                sheet=_sheet({"STR": 20, "DEX": 14, "CON": 20}),
+                ruleset_id="uro-basic",
+            ),
+        ],
+    )
+    # the planner emits target="Grull" — a NAME, not "a:grull"
+    plan = (
+        '{"intent_class":"action","triggers":["violence"],'
+        '"mechanics":[{"affordance":"attack","target":"Grull"}]}'
+    )
+    result = await _engine(store, plan, "Bram swings at Grull.").run_beat(
+        campaign, "p1", "I attack Grull"
+    )
+    async with store.pool.acquire() as conn:
+        types = [
+            r["event_type"]
+            for r in await conn.fetch(
+                "SELECT event_type FROM events WHERE commit_id = $1", result.commit_id
+            )
+        ]
+    assert "EncounterStarted" in types  # the name resolved → the fight formed
+    assert (await store.get_sheet(main, "a:bram"))[
+        "hp"
+    ] == 0  # and it actually resolved (Bram lost)
+
+
+async def test_unresolvable_target_name_falls_back_to_freeroam(store: PostgresEventStore) -> None:
+    # A name that matches no known actor must NOT fabricate a fight — it falls back to free-roam.
+    world = await store.create_world(f"noname-{new_id()}")
+    main = world.main_branch_id
+    campaign = await store.start_campaign(
+        world.world_id,
+        main,
+        participant_id="p1",
+        new_pc_name="Solo",
+        new_pc_id="a:solo",
+        pc_sheet=_sheet({"STR": 12}),
+        ruleset_id="uro-basic",
+    )
+    plan = (
+        '{"intent_class":"action","triggers":["violence"],'
+        '"mechanics":[{"affordance":"attack","target":"Nobody"}]}'
+    )
+    result = await _engine(store, plan, "Solo swings at a shadow.").run_beat(
+        campaign, "p1", "I attack Nobody"
+    )
+    async with store.pool.acquire() as conn:
+        types = [
+            r["event_type"]
+            for r in await conn.fetch(
+                "SELECT event_type FROM events WHERE commit_id = $1", result.commit_id
+            )
+        ]
+    assert "EncounterStarted" not in types and "BeatResolved" in types  # no fabricated fight
