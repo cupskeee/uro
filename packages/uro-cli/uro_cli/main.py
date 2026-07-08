@@ -368,6 +368,12 @@ def play(
         help="ablation (T1): raw-transcript GM, no state/recall/extraction. Use a FRESH "
         "campaign — mixing bare and full beats on one corrupts the A/B comparison.",
     ),
+    no_mechanics: bool = typer.Option(
+        False,
+        "--no-mechanics",
+        help="narrative-only: full recall + extraction + memory, but NO ruleset/planner "
+        "(the thesis test — recall without the mechanics confound). Distinct from --bare.",
+    ),
 ) -> None:
     """Interactive play loop. Type an action; '/quit' to leave. State persists to Postgres."""
 
@@ -379,11 +385,12 @@ def play(
             if campaign is None:
                 typer.echo(f"no such campaign: {campaign_id}", err=True)
                 raise typer.Exit(1)
-            # No ruleset in bare (ablation) mode — the planner/gate are exactly what it ablates.
+            # No ruleset in bare (ablation) OR --no-mechanics (narrative-only) mode — the
+            # planner/gate are exactly what bare ablates and what no-mechanics skips.
             engine = Engine(
                 store,
                 build_router(provider, model),
-                ruleset=None if bare else build_ruleset(),
+                ruleset=None if (bare or no_mechanics) else build_ruleset(),
                 bare=bare,
             )
 

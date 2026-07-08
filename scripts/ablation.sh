@@ -47,7 +47,10 @@ run_arm () {  # $1 = campaign id, rest = extra play flags
     | uv run uro play "$cid" --provider openai ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} "$@"
 }
 
-echo "=================== FULL arm ($A) ==================="; run_arm "$A"
+# FULL = the recall engine (structured + semantic recall, extraction, memory) with --no-mechanics,
+# so the thesis test isolates RECALL from the P3 planner (which is orthogonal to the memory thesis
+# and, found live, unreliable on freeform intents with small models). BARE = raw transcript.
+echo "=================== FULL arm ($A) ==================="; run_arm "$A" --no-mechanics
 echo; echo "=================== BARE arm ($B) ==================="; run_arm "$B" --bare
 echo; echo "=========================================================="
 echo "DONE.  FULL=$A   BARE=$B   (tag $TAG, model ${MODEL:-default})"

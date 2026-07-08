@@ -14,7 +14,7 @@ from uro_core.domain.ids import new_id
 from uro_core.errors import PlannerError
 from uro_core.pipeline.engine import Engine
 from uro_core.pipeline.mechanics import resolve_mechanics
-from uro_core.pipeline.plan import BeatPlan, PlanMechanic, validate_plan
+from uro_core.pipeline.plan import BeatPlan, PlanMechanic, parse_plan, validate_plan
 from uro_core.providers.adapters.stub import StubProvider, hashing_embedding
 from uro_core.providers.base import CompletionRequest
 from uro_core.providers.router import ProviderRouter
@@ -272,3 +272,38 @@ async def test_adopted_pc_gets_sheeted_and_is_checked(store: PostgresEventStore)
     )
     result = await engine.run_beat(campaign, "p1", "I persuade the Guard")
     assert result.checks == 1  # the adopted PC's sheet WAS used — gate not inert
+
+
+# --- parse_plan robustness: salvage a small model's near-misses (found live, gpt-4o-mini) ---
+
+
+def test_parse_plan_salvages_small_model_near_misses() -> None:
+    import json
+
+    raw = json.dumps(
+        {
+            "intent_class": "conversation",  # NOT in the Literal → coerce to "action"
+            "triggers": "violence",  # a string, not a list → wrap
+            "mechanics": [
+                {"affordance": "attack", "target": "a:foe"},
+                {"note": "no affordance key"},  # junk entry → drop
+            ],
+            "mode_transition": "encounter",  # a string, not {"to": …} → drop
+            "narration_directives": "keep it tense",
+        }
+    )
+    plan = parse_plan(raw)
+    assert plan is not None  # the beat is NOT lost to a near-miss
+    assert plan.intent_class == "action"
+    assert plan.triggers == ["violence"]
+    assert plan.mode_transition is None
+    assert [m.affordance for m in plan.mechanics] == ["attack"]  # valid kept, junk dropped
+    assert plan.narration_directives == "keep it tense"
+
+
+def test_parse_plan_keeps_a_valid_plan_and_handles_fences() -> None:
+    good = parse_plan('{"intent_class": "dialogue", "triggers": [], "mechanics": []}')
+    assert good is not None and good.intent_class == "dialogue"
+    fenced = parse_plan('```json\n{"intent_class": "examine", "mechanics": []}\n```')
+    assert fenced is not None and fenced.intent_class == "examine"  # markdown fence tolerated
+    assert parse_plan("not json at all") is None  # truly unusable → None (drives a re-ask)

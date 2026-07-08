@@ -16,7 +16,7 @@ classification*, not by construction.
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -88,14 +88,51 @@ def build_planner_messages(
     return [Message(role="system", content=system), Message(role="user", content=user)]
 
 
+_INTENT_CLASSES = frozenset(("dialogue", "action", "movement", "examine", "meta"))
+_MODES = frozenset(("freeroam", "encounter", "downtime"))
+
+
+def _coerce_plan(data: dict[str, Any]) -> dict[str, Any]:
+    """Salvage a near-miss planner output before validation. A small model (found live: gpt-4o-mini
+    failing ~half of freeform beats) often emits an out-of-vocab `intent_class` ("conversation"),
+    a stringified `mode_transition`, or a mechanics entry missing `affordance` — each of which trips
+    a strict Literal/required-field and fails the WHOLE beat. The planner is a best-effort structure
+    hint; the real enforcement is validate_plan + the mechanics gate, so coerce these rather than
+    lose the beat. An unrecoverable value falls back to a safe default (the plan then simply invokes
+    no mechanics)."""
+    d = dict(data)
+    if d.get("intent_class") not in _INTENT_CLASSES:
+        d["intent_class"] = "action"
+    mt = d.get("mode_transition")
+    if not (isinstance(mt, dict) and mt.get("to") in _MODES):
+        d["mode_transition"] = None
+    mech = d.get("mechanics")
+    d["mechanics"] = [
+        m
+        for m in (mech if isinstance(mech, list) else [])
+        if isinstance(m, dict) and isinstance(m.get("affordance"), str) and m["affordance"]
+    ]
+    for key in ("targets", "speakers", "triggers", "suggestions"):
+        v = d.get(key)
+        d[key] = [v] if isinstance(v, str) else v if isinstance(v, list) else []
+    return d
+
+
 def parse_plan(raw: str) -> BeatPlan | None:
-    """Parse a planner response into a validated BeatPlan, or None if unusable."""
+    """Parse a planner response into a validated BeatPlan, or None if unusable. Tolerant of a
+    small model's near-misses (see _coerce_plan) — the planner's structure is advisory."""
     text = raw.strip()
     for candidate in (text, _slice_json_object(text)):
         if candidate is None:
             continue
         try:
-            return BeatPlan.model_validate(json.loads(candidate))
+            data = json.loads(candidate)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        try:
+            return BeatPlan.model_validate(_coerce_plan(data))
         except Exception:
             continue
     return None
