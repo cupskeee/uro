@@ -164,3 +164,15 @@ async def test_backfilled_seed_commits_as_ai_backfill_state(store: PostgresEvent
         t for t in await store.list_threads(world.main_branch_id) if t.provenance == "ai_backfill"
     ]
     assert len(backfilled) == 1 and "blight" in backfilled[0].stakes.lower()
+
+
+async def test_authored_aliases_resolve_colloquial_references(store: PostgresEventStore) -> None:
+    # Live-run finding (2026-07-09): emberfell's "Cass Holloway" gained a "Cass" alias so a
+    # colloquial reference resolves to the authored NPC instead of the extractor minting a
+    # duplicate (the OQ-3 fragmentation the PbtA live run hit). find_actor_by_name matches aliases.
+    pack = parse_pack(WORLDS / "emberfell")
+    cass = next(a for a in pack.actors if a.id == "a:cass")
+    assert "Cass" in cass.aliases  # the pack now carries the colloquial alias
+    world = await store.create_world(pack.manifest.name, extra_events=pack_to_events(pack))
+    hit = await store.find_actor_by_name(world.main_branch_id, "Cass")
+    assert hit is not None and hit.actor_id == "a:cass"  # "Cass" → the authored NPC, no duplicate

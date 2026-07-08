@@ -129,3 +129,18 @@ First live run of the post-PoC phases. Owner ran the harness; analyzed from Post
 - **Tooling gap:** `llm_calls` stores only a `prompt_hash`, not prompts/responses — so the live
   planner-routing failure can't be pinned from Postgres alone (need response capture / a recorded
   mode to debug which failure it was).
+
+### Live re-run (2026-07-09, after the encounter name-resolution fix)
+
+The PbtA conflict STILL didn't fire — and the re-run revealed the real root cause, deeper than
+planner routing: **entity fragmentation.** emberfell authored `Cass Holloway`; the play referenced
+`Cass`; canonical matching is not substring/first-name, so recall never put the NPC on stage and
+the **extractor minted a duplicate `Cass` actor** — so there was no clean, on-stage, targetable
+Cass for any planner to attack. This is OQ-3 (entity resolution), surfaced live by authored full
+names vs colloquial references. **Fix:** gave emberfell's NPCs colloquial `aliases` (`Cass Holloway`
+→ `["Cass"]`, `Doc Venn` → `["Doc"]`) — the sanctioned mechanism (recall + `find_actor_by_name`
+match aliases); automatic partial-name matching stays deferred (false-merge risk). Combined with
+the encounter name-resolution fix + the planner prompt nudge, a colloquial "Cass" reference now
+resolves to the authored NPC (test: `test_authored_aliases_resolve_colloquial_references`). Whether
+the conflict fires end-to-end is pending the next live re-run. **Chronicler leg: still a clean PASS
+on the re-run** (feat `truth=unknown`/external, Mera's rumor at conf 0.272).

@@ -1,6 +1,7 @@
 - id: "a:cass"
   name: "Cass Holloway"
-  tier: 2
+  aliases: ["Cass"]  # the colloquial name players (and the narrator) actually use — so a "Cass"
+  tier: 2            #   reference resolves to this NPC instead of minting a duplicate (OQ-3)
   role: "claim-boss"
   faction: "f:company"
   location: "p:emberfell"
@@ -12,6 +13,7 @@
   location: "p:emberfell"
 - id: "a:doc"
   name: "Doc Venn"
+  aliases: ["Doc"]
   tier: 1
   role: "sawbones"
   location: "p:emberfell"

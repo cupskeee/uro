@@ -61,6 +61,17 @@ simulate_years = 200
 narrator = "anthropic:claude-sonnet-5"
 ```
 
+## Authoring entities — colloquial aliases (best practice)
+
+`entities/actors.yaml` items carry an optional `aliases: [...]`. **Give every named NPC the short
+names players (and the narrator) will actually use** — an authored `name: "Cass Holloway"` should
+list `aliases: ["Cass"]`. Recall matches on-stage actors by name *or* alias, and entity resolution
+(`find_actor_by_name`, the extractor, Chronicler ingestion) folds a reference to an existing actor
+by name/alias. Without the alias, a "Cass" reference doesn't match "Cass Holloway" (canonical
+matching is not substring/first-name) and the extractor mints a *duplicate* actor — the OQ-3
+fragmentation the first PbtA live run hit (docs/16). Aliases are the sanctioned fix; automatic
+first-name/partial matching is deliberately NOT done (false-merge risk, OQ-3).
+
 ## Prompt template packs
 
 Owner decision: prompt templates live **at the world level**, distributable with the pack, customizable by any engine user. Mechanism:
