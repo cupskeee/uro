@@ -123,6 +123,7 @@ def world_new(name: str) -> None:
 def world_validate(path: str) -> None:
     """Parse a world pack and report its sufficiency (docs/09) — the creator loop, no import."""
     from uro_core.errors import PackError
+    from uro_core.rulesets import registry
     from uro_core.worldpack.parse import parse_pack
     from uro_core.worldpack.sufficiency import check_sufficiency
 
@@ -140,6 +141,12 @@ def world_validate(path: str) -> None:
     typer.echo(f"grade: {report.grade.upper()}")
     for d in report.dimensions:
         typer.echo(f"  {'ok ' if d.ok else 'GAP'} {d.name:<10} {d.detail}")
+    # Catch a bad ruleset id at VALIDATE, not as a raw KeyError at `campaign new` (phase-6 review).
+    rid = pack.manifest.ruleset.id
+    if rid in registry.available():
+        typer.echo(f"  ok  ruleset    {rid}")
+    else:
+        typer.echo(f"  GAP ruleset    unknown ruleset {rid!r} (installed: {registry.available()})")
     if report.grade != "runnable":
         typer.echo("\ngaps to fix (or run backfill):")
         for g in report.gaps:
@@ -160,6 +167,7 @@ def world_create(
 
     async def _run() -> None:
         from uro_core.errors import PackError
+        from uro_core.rulesets import registry
         from uro_core.worldpack.backfill import backfill_gaps
         from uro_core.worldpack.importer import pack_to_events
         from uro_core.worldpack.parse import parse_pack
@@ -170,6 +178,15 @@ def world_create(
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
+        # Fail loudly HERE if the pack names a ruleset the build can't resolve — else the world
+        # commits fine and only blows up as a raw KeyError at `campaign new` (phase-6 review).
+        if pack.manifest.ruleset.id not in registry.available():
+            typer.echo(
+                f"error: pack declares unknown ruleset {pack.manifest.ruleset.id!r} "
+                f"(installed: {registry.available()})",
+                err=True,
+            )
+            raise typer.Exit(1)
         report = check_sufficiency(pack)
         added: list[str] = []
         if backfill and report.grade != "runnable":

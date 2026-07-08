@@ -565,9 +565,12 @@ def external_cause(encounter_id: str) -> CausedBy:
 
 # --- Encounter mode & mechanical effects (docs/06, 12; emitter R for in-process resolution) ---
 #
-# The ruleset produces Effects (docs/06); the pipeline maps each to one of these R-emitted
-# events so mechanics are ordinary timeline citizens. ActorDamaged reduces the sheet's hp
-# projection; ItemTransferred moves ownership. Injuries and loot persist into later free-roam.
+# Harm reaches the timeline as the ruleset's OPAQUE final SheetUpdated (D-30) — game-agnostic,
+# no hp assumption. ItemTransferred moves ownership; ActorDied is a ruleset-agnostic lifecycle
+# trace. Injuries and loot persist into later free-roam. ActorDamaged (below) is LEGACY: the
+# pre-Phase-6 d20 runner emitted it per hit and the projector reduced hp; the current runner does
+# NOT emit it. Its payload + a replay-compat projector handler are retained ONLY so old d20 fight
+# logs still rebuild by replay (docs/12). New/other rulesets never use it.
 
 
 class ActorDamagedPayload(BaseModel):
@@ -604,7 +607,9 @@ class EncounterStartedPayload(BaseModel):
     v: int = 1
     encounter_id: str
     participants: list[str] = Field(default_factory=list)
-    initiative: list[list[Any]] = Field(default_factory=list)  # [[actor_id, roll], ...]
+    # No `initiative` field: turn ordering (if any) is ruleset-internal state (D-30) — d20 has
+    # initiative, PbtA does not. The old d20-shaped field was orphaned when the runner stopped
+    # introspecting encounter state; removed so the shared event names no game-specific mechanic.
 
 
 class EncounterTurnTakenPayload(BaseModel):
@@ -696,7 +701,6 @@ def encounter_started(
     *,
     encounter_id: str,
     participants: list[str],
-    initiative: list[list[Any]] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -704,7 +708,7 @@ def encounter_started(
         entity_refs=list(participants),
         caused_by=_default_cause(caused_by),
         payload=EncounterStartedPayload(
-            encounter_id=encounter_id, participants=participants, initiative=initiative or []
+            encounter_id=encounter_id, participants=participants
         ).model_dump(),
     )
 

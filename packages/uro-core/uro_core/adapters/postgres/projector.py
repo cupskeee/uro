@@ -167,12 +167,33 @@ async def _sheet_updated(conn: asyncpg.Connection, branch_id: str, p: dict[str, 
     )
 
 
+async def _actor_damaged(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # LEGACY replay-compat ONLY (phase-6 review). The current encounter runner emits the ruleset's
+    # opaque final SheetUpdated for harm (game-agnostic, D-30) and NEVER emits ActorDamaged. This
+    # handler exists solely so a PRE-Phase-6 d20 log — which recorded a fight's HP purely as
+    # accumulated ActorDamaged reductions, with no closing SheetUpdated — still rebuilds
+    # byte-identically by replay (the non-negotiable "projections are rebuildable read-models"
+    # invariant, docs/01/07). It only ever fires on the legacy event, which only the old d20 runner
+    # emitted, so it touches only hp sheets and adds no shared hp assumption for new/other rulesets.
+    await conn.execute(
+        "UPDATE proj_sheets SET sheet = jsonb_set(sheet, '{hp}', "
+        "  to_jsonb(GREATEST(0, ((sheet->>'hp')::int) - $3))) "
+        "WHERE branch_id = $1 AND actor_id = $2 AND sheet ? 'hp'",
+        branch_id,
+        p["actor_id"],
+        int(p.get("amount", 0)),
+    )
+
+
 async def _actor_died(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
-    # A ruleset-AGNOSTIC lifecycle trace on proj_actors (D-30): so a sheet-less casualty (History
-    # NPC, Chronicler death) is recorded dead and drops off recall's on-stage set. The projector
-    # NEVER touches sheet internals — the ruleset already committed the final opaque sheet as a
-    # SheetUpdated (an hp system zeroes hp; a harm-clock system fills the clock; the projector
-    # can't and mustn't assume which). Forcing sheet.hp=0 here was a d20 leak, now removed.
+    # A ruleset-AGNOSTIC lifecycle trace on proj_actors (D-30): a sheet-less casualty (History NPC,
+    # Chronicler death) is recorded dead and drops off recall's on-stage set. proj_actors.status is
+    # the AUTHORITATIVE death trace (recall reads it, not the sheet). The projector NEVER touches
+    # sheet internals — the encounter runner already committed the ruleset's final opaque sheet
+    # (an hp system zeroes hp; a harm-clock fills the clock; the projector can't assume which).
+    # Forcing sheet.hp=0 here was a d20 leak, now removed. Consequence (phase-6 review, accepted):
+    # an actor killed by a BARE ActorDied (Chronicler/History death, no accompanying SheetUpdated)
+    # keeps its last sheet values; status='dead' is the death of record, the stale sheet is inert.
     await conn.execute(
         "UPDATE proj_actors SET status = 'dead' WHERE branch_id = $1 AND actor_id = $2",
         branch_id,
@@ -270,6 +291,7 @@ _HANDLERS = {
     "PCBound": _pc_bound,
     "PCReleased": _pc_released,
     "SheetUpdated": _sheet_updated,
+    "ActorDamaged": _actor_damaged,  # legacy replay-compat only; new logs use SheetUpdated
     "ActorDied": _actor_died,
     "ItemCreated": _item_created,
     "ItemTransferred": _item_transferred,

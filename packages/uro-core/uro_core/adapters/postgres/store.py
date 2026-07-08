@@ -1032,9 +1032,10 @@ class PostgresEventStore:
         return dict(row) if row else None
 
     async def get_sheet(self, branch_id: str, actor_id: str) -> dict[str, Any] | None:
-        """An actor's character sheet as a raw dict (docs/06). The store keeps it opaquely; the
-        pipeline validates it against the SHARED port Sheet (a d20-shaped contract for now,
-        OQ-13) — so the sheet SHAPE is port-fixed, while the ruleset owns its SEMANTICS."""
+        """An actor's character sheet as a raw dict (docs/06, D-30). The store keeps it fully
+        OPAQUE — the port fixes NO sheet shape; each ruleset owns both shape and semantics and
+        validates the dict internally (uro_basic: abilities/hp/ac; uro_pbta: stats + a harm clock,
+        no hp). Callers must not assume any field across rulesets."""
         async with self.pool.acquire() as conn:
             sheet = await conn.fetchval(
                 "SELECT sheet FROM proj_sheets WHERE branch_id = $1 AND actor_id = $2",

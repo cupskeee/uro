@@ -45,9 +45,9 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | `ActorPromoted` | actor_id, from_tier, to_tier, reason | P S | reason `pinned` = manual (player/API) |
 | `ActorMoved` | actor_id, from_place, to_place | X A P | |
 | `ActorStateChanged` | actor_id, changes{} | X A H | status, occupation, condition flavor |
-| `ActorDamaged` | actor_id, amount, source, trace | R E | mechanical only — never extractor |
-| `ActorDied` | actor_id, cause | R H A E | |
-| `SheetUpdated` | actor_id, ruleset_id, sheet | R S | ruleset-owned character sheet; the PoC records the whole sheet per update (whole-sheet replace), not an incremental patch |
+| `ActorDamaged` | actor_id, amount, source, trace | — | **LEGACY (D-30):** the pre-Phase-6 d20 runner emitted this per hit (projector reduced hp); the current runner emits harm as the ruleset's opaque final `SheetUpdated` instead. No emitter now; the payload + a replay-compat projector handler are retained only so old d20 logs still rebuild by replay |
+| `ActorDied` | actor_id, cause | R H A E | ruleset-agnostic lifecycle trace → `proj_actors.status='dead'` (the authoritative death record; the projector does NOT touch the ruleset sheet, D-30) |
+| `SheetUpdated` | actor_id, ruleset_id, sheet | R S | ruleset-owned OPAQUE character sheet; whole-sheet replace, not an incremental patch. The sole channel mechanical harm reaches projections (D-30) — an hp system, a harm clock, conditions, all the same event |
 | `PCBound` / `PCReleased` | actor_id, participant_id, campaign_id | S | adopt-as-PC at fork; release at campaign end (retired hero becomes NPC) |
 
 ### Identity & resolution

@@ -327,3 +327,30 @@ async def test_combat_events_project_hp_and_ownership(store: PostgresEventStore)
     assert (await store.get_sheet(main, "a:x"))["hp"] == 0
     await store.append_beat(main, [item_transferred(item_id="i:1", from_ref="a:x", to_ref="a:y")])
     assert (await store.get_item(main, "i:1"))["owner_ref"] == "a:y"  # ownership moved
+
+
+async def test_legacy_actor_damaged_still_rebuilds_hp_on_replay(store: PostgresEventStore) -> None:
+    # Phase-6 review regression: the current runner emits harm as opaque SheetUpdated, but a
+    # PRE-Phase-6 d20 log recorded fight HP ONLY as accumulated ActorDamaged reductions (no closing
+    # SheetUpdated). The legacy projector handler must remain so such a log still rebuilds by replay
+    # (the non-negotiable "projections are rebuildable read-models" invariant) — proven via a fork.
+    from uro_core.domain.events import actor_damaged
+
+    world = await store.create_world(f"test-{new_id()}")
+    main = world.main_branch_id
+    sheet = _sheet({"CON": 12})
+    await store.append_beat(
+        main,
+        [
+            actor_created(actor_id="a:leg", name="Legacy"),
+            sheet_updated(actor_id="a:leg", sheet=sheet, ruleset_id="uro-basic"),
+        ],
+    )
+    start_hp = (await store.get_sheet(main, "a:leg"))["hp"]
+    # a legacy per-hit ActorDamaged (as the old d20 runner emitted) still reduces hp
+    await store.append_beat(main, [actor_damaged(actor_id="a:leg", amount=4, source="a:foe")])
+    assert (await store.get_sheet(main, "a:leg"))["hp"] == start_hp - 4
+    # and it REBUILDS by replay: a fork projects the same reduced hp from the same event log
+    head = await store.get_branch(main)
+    fork = await store.fork_branch(world.world_id, head.head_commit, "replay-legacy")
+    assert (await store.get_sheet(fork.branch_id, "a:leg"))["hp"] == start_hp - 4
