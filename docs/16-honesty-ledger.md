@@ -188,3 +188,28 @@ After the extractor few-shot hardening:
   it reliably.
 - **Chronicler: clean PASS every run** (feat `truth=unknown`/external, Mera's rumor at 0.272).
 - Minor: identical claims recur across beats (claims aren't content-deduped like actors are by name).
+
+### Live re-run #4 — gpt-4o: the FULL PbtA acceptance, live (2026-07-09) — the definitive result
+
+Ran `MODEL=gpt-4o scripts/postpoc_validate.sh`. This settles OQ-2 (planner reliability) as a
+model-tier question, exactly as docs/04 predicted ("the planner needs strong structured output"):
+
+- **Conflict fires reliably**, and — the money result — the turn outcomes are **one `miss`, one
+  `partial`, one `full`**: the complete PbtA graded-outcome spectrum a binary d20 cannot express,
+  live. (gpt-4o-mini, when it fired at all, gave 3× `full`.)
+- **The signature persistent consequence landed: `harm=4` + `conditions=["Exposed"]`** — precisely
+  what `test_alien_acceptance` asserts (a partial success leaving a durable PbtA-specific mark),
+  now demonstrated with a real model.
+- **The narration ENCODES the mechanics**: *"your knuckles finding purchase on his jaw … but in
+  that savage moment, you're left exposed"* — the narrator narrated the 7-9 partial (hit, but
+  exposed) and named the condition. Mechanics↔prose aligned; the consistency gap is fully closed
+  when the fight fires.
+- **Flavor over-extraction is lowest yet: 6 `truth=true` claims** (21 mini-run1 → 12 mini after the
+  few-shot → 6 gpt-4o) — a stronger model also follows the extractor instructions better.
+- **Chronicler: clean PASS** again (feat `truth=unknown`/external, Mera's rumor at 0.272).
+
+**Conclusion:** every live leg of the post-PoC engine is now validated end-to-end. The residual
+issues were model-tier, not engine bugs: a strong model fires the conflict, produces graded
+outcomes + the alien consequence, keeps narration and mechanics aligned, and extracts less flavor.
+The design's own prescription (per-role model routing — strong planner/narrator, cheap extractor)
+is the cost-optimized path; the CLI exposing it is the one clean feature this surfaced (deferred).
