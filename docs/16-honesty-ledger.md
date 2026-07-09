@@ -213,3 +213,18 @@ issues were model-tier, not engine bugs: a strong model fires the conflict, prod
 outcomes + the alien consequence, keeps narration and mechanics aligned, and extracts less flavor.
 The design's own prescription (per-role model routing — strong planner/narrator, cheap extractor)
 is the cost-optimized path; the CLI exposing it is the one clean feature this surfaced (deferred).
+
+### Two live log-warnings triaged (2026-07-09)
+
+Owner spotted two warnings in the live runs:
+- **"extractor output was not parseable JSON; committing narration-only beat"** — the narration-only
+  FALLBACK is by design, but the extractor was firing it too eagerly: it did a SINGLE attempt then
+  fell back, while docs/13:70-73 (and docs/04) promise "up to 2 re-asks" (the planner already does
+  this). A code-vs-doc gap — one malformed response silently dropped the whole beat's state. FIXED:
+  `_extract` now mirrors the planner's 3-attempt loop (1 + 2 re-asks with feedback) before the
+  narration-only fallback. Tests: re-ask salvages state; exhausting re-asks still commits prose.
+- **"ruleset-bound beat: PC 'a:traveler' has no sheet; checks skipped"** — benign (the WarStory leg
+  is a pure Chronicler retell, no combat), but noise: `build_ruleset("")` defaults to uro-basic, so
+  the unbound WarStory campaign was ruleset-bound with a sheet-less PC. FIXED in the harness: the
+  WarStory leg now runs `--no-mechanics` (its correct mode — recall + extraction + narration, no
+  ruleset/planner/sheet needed).

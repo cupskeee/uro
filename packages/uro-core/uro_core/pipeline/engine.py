@@ -585,32 +585,40 @@ class Engine:
     async def _extract(
         self, branch_id: str, recall: RecallBundle, narration: str
     ) -> list[DomainEvent]:
-        """Extract state from prose through the gauntlet. Failure → narration-only beat
-        (docs/13: state integrity is never sacrificed to keep prose, and prose is never
-        lost to keep state)."""
+        """Extract state from prose through the gauntlet. Up to 2 re-asks on unparseable
+        output (docs/13, mirroring the planner); exhausting them → narration-only beat (state
+        integrity is never sacrificed to keep prose, and prose is never lost to keep state)."""
         _, env = await self._prompt_style(branch_id)
         messages = build_extractor_messages(recall, narration, env=env)
-        started = time.perf_counter()
-        raw: str | None = None
-        try:
-            # Generous cap: extraction JSON can be dense; a truncated response parses to
-            # nothing and silently drops state (worse than a slow beat).
-            raw = await self._router.complete(
-                "extractor", messages, json_mode=True, temperature=0.1, max_tokens=4096
-            )
-        except ProviderError as exc:
-            logger.warning("extractor call failed; committing narration-only beat: %s", exc)
-            raw = None
-        await self._meter("extractor", messages, started)  # meter even a failed call
-        if raw is None:
-            return []
-        extraction = parse_extraction(raw)
-        if extraction is None:
-            logger.warning(
-                "extractor output was not parseable JSON; committing narration-only beat"
-            )
-            return []
-        return await run_gauntlet(self._store, branch_id, extraction)
+        for _ in range(3):  # 1 attempt + 2 re-asks (docs/13)
+            started = time.perf_counter()
+            try:
+                # Generous cap: extraction JSON can be dense; a truncated response parses to
+                # nothing and silently drops state (worse than a slow beat).
+                raw = await self._router.complete(
+                    "extractor", messages, json_mode=True, temperature=0.1, max_tokens=4096
+                )
+            except ProviderError as exc:
+                # A call failure is the adapter's to retry, not ours — bail to narration-only.
+                logger.warning("extractor call failed; committing narration-only beat: %s", exc)
+                await self._meter("extractor", messages, started)
+                return []
+            await self._meter("extractor", messages, started)
+            extraction = parse_extraction(raw)
+            if extraction is not None:
+                return await run_gauntlet(self._store, branch_id, extraction)
+            messages = [
+                *messages,
+                Message(
+                    role="user",
+                    content="That was not a parseable JSON object matching the schema. "
+                    "Return ONLY the corrected JSON object, nothing else.",
+                ),
+            ]
+        logger.warning(
+            "extractor output not parseable after re-asks; committing narration-only beat"
+        )
+        return []
 
     async def _meter(self, stage_tag: str, messages: list[Message], started: float) -> None:
         # Metering is best-effort observability — it must never break a beat.

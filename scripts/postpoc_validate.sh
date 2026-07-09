@@ -23,7 +23,7 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
 fi
 MODEL="${MODEL:-}"
 MODEL_FLAG=(); [ -n "$MODEL" ] && MODEL_FLAG=(--model "$MODEL")
-play () { uv run uro play "$1" --provider openai ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"}; }
+play () { local cid="$1"; shift; uv run uro play "$cid" --provider openai ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} "$@"; }
 
 # ---------- Leg A: Phase 6 — a PbtA (uro_pbta) campaign, played live ----------
 echo "=================== Leg A: PbtA / uro_pbta ($(date +%H%M%S)) ==================="
@@ -48,7 +48,9 @@ echo "war-story campaign: $SEED  (a raider witnessed Sable's feat; Mera heard it
 WARSTORY_INTENTS='I settle at Mera the tavern keeper'\''s bar and ask what news there is
 I ask Mera what she has heard of late about any wizard on the road
 I ask her whether she truly believes what she just told me'
-{ printf '%s\n' "$WARSTORY_INTENTS"; echo /quit; } | play "$SEED"
+# --no-mechanics: this leg is a pure Chronicler retell (recall + extraction + narration, no
+# combat) — so no ruleset/planner is needed, and the Traveler PC needs no character sheet.
+{ printf '%s\n' "$WARSTORY_INTENTS"; echo /quit; } | play "$SEED" --no-mechanics
 
 echo; echo "=========================================================="
 echo "DONE.  PbtA=$CID_A   WarStory=$SEED   (model ${MODEL:-default})"

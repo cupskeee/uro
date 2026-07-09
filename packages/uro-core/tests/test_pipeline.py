@@ -221,3 +221,35 @@ async def test_bare_mode_is_a_true_ablation(store: PostgresEventStore) -> None:
     assert await store.list_actors(campaign.branch_id) == []  # no state built
     hits = await store.search(campaign.branch_id, hashing_embedding("hidden passage"), k=5)
     assert hits == []  # no memory indexed
+
+
+async def test_extractor_reasks_on_unparseable_json_then_extracts(
+    store: PostgresEventStore,
+) -> None:
+    # docs/13: the extractor gets up to 2 re-asks on unparseable output (like the planner) before
+    # falling back to a narration-only beat. A single malformed response must NOT silently drop the
+    # beat's whole state. First completion is garbage; the re-ask returns valid JSON with a claim.
+    world = await store.create_world(f"reask-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    good = '{"actors":[],"claims":[{"statement":"The bridge collapsed.","provenance":"narrator"}]}'
+    provider = ScriptedProvider(
+        narration="The old bridge groans and gives way.",
+        completions=["```not json at all```", good],  # attempt 1 unparseable → re-ask → attempt 2
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=provider))
+    result = await engine.run_beat(campaign, "player-1", "I cross the bridge")
+    assert result.extracted == 1  # the re-ask salvaged the state (was 0 = narration-only before)
+
+
+async def test_extractor_falls_back_to_narration_only_after_exhausting_reasks(
+    store: PostgresEventStore,
+) -> None:
+    # Three unparseable completions (1 + 2 re-asks) → the beat still COMMITS, narration-only.
+    world = await store.create_world(f"reask2-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    provider = ScriptedProvider(
+        narration="Mist rolls in.", completions=["nope", "still nope", "nope again"]
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=provider))
+    result = await engine.run_beat(campaign, "player-1", "I look around")
+    assert result.commit_id and result.extracted == 0  # prose kept, no state (the honest fallback)
