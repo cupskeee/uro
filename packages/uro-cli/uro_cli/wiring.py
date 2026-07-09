@@ -116,7 +116,25 @@ def build_embedder(kind: str) -> LLMProvider | None:
     return None
 
 
-def build_router(kind: str, model: str | None) -> ProviderRouter:
+def parse_role_models(overrides: list[str] | None) -> dict[str, str]:
+    """Parse repeatable `--role-model role=spec` CLI overrides into {role: spec}. `spec` is a
+    full provider spec ('openai:gpt-4o') or a bare model ('gpt-4o', bound to the default
+    provider kind). Malformed entries raise — a CLI override is explicit intent (docs/04)."""
+    result: dict[str, str] = {}
+    for item in overrides or []:
+        role, sep, spec = item.partition("=")
+        role, spec = role.strip(), spec.strip()
+        if not sep or not role or not spec:
+            raise ValueError(
+                f"bad --role-model {item!r}; expected role=spec, e.g. planner=openai:gpt-4o"
+            )
+        result[role] = spec
+    return result
+
+
+def build_router(
+    kind: str, model: str | None, role_models: dict[str, str] | None = None
+) -> ProviderRouter:
     # The default provider is required (it narrates + backs unpinned roles). A *pinned*
     # role whose provider can't be built (e.g. an unused role missing its key) is skipped
     # with a warning and falls back to the default, rather than bricking the whole router.
@@ -134,4 +152,10 @@ def build_router(kind: str, model: str | None) -> ProviderRouter:
             embedder = None
         if embedder is not None:
             bindings["embedder"] = embedder
+    # CLI --role-model overrides win over uro.toml (the deployment's explicit last word). A bare
+    # model reuses the default provider kind. Unlike a config role, an explicit override that can't
+    # be built raises — the user asked for it by name; silently ignoring it would mislead.
+    for role, spec in (role_models or {}).items():
+        full = spec if ":" in spec else f"{kind}:{spec}"
+        bindings[role] = provider_from_spec(full)
     return ProviderRouter(bindings=bindings, default=default)

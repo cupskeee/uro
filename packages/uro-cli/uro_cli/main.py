@@ -16,7 +16,7 @@ from uro_core.rulesets.base import CharSpec
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import World
 
-from uro_cli.wiring import build_router, build_ruleset, build_store
+from uro_cli.wiring import build_router, build_ruleset, build_store, parse_role_models
 
 app = typer.Typer(no_args_is_help=True, help="Uro Engine — reference client.")
 db_app = typer.Typer(no_args_is_help=True, help="Database management.")
@@ -394,8 +394,16 @@ def play(
         help="narrative-only: full recall + extraction + memory, but NO ruleset/planner "
         "(the thesis test — recall without the mechanics confound). Distinct from --bare.",
     ),
+    role_model: list[str] = typer.Option(  # noqa: B008 (typer DI-style default, like every option here)
+        None,
+        "--role-model",
+        help="per-role model override, repeatable: role=spec (spec = 'openai:gpt-4o' or a bare "
+        "'gpt-4o' on the default provider). Wins over uro.toml. E.g. --role-model planner=gpt-4o "
+        "keeps a cheap default for extraction but a strong planner (docs/04).",
+    ),
 ) -> None:
     """Interactive play loop. Type an action; '/quit' to leave. State persists to Postgres."""
+    role_models = parse_role_models(role_model)
 
     async def _run() -> None:
         store = build_store()
@@ -409,7 +417,7 @@ def play(
             # planner/gate are exactly what bare ablates and what no-mechanics skips.
             engine = Engine(
                 store,
-                build_router(provider, model),
+                build_router(provider, model, role_models),
                 # Rebind the campaign's OWN ruleset (D-30) — a PbtA campaign plays under uro_pbta.
                 ruleset=None
                 if (bare or no_mechanics)
@@ -783,9 +791,13 @@ def dry_run(
     intent: str,
     provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
     model: str = typer.Option(None, help="model id for local/openai/anthropic providers"),
+    role_model: list[str] = typer.Option(  # noqa: B008 (typer DI-style default, like every option here)
+        None, "--role-model", help="per-role model override, repeatable: role=spec (docs/04)"
+    ),
 ) -> None:
     """Dry-run a beat (docs/09 creator loop): show the events it WOULD commit, without writing.
     Nothing enters the log — the campaign is untouched."""
+    role_models = parse_role_models(role_model)
 
     async def _run() -> None:
         store = build_store()
@@ -797,7 +809,7 @@ def dry_run(
                 raise typer.Exit(1)
             engine = Engine(
                 store,
-                build_router(provider, model),
+                build_router(provider, model, role_models),
                 ruleset=build_ruleset(campaign.ruleset_id, campaign.ruleset_version),
             )
             events = await engine.preview_beat(campaign, PARTICIPANT, intent)

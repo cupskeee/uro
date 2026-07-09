@@ -228,3 +228,16 @@ Owner spotted two warnings in the live runs:
   the unbound WarStory campaign was ruleset-bound with a sheet-less PC. FIXED in the harness: the
   WarStory leg now runs `--no-mechanics` (its correct mode — recall + extraction + narration, no
   ruleset/planner/sheet needed).
+
+### Per-role model routing — CLI override shipped (2026-07-09)
+
+The one feature the live validation surfaced. Per-role routing already existed via `uro.toml`
+`[llm.roles]` (config-file only); added a CLI override so it needs no config file and the harness
+can use it: `uro play --role-model planner=openai:gpt-4o --role-model extractor=gpt-4o-mini`.
+CLI overrides win over config and fail loudly (explicit intent), vs a config role's
+skip-with-warning. `scripts/postpoc_validate.sh` Leg A now routes planner+narrator to a strong
+model (STRONG_MODEL, default gpt-4o) while the high-volume extractor/embedder stay cheap — the
+cost-optimized path that gets reliable conflicts without paying gpt-4o for every call. Tests in
+`test_wiring.py` (parse, full spec, bare-model→default-kind, CLI-beats-config, fails-loudly).
+This closes the last thread the live runs opened; the ledger status for "the alien ruleset in play"
+is now live-validated AND affordably runnable.

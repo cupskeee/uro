@@ -55,6 +55,21 @@ judge      = "openai_compat:gpt-5.1"           # probe scoring (D-24); prefer ju
 
 One physical model may serve all roles (cheap start); the indirection costs nothing and enables per-role optimization later. Roles are registered in code with a described contract (input shape, output schema, latency class) so new roles can be added without touching adapters.
 
+**Overriding a role without editing config:** `uro play` / `uro dry-run` accept a repeatable
+`--role-model role=spec` where `spec` is a provider spec (`openai:gpt-4o`) or a bare model
+(`gpt-4o`, bound to the `--provider` kind). CLI overrides win over `[llm.roles]`; unlike a config
+role (skipped-with-warning if its key is missing), an explicit override that can't be built raises
+— you named it, so a silent fallback would mislead. (A bare model with a colon in its own name,
+e.g. an Ollama tag `llama3.1:8b`, must use the full form `local:llama3.1:8b`.)
+
+**Live-validated cost split (2026-07-09, docs/16):** the planner needs a strong model — on
+gpt-4o-mini it fired a PbtA encounter only ~half the time; on gpt-4o it fires reliably, produces
+the full graded outcome spectrum, and its narration tracks the mechanics. The extractor and
+embedder are high-volume and fine on a cheap model. So the recommended split is a **strong
+planner/narrator + cheap extractor/embedder**, e.g. `uro play <c> --provider openai
+--role-model planner=gpt-4o --role-model narrator=gpt-4o` (extractor stays gpt-4o-mini). This is
+exactly what `scripts/postpoc_validate.sh` now does.
+
 ## Capability probes
 
 Per owner feedback: when a world declares requirements (e.g. mature content enabled), there must be a way to **test whether the bound models can actually deliver**. `uro world probe <world>` runs a suite against every bound role and produces a report (**PoC: printed to stdout with raw transcripts; persisted, timestamped report storage is deferred**). The shipped suite is two of the probes below — the hard `structured_output` gate and `content_rating`; the rest extend the same ask→judge→attach-transcript pattern:

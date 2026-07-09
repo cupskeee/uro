@@ -39,7 +39,12 @@ I catch my breath and take stock of my wounds
 I look around to see who is still standing with me
 I press my advantage and demand the diggers be let go
 I ask River what the Company will do now'
-{ printf '%s\n' "$PBTA_INTENTS"; echo /quit; } | play "$CID_A"
+# Cost-optimized per-role routing (docs/04): a STRONG planner (reliably picks the encounter
+# affordance — the live-run finding) + strong narrator (prose that tracks the mechanics), while
+# the high-volume extractor/embedder stay on the cheap default. STRONG_MODEL overrides gpt-4o.
+STRONG="${STRONG_MODEL:-gpt-4o}"
+{ printf '%s\n' "$PBTA_INTENTS"; echo /quit; } \
+  | play "$CID_A" --role-model "planner=openai:$STRONG" --role-model "narrator=openai:$STRONG"
 
 # ---------- Leg B: Phase 8 — a Chronicler war-story rumor, retold live ----------
 echo; echo "=================== Leg B: Chronicler war-story retell ==================="
