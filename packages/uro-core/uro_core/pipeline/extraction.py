@@ -102,7 +102,8 @@ def build_extractor_messages(
         'Return JSON: {"actors": [{"name", "role"}], "claims": [{"statement", '
         '"about": [names], "provenance": "narrator"|"dialogue", '
         '"speaker": name (dialogue only), "contradicts": [known claim ids], '
-        '"durable": true for a lasting fact / false for flavor, "confidence": 0..1}]}'
+        '"durable": true ONLY if still true a month from now / false for any passing moment, '
+        'gesture, mood, or sensation, "confidence": 0..1}]}'
     )
     system = (env or DEFAULT_ENV).render("extractor.system.j2")
     return [

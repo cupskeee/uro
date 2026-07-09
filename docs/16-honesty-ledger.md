@@ -157,3 +157,34 @@ eyes flash"), and the harm landed on the PbtA sheet. The three fixes that got he
 ref name-resolution + the planner prompt nudge + the emberfell colloquial aliases. Chronicler
 leg: still a clean PASS (feat `truth=unknown`/external, Mera's rumor at 0.272). **Status upgrade:
 "the alien ruleset in play" moves from stub-only to live-validated (with default gpt-4o-mini).**
+
+### Extraction prompt hardened against flavor over-extraction (2026-07-09)
+
+The last remaining live-quality follow-up: the first PbtA run promoted ~21/27 claims to `truth=true`,
+much of it momentary flavor (expressions, moods, sensations) despite the prompt's negative
+instruction — a small model ignoring "do not extract X". Fix: rewrote `extractor.system.j2` with a
+concrete KEEP/OMIT few-shot table (drawn from the actual leaks) + a "would this be true a month
+from now?" durability test; sharpened the inline `durable` hint. The deterministic backstop is
+unchanged and still tested (`durable=false` → dropped, `test_gauntlet_drops_flavor_claims`); this
+change only improves the model's LABELING that feeds it. **Effect is prompt-side — pending the next
+live re-run to measure the `truth=true` flavor ratio** (same validate-by-loop as the planner nudge).
+
+### Live re-run #3 — flavor over-extraction MEASURABLY reduced; conflict-firing is planner-stochastic (2026-07-09)
+
+After the extractor few-shot hardening:
+- **Flavor over-extraction: clear win.** Claims/beat dropped from run-1's 27 (21 `truth=true`) to
+  **13 (12 `truth=true`)**, and the `truth=true` set is now mostly durable facts ("Cass Holloway
+  has scars from past brawls", "…is the claim-boss", "recent outbreak of violence between the
+  Glint and the Flares"). ~4 residual flavor leaks remain (PC sensations / a momentary crowd
+  reaction) — the small-model tax; notably, the PC-injury ones ("wounds on your forearms") are
+  narrator-invented BECAUSE no fight fired (see below), not pure extraction error.
+- **Conflict-firing REGRESSED this run (no encounter, harm=0) — but it's planner STOCHASTICITY,
+  not a code regression.** The alias fix held (exactly 1 Cass actor, resolvable), so target
+  resolution is solid; gpt-4o-mini simply didn't PICK the encounter affordance this time (it fired
+  in run #2, not here). This cleanly isolates the residual issue to **affordance-SELECTION by a
+  weak model (OQ-2)** — and the design already says the planner "needs strong structured output"
+  while the harness runs gpt-4o-mini for every role. Next diagnostic: `MODEL=gpt-4o
+  bash scripts/postpoc_validate.sh` (or per-role planner routing) to see if a strong planner fires
+  it reliably.
+- **Chronicler: clean PASS every run** (feat `truth=unknown`/external, Mera's rumor at 0.272).
+- Minor: identical claims recur across beats (claims aren't content-deduped like actors are by name).
