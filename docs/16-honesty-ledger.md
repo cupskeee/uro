@@ -144,3 +144,16 @@ the encounter name-resolution fix + the planner prompt nudge, a colloquial "Cass
 resolves to the authored NPC (test: `test_authored_aliases_resolve_colloquial_references`). Whether
 the conflict fires end-to-end is pending the next live re-run. **Chronicler leg: still a clean PASS
 on the re-run** (feat `truth=unknown`/external, Mera's rumor at conf 0.272).
+
+### Live re-run #2 — PbtA conflict fires END-TO-END (2026-07-09, after the alias fix)
+
+**Phase 6 is now live-validated in play**, not just deterministically. Third run, from Postgres:
+no duplicate Cass (the alias folded the reference); the live planner picked the encounter
+affordance and targeted `a:cass`; a **2d6 conflict committed** (`EncounterStarted` +
+3× `EncounterTurnTaken` + `EncounterEnded`); and the PC sheet took **`harm=2`** — was `harm=0`
+in both prior runs, so the **narration↔mechanics consistency gap is closed**: a real fight ran,
+the narrator narrated the real fight ("you surge forward … the bar erupts into chaos … Cass's
+eyes flash"), and the harm landed on the PbtA sheet. The three fixes that got here: encounter
+ref name-resolution + the planner prompt nudge + the emberfell colloquial aliases. Chronicler
+leg: still a clean PASS (feat `truth=unknown`/external, Mera's rumor at 0.272). **Status upgrade:
+"the alien ruleset in play" moves from stub-only to live-validated (with default gpt-4o-mini).**
