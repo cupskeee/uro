@@ -18,7 +18,7 @@ same code narrates live.
 
 Run it against a local Postgres (docker compose up -d; host port 5433):
 
-    uv run python examples/hello_uro.py
+    uv run python examples/hello_uro/hello_uro.py
 """
 
 from __future__ import annotations

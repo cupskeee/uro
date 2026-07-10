@@ -19,5 +19,5 @@ output is byte-stable (which is why `test_example_hello_uro.py` asserts the whol
 ```
 docker compose up -d --wait          # Postgres + pgvector on host port 5433
 uv run uro db migrate
-uv run python examples/hello_uro.py
+uv run python examples/hello_uro/hello_uro.py
 ```

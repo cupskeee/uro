@@ -54,10 +54,10 @@ uv run uro world new "Ashfall"  # prints a campaign id
 uv run uro play <campaign>      # play offline with the deterministic stub…
 uv run uro play <campaign> --provider anthropic   # …or a real model (needs ANTHROPIC_API_KEY)
 
-uv run python examples/hello_uro.py   # embed the engine as a library (no CLI, no key)
+uv run python examples/hello_uro/hello_uro.py   # embed the engine as a library (no CLI, no key)
 ```
 
-**Building on the engine?** [`examples/hello_uro.py`](examples/hello_uro.py) is the smallest real consumer — it imports `uro_core` directly and drives one campaign showing recall, the Reaction Layer, and branching, deterministically (no API key). Per-role model bindings go in `uro.toml` (`[llm.roles]`, see `uro.example.toml`); secrets stay in env vars. Contributing conventions and the build rhythm live in [CLAUDE.md](CLAUDE.md); the developer guide is [14-development-guide.md](docs/14-development-guide.md).
+**Building on the engine?** [`examples/hello_uro/hello_uro.py`](examples/hello_uro/hello_uro.py) is the smallest real consumer — it imports `uro_core` directly and drives one campaign showing recall, the Reaction Layer, and branching, deterministically (no API key). Per-role model bindings go in `uro.toml` (`[llm.roles]`, see `uro.example.toml`); secrets stay in env vars. Contributing conventions and the build rhythm live in [CLAUDE.md](CLAUDE.md); the developer guide is [14-development-guide.md](docs/14-development-guide.md).
 
 ## Documentation map
 

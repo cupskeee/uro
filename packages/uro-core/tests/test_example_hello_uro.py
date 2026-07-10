@@ -7,8 +7,8 @@ from pathlib import Path
 
 from uro_core.adapters.postgres.store import PostgresEventStore
 
-# examples/ is not a package — put it on the path like a consumer's own project would import it.
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "examples"))
+# the example is not a package — put its folder on the path like a consumer's project would import.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "examples" / "hello_uro"))
 
 import hello_uro
 
