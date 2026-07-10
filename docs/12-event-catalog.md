@@ -2,7 +2,7 @@
 
 The canonical registry of domain event types. Everything the engine "knows" is a projection of these (`03-timeline-and-branching.md`, `07-persistence-and-events.md`); this file is the vocabulary. **Version 0 — living**, but with process: an event type does not exist until it has (1) an entry here, (2) a Pydantic payload model in `uro_core/domain/events.py`, (3) projector handling, and (4) an emitter whitelist entry. No inline invention of event types in code.
 
-> **Reserved rows (honest status, 2026-07-09):** several catalogued types have full plumbing (payload + projector handler) but **no live emitter yet** — they are the forward contract, not shipped behavior: `ClaimTruthChanged`, `ActorPromoted`, `TerrainChanged`, `PlaceStateChanged`, `EdgeUpdated`/`EdgeRemoved` (the meteor's `PlaceDestroyed` and mid-play thread consequences are author/test-driven today, not History-emitted — OQ-8). `ActorDamaged` is **legacy** (no live emitter; a replay-compat handler is retained for pre-D-30 logs — harm now flows via `SheetUpdated`). See [16-honesty-ledger.md](16-honesty-ledger.md) for the proven/reserved map.
+> **Reserved rows (honest status, 2026-07-09; updated 2026-07-10 for D-33):** several catalogued types have full plumbing (payload + projector handler) but **no live emitter yet** — they are the forward contract, not shipped behavior: `ClaimTruthChanged`, `ActorPromoted`, `TerrainChanged`, `PlaceStateChanged`, `EdgeUpdated`. `ActorDamaged` is **legacy** (no live emitter; a replay-compat handler is retained for pre-D-30 logs — harm now flows via `SheetUpdated`). **NOW LIVE (D-33, Reaction Layer, emitter M=module):** `ThreadStateChanged`, `ClaimRecorded` (module rumors, `origin=module`), `BeliefChanged`/`EdgeAdded`/`EdgeRemoved` (module agendas) — a pack's declarative rules advance thread lifecycle + off-screen agendas, `caused_by=module`. `PlaceDestroyed` + History's own adaptation ripple stay author/test-driven (OQ-8). See [16-honesty-ledger.md](16-honesty-ledger.md) for the proven/reserved map.
 
 ## Envelope (every event)
 
@@ -21,13 +21,13 @@ caused_by    (below)
 payload      {v: 1, ...}          # versioned per event type
 ```
 
-`caused_by` variants: `{kind: player_action, participant_id, beat_id}` · `{kind: agenda, actor_id, thread_id?}` · `{kind: history, pass: seeding|adaptation|backfill|timeskip}` · `{kind: ruleset, encounter_id}` · `{kind: system}`.
+`caused_by` variants: `{kind: player_action, participant_id, beat_id}` · `{kind: agenda, actor_id, thread_id?}` · `{kind: history, pass: seeding|adaptation|backfill|timeskip}` · `{kind: ruleset, encounter_id}` · `{kind: module, rule_id}` (Reaction Layer, D-33) · `{kind: external, encounter_id}` (Chronicler, D-25) · `{kind: system}`.
 
 ## Emitter whitelist
 
 Each event type declares who may emit it — the core hallucination defense: the LLM-fed extractor can only ever *propose* types marked **X**; mechanical outcomes only ever come from the ruleset. **How it's enforced (PoC):** structurally at the source, not by a generic commit-time emitter check. The extractor's output schema (`Extraction`, `pipeline/extraction.py`) can only express actor/claim shapes, so `run_gauntlet` emits only `ActorCreated`/`ClaimRecorded`/`BeliefChanged` — the LLM is *incapable* of proposing a mechanical event. The ruleset/pipeline/system emitters are likewise the only code paths that mint their event types. A generic per-commit `caused_by`-vs-whitelist validator is not (yet) a separate gate; this table is the source-of-truth contract those emitters are written to.
 
-Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects · **H** = History service (seeding, adaptation, and mid-play thread consequences) · **A** = Actor service (off-screen sim) · **P** = pipeline core · **S** = system/API (import, seeding, admin, fork ops) · **E** = external resolver (Chronicler mode, D-25 — the encounter it was handed: mechanical facts reported back (deaths/loot) commit directly; interpretive content (a feat) commits as `truth=unknown` **testimony** + witness beliefs, NOT as protected canon. *PoC: feat testimony is not yet run through the extractor gauntlet — that tier/contradiction validation is the OQ-12 refinement.*).
+Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects · **H** = History service (seeding, adaptation, and mid-play thread consequences) · **A** = Actor service (off-screen sim) · **P** = pipeline core · **S** = system/API (import, seeding, admin, fork ops) · **M** = module / Reaction Layer (D-33 — pack-authored declarative rules; a CLOSED action set gauntleted to `truth=unknown`/`origin=module` testimony + thread-state/edge changes, scope-fenced, never canon/mechanics) · **E** = external resolver (Chronicler mode, D-25 — the encounter it was handed: mechanical facts reported back (deaths/loot) commit directly; interpretive content (a feat) commits as `truth=unknown` **testimony** + witness beliefs, NOT as protected canon. *PoC: feat testimony is not yet run through the extractor gauntlet — that tier/contradiction validation is the OQ-12 refinement.*).
 
 ## Catalog v0
 
@@ -83,8 +83,8 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | event_type | payload | emit | notes |
 |---|---|---|---|
 | `ThreadCreated` | thread_id, stakes, state, originator, provenance | X H A P S | off-screen plots included; `S` covers authored + AI-backfilled pack conflict-seeds at import (`provenance=author\|ai_backfill`, `09`); projected to `proj_threads` |
-| `ThreadStateChanged` | thread_id, from→to (`dormant|offered|active|resolved|dead`), cause | P H A | |
-| `ThreadStepCompleted` | thread_id, step, outcome | P | |
+| `ThreadStateChanged` | thread_id, to_state (`dormant|offered|active|resolved|dead`), from_state (advisory) | M P H A | LIVE via emitter M (D-33): a pack rule advances a thread's lifecycle. Projector sets `proj_threads.state` (never mints a thread) |
+| `ThreadStepCompleted` | thread_id, step, outcome | P | reserved (no live emitter) |
 
 ### Play & campaign
 | event_type | payload | emit | notes |

@@ -74,6 +74,11 @@ def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> S
         bundle = OutcomeBundle.model_validate(bundle_json)
         events = await distill_outcome(store, campaign.branch_id, bundle)
         commit = await store.append_beat(campaign.branch_id, events)
+        # Reaction Layer (docs/17, D-33): an EXTERNAL death is the war-story premise — combat is
+        # non-lethal (lethal=False), so the Chronicler is the only runtime ActorDied source, and a
+        # pack rule triggering on ActorDied must fire here too, not only on the run_beat path.
+        # react() is exception-isolated — the outcome beat is already durable.
+        await engine.react(campaign, commit.commit_id, events)
         return {"committed_events": len(events), "commit_id": commit.commit_id}
 
     return ServerDeps(

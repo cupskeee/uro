@@ -87,7 +87,7 @@ async def test_death_activates_dormant_thread_as_a_module_beat(store: PostgresEv
     branch = campaign.branch_id
     died = [actor_died(actor_id="a:mook", cause="slain in the brawl")]
     await store.append_beat(branch, died)  # the trigger beat (a death committed)
-    await _engine(store)._react(campaign, await _head(store, branch), died)
+    await _engine(store).react(campaign, await _head(store, branch), died)
 
     assert (await _states(store, branch))["t:feud"] == "active"  # the dormant thread woke
     # the consequence is one module-caused ThreadStateChanged — auditable, un-laundered provenance
@@ -108,7 +108,7 @@ async def test_reaction_survives_a_fork(store: PostgresEventStore) -> None:
     world, campaign = await _campaign_with_rule(store)
     branch = campaign.branch_id
     await store.append_beat(branch, [actor_died(actor_id="a:mook")])
-    await _engine(store)._react(
+    await _engine(store).react(
         campaign, await _head(store, branch), [actor_died(actor_id="a:mook")]
     )
     # fork AFTER the reaction — the module consequence must rebuild by replay on the sibling
@@ -120,7 +120,7 @@ async def test_no_trigger_event_is_a_no_op(store: PostgresEventStore) -> None:
     _, campaign = await _campaign_with_rule(store)
     branch = campaign.branch_id
     head_before = await _head(store, branch)
-    await _engine(store)._react(campaign, head_before, [])  # no ActorDied → trigger doesn't match
+    await _engine(store).react(campaign, head_before, [])  # no ActorDied → trigger doesn't match
     assert (await _states(store, branch))["t:feud"] == "dormant"  # untouched
     assert await _head(store, branch) == head_before  # no empty module commit
 
@@ -130,7 +130,7 @@ async def test_condition_gate_blocks_the_rule(store: PostgresEventStore) -> None
     _, campaign = await _campaign_with_rule(store, feud_state="active")
     branch = campaign.branch_id
     head_before = await _head(store, branch)
-    await _engine(store)._react(campaign, head_before, [actor_died(actor_id="a:x")])
+    await _engine(store).react(campaign, head_before, [actor_died(actor_id="a:x")])
     assert await _head(store, branch) == head_before  # condition unmet → nothing committed
 
 
@@ -139,7 +139,7 @@ async def test_no_rule_pack_short_circuits(store: PostgresEventStore) -> None:
     world = await store.create_world(f"react-{new_id()}")  # no rule_pack
     campaign = await store.create_campaign(world.world_id, world.main_branch_id)
     head_before = await _head(store, campaign.branch_id)
-    await _engine(store)._react(campaign, head_before, [actor_died(actor_id="a:x")])
+    await _engine(store).react(campaign, head_before, [actor_died(actor_id="a:x")])
     assert await _head(store, campaign.branch_id) == head_before
 
 
@@ -225,7 +225,7 @@ async def test_out_of_scope_action_is_dropped(store: PostgresEventStore) -> None
             thread_created(thread_id="t:other", stakes="b", state="dormant"),
         ],
     )
-    await _engine(store)._react(
+    await _engine(store).react(
         campaign, await _head(store, campaign.branch_id), [actor_died(actor_id="a:x")]
     )
     assert (await _states(store, campaign.branch_id))["t:other"] == "dormant"  # untouched
@@ -259,7 +259,7 @@ async def test_record_rumor_is_forced_testimony(store: PostgresEventStore) -> No
             edge_added(src="a:smith", rel_type="member_of", dst="f:guild"),
         ],
     )
-    await _engine(store)._react(
+    await _engine(store).react(
         campaign, await _head(store, campaign.branch_id), [actor_died(actor_id="a:smith")]
     )
     claims = await store.claims_about(campaign.branch_id, "a:smith")
@@ -366,3 +366,58 @@ async def test_agenda_does_not_fire_below_cadence(store: PostgresEventStore) -> 
     engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
     await engine.agenda_tick(branch, 30)  # 30 < 365 → no cadence boundary crossed
     assert not await store.list_edges(branch, "at_war_with")  # nothing fired
+
+
+# --- INC-5 (phase-end review fixes): Chronicler-path reactions + runtime version pin ---
+
+
+async def test_chronicler_death_fires_a_reaction(store: PostgresEventStore) -> None:
+    # Phase-end review (high): combat is lethal=False, so an EXTERNAL (Chronicler) death is the only
+    # runtime ActorDied — the war-story premise. report_outcome must run react() so a rule that
+    # triggers on ActorDied fires (it was wired only into _finish, bypassing the Chronicler path).
+    from uro_server.app import engine_deps
+
+    world = await store.create_world(f"chron-{new_id()}", rule_pack=_FEUD_PACK)
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id,
+        [
+            thread_created(thread_id="t:feud", stakes="the feud", state="dormant"),
+            actor_created(actor_id="a:mook", name="Mook", tier=1),
+            actor_created(actor_id="a:killer", name="Killer", tier=1),
+        ],
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    deps = engine_deps(store, engine, {"tok": "chronicler"})
+    assert deps.report_outcome is not None
+    # an external bundle: an unprotected T1 combatant falls → distill emits ActorDied
+    await deps.report_outcome(
+        campaign.campaign_id,
+        {
+            "encounter_id": "e:1",
+            "participants": ["a:mook", "a:killer"],
+            "casualties": ["a:mook"],
+        },
+    )
+    assert (await _states(store, campaign.branch_id))["t:feud"] == "active"  # reaction fired
+
+
+async def test_runtime_rejects_an_unsupported_rules_api_version(store: PostgresEventStore) -> None:
+    # Phase-end review (low): the version pin is on the MODEL now, so an inline pack with a bad
+    # version fails RulePack() at runtime too — react() catches it and disables reactions (never
+    # runs wrong-version semantics), not just parse_pack.
+    from uro_core.worldpack.rules import RULES_API_VERSION, RulePack
+
+    with pytest.raises(ValueError, match="unsupported"):
+        RulePack(rules_api_version=RULES_API_VERSION + 1)
+    # a world carrying a future-version pack: react() must NOT activate the thread (fails closed)
+    bad_pack = {**_FEUD_PACK, "rules_api_version": RULES_API_VERSION + 1}
+    world = await store.create_world(f"ver-{new_id()}", rule_pack=bad_pack)
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id, [thread_created(thread_id="t:feud", stakes="s", state="dormant")]
+    )
+    await _engine(store).react(
+        campaign, await _head(store, campaign.branch_id), [actor_died(actor_id="a:x")]
+    )
+    assert (await _states(store, campaign.branch_id))["t:feud"] == "dormant"  # disabled, not run

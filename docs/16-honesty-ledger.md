@@ -241,3 +241,19 @@ cost-optimized path that gets reliable conflicts without paying gpt-4o for every
 `test_wiring.py` (parse, full spec, bare-model→default-kind, CLI-beats-config, fails-loudly).
 This closes the last thread the live runs opened; the ledger status for "the alien ruleset in play"
 is now live-validated AND affordably runnable.
+
+### Reaction Layer — Stage A shipped (2026-07-10, D-33, supersedes D-6)
+
+Pack-authored reactive behavior as DECLARATIVE data (`rules.yaml`/`agendas.yaml`), no code/sandbox.
+
+| Capability | Status | Note |
+|---|---|---|
+| Declarative rule interpreter + gauntlet | proven | `engines/rules.py` + `rules_gauntlet.py`, pure in-ring; `test_reaction_layer.py`. |
+| Trust fence (no canon/mechanics/mint from a pack) | **proven (by construction)** | the closed `Action` Pydantic union cannot NAME a mechanical/lethal/canon event; gauntlet forces `truth=unknown`/`origin=module`, scope-fences, never mints an actor. No author code runs → the sandbox is structural. |
+| Thread lifecycle (dormant→active→resolved…) | proven | `ThreadStateChanged` (emitter M) advances `proj_threads.state`; the OQ-8 FSM that had no engine. |
+| Post-commit reaction + downtime agenda hooks | proven | `Engine.react` (from `_finish` AND the Chronicler path) + `Engine.agenda_tick` (at time-skip). Deterministic, replay-safe (never re-run), exception-isolated. |
+| `rules_api_version` pin | proven | enforced on the `RulePack` model → holds at parse, runtime, and import. |
+| Inline `WorldGenesis` carry | proven | rule pack travels with the world (export/import self-contained). |
+| Structural party-race pin (materialize-at-trigger-commit) | **partial (by policy)** | `react` reads current head; safe under single-writer round-robin (D-31). The structural pin is a documented future refinement (one uncovered edge: a single participant driving two concurrent beats from two devices). |
+| Deep off-screen SIMULATION (accumulating faction state) | deferred | the declarative grammar deliberately can't express counters/armies/resources — the reserved sandbox tier's remit, not the Reaction Layer's (OQ-8 stays partly open). |
+| Sandboxed scripting tier (WASM) | deferred (reserved) | `ports/module.py` reserved; refused until a computation-shaped use-case escapes the data grammar's ceiling (the entity-mint refusal is the sharpest trigger). |

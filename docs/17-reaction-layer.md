@@ -1,15 +1,19 @@
 # 17 — Reaction Layer (pack-authored reactive behavior) — PROPOSAL
 
-> **STATUS: ACCEPTED (2026-07-10) — building Stage A.** From the design pass (ground→design→judge→
-> synthesize + critic). Supersedes **D-6**; **D-33** is appended to `decisions.md` at the phase-end
-> (INC-5), per the repo rhythm. The five open questions are DECIDED (see below).
+> **STATUS: Stage A COMPLETE (2026-07-10)** — INC-1..5 shipped, 242 tests green, **D-33** appended
+> to `decisions.md`, phase-end system-wide cross-phase review done (3 confirmed + 1 high critic
+> fixed). Supersedes **D-6**. The five open questions were DECIDED (see below).
 
 ## Decided open questions (owner, 2026-07-10)
 
-1. **Follow-on beat = a SEPARATE ordered `caused_by=module` beat**, with the reaction's projection
-   view + RNG seed **pinned to the trigger commit** (not head — closes the P7 party race). Not
-   atomic with the trigger; the rare crash-in-between gap is tolerable/recoverable (best-effort
-   consequence, like belief propagation).
+1. **Follow-on beat = a SEPARATE ordered `caused_by=module` beat.** Not atomic with the trigger;
+   the rare crash-in-between gap is tolerable/recoverable (best-effort consequence, like belief
+   propagation). **As built (honest, post-review):** the reaction reads state at the *current
+   branch head* right after `append_beat`; under the single-writer / round-robin (D-31) turn model,
+   current head IS the trigger commit, so the party race is CONTAINED behaviorally. The stronger
+   *structural* materialize-at-trigger-commit pin is a documented FUTURE refinement — the one edge
+   it doesn't cover is a single participant driving two concurrent beats from two devices (the
+   deterministic `trigger_commit`-keyed claim ids bound the blast radius; no canon corruption).
 2. **Modules NEVER mint entities** — hold the line. "X appears" = pre-author X dormant in worldpack
    + a rule that activates/reveals it. Truly-dynamic spawning is refused → the sharpest Stage-B trigger.
 3. **Cross-rule conflicts = total order by `rule_id`** (deterministic) + a `world validate` WARNING

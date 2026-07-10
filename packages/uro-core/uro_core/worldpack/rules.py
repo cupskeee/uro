@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from uro_core.domain.events import ThreadState
 
@@ -209,6 +209,19 @@ class RulePack(BaseModel):
     rules_api_version: int
     rules: list[Rule] = Field(default_factory=list)
     agendas: list[AgendaRule] = Field(default_factory=list)
+
+    @field_validator("rules_api_version")
+    @classmethod
+    def _pin_version(cls, v: int) -> int:
+        # The version pin is enforced on the MODEL, not just at parse — so it holds on every
+        # RulePack construction: parse_pack, the runtime _react/agenda_tick path (rebuilt from the
+        # inline WorldGenesis payload), and import (which replays that payload without re-parsing).
+        # Closes the P5 seam where an imported v2 pack would run under v1 semantics (docs/17, D-33).
+        if v != RULES_API_VERSION:
+            raise ValueError(
+                f"rules_api_version {v} unsupported; this engine supports {RULES_API_VERSION}"
+            )
+        return v
 
 
 # resolve the recursive Condition forward refs

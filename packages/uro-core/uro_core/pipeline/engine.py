@@ -16,7 +16,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from uro_core.domain.events import (
     CausedBy,
@@ -28,7 +28,7 @@ from uro_core.domain.events import (
     sheet_updated,
 )
 from uro_core.domain.ids import new_id
-from uro_core.engines.rules import RuleBudgetExceeded, evaluate_agendas, evaluate_rules
+from uro_core.engines.rules import evaluate_agendas, evaluate_rules
 from uro_core.engines.rules_gauntlet import run_rules_gauntlet
 from uro_core.errors import (
     EmptyNarrationError,
@@ -334,8 +334,9 @@ class Engine:
             )
             # Reaction Layer (docs/17, D-33): after the beat commits, a post-beat pass reads the
             # just-committed state and commits any consequences as a SEPARATE caused_by=module
-            # beat. Runs once per trigger; module events do not re-trigger it (no cascade).
-            await self._react(campaign, commit.commit_id, events)
+            # beat. Runs once per trigger; module events do not re-trigger it (no cascade). It is
+            # exception-isolated (react() never raises) — the beat is already durable.
+            await self.react(campaign, commit.commit_id, events)
         return BeatResult(
             beat_id=beat_id,
             narration=narration,
@@ -345,29 +346,31 @@ class Engine:
             suggestions=ctx.suggestions,
         )
 
-    async def _react(
+    async def react(
         self, campaign: Campaign, trigger_commit_id: str, trigger_events: list[DomainEvent]
     ) -> None:
-        """The post-beat Reaction pass (docs/17, D-33): evaluate the world's pack rules against the
-        just-committed state and commit any consequences as a SEPARATE caused_by=module beat.
+        """The post-commit Reaction pass (docs/17, D-33): evaluate the world's pack rules against
+        the just-committed state and commit any consequences as a SEPARATE caused_by=module beat.
+        Fired from _finish (free-roam/combat) AND the Chronicler outcome path (external deaths →
+        reactions, the P5 war-story premise) — the ONE reaction entry point for any committed beat.
+
+        Best-effort by contract: the trigger beat is ALREADY durably committed, so this NEVER raises
+        — any error (budget, load, a transient store fault) is logged and the beat stands (mirrors
+        _remember). Reactions are consequences, not the beat itself.
 
         Reads state as of the trigger commit (right after append_beat, under the single-writer/
         round-robin turn model, current head IS the trigger commit — a party-safe materialize-at-
-        commit pin is the documented refinement). Its whole effect is committed as events, so
-        replay/fork re-applies them verbatim and this is never re-run (cf. distill_outcome).
+        commit pin is a documented future refinement, docs/17). Its whole effect is committed as
+        events, so replay/fork re-applies them verbatim and this is never re-run (cf. distill).
         """
-        raw = await self._store.world_rule_pack(campaign.branch_id)
-        if not raw:  # no-rules fast short-circuit — a rule-less world pays ~nothing per beat
-            return
         try:
-            pack = RulePack(**raw)
-        except ValidationError:
-            logger.warning("world rule pack failed to load; skipping reactions")
-            return
-        if not pack.rules:
-            return
-        world_day = await self._store.current_world_time(campaign.branch_id)
-        try:
+            raw = await self._store.world_rule_pack(campaign.branch_id)
+            if not raw:  # no-rules fast short-circuit — a rule-less world pays ~nothing per beat
+                return
+            pack = RulePack(**raw)  # bad/incompatible pack (e.g. version) → caught below, disabled
+            if not pack.rules:
+                return
+            world_day = await self._store.current_world_time(campaign.branch_id)
             fired = await evaluate_rules(
                 self._store,
                 campaign.branch_id,
@@ -375,16 +378,15 @@ class Engine:
                 trigger_events=trigger_events,
                 world_day=world_day,
             )
-        except RuleBudgetExceeded as exc:  # fail closed — drop the pass, the beat still stands
-            logger.warning("reaction pass exceeded its budget; skipping: %s", exc)
-            return
-        if not fired:
-            return
-        module_events = await run_rules_gauntlet(
-            self._store, campaign.branch_id, fired, trigger_commit=trigger_commit_id
-        )
-        if module_events:
-            await self._store.append_beat(campaign.branch_id, module_events)
+            if not fired:
+                return
+            module_events = await run_rules_gauntlet(
+                self._store, campaign.branch_id, fired, trigger_commit=trigger_commit_id
+            )
+            if module_events:
+                await self._store.append_beat(campaign.branch_id, module_events)
+        except Exception as exc:  # the beat is already durable — a reaction fault must not fail it
+            logger.warning("reaction pass failed; the beat stands, no reactions: %s", exc)
 
     async def agenda_tick(self, branch_id: str, days: int) -> None:
         """The downtime/agenda pass (docs/17 INC-4, D-33): advance in-fiction time on `branch_id`,
@@ -394,32 +396,29 @@ class Engine:
         Deterministic: no wall-clock (day derived from the log), no ambient random; the whole
         effect is events, so replay never re-runs it. No LLM — safe to run without a provider."""
         from_day = await self._store.current_world_time(branch_id)
-        skip_commit = await self._store.time_skip(branch_id, days)
-        raw = await self._store.world_rule_pack(branch_id)
-        if not raw:
-            return
+        skip_commit = await self._store.time_skip(branch_id, days)  # the primary durable action
+        # The agenda pass is best-effort over the already-committed time-skip — like react(), a
+        # fault here must not fail the skip (which stands).
         try:
+            raw = await self._store.world_rule_pack(branch_id)
+            if not raw:
+                return
             pack = RulePack(**raw)
-        except ValidationError:
-            logger.warning("world rule pack failed to load; skipping agenda tick")
-            return
-        if not pack.agendas:
-            return
-        to_day = from_day + days
-        try:
+            if not pack.agendas:
+                return
+            to_day = from_day + days
             fired = await evaluate_agendas(
                 self._store, branch_id, agendas=pack.agendas, from_day=from_day, to_day=to_day
             )
-        except RuleBudgetExceeded as exc:
-            logger.warning("agenda tick exceeded its budget; skipping: %s", exc)
-            return
-        if not fired:
-            return
-        module_events = await run_rules_gauntlet(
-            self._store, branch_id, fired, trigger_commit=skip_commit.commit_id
-        )
-        if module_events:
-            await self._store.append_beat(branch_id, module_events)
+            if not fired:
+                return
+            module_events = await run_rules_gauntlet(
+                self._store, branch_id, fired, trigger_commit=skip_commit.commit_id
+            )
+            if module_events:
+                await self._store.append_beat(branch_id, module_events)
+        except Exception as exc:  # the time-skip is durable — an agenda fault must not fail it
+            logger.warning("agenda tick failed; the time-skip stands, no agendas: %s", exc)
 
     async def _beat_events(
         self,

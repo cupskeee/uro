@@ -99,7 +99,7 @@ Multi-model per-role bindings go in `uro.toml` (`[llm.roles] narrator = "anthrop
 
 ## Post-PoC horizon (unordered, deliberately unscheduled)
 
-Multiplayer `PartyArbiter` (OQ-7) · full Chronicler-mode ingestion contract beyond the toy proof (OQ-12) · module/scripting system for packs · graph/vector store swap-ins if scale demands · more rulesets (`srd51` — a d20 sibling; the alien-ruleset generality probe itself is DONE, Phase 6/D-30) · NATS-backed distribution · subscription-OAuth auth strategies if ever reconsidered (removed at D-16) · anything platform-shaped (which is someone else's repo).
+Multiplayer `PartyArbiter` (OQ-7, DONE — D-31) · full Chronicler-mode ingestion contract beyond the toy proof (OQ-12, hardened — D-32) · ~~module/scripting system for packs~~ (DONE as the declarative **Reaction Layer**, D-33/docs/17 — a pack ships `rules.yaml`/`agendas.yaml` data, no sandbox; a WASM scripting tier stays reserved behind `ports/module.py` until a computation-shaped use-case needs it) · graph/vector store swap-ins if scale demands · more rulesets (`srd51` — a d20 sibling; the alien-ruleset generality probe itself is DONE, Phase 6/D-30) · NATS-backed distribution · subscription-OAuth auth strategies if ever reconsidered (removed at D-16) · anything platform-shaped (which is someone else's repo).
 
 ## Standing engineering practices (all phases)
 
