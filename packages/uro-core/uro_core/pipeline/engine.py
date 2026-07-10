@@ -28,7 +28,7 @@ from uro_core.domain.events import (
     sheet_updated,
 )
 from uro_core.domain.ids import new_id
-from uro_core.engines.rules import RuleBudgetExceeded, evaluate_rules
+from uro_core.engines.rules import RuleBudgetExceeded, evaluate_agendas, evaluate_rules
 from uro_core.engines.rules_gauntlet import run_rules_gauntlet
 from uro_core.errors import (
     EmptyNarrationError,
@@ -385,6 +385,41 @@ class Engine:
         )
         if module_events:
             await self._store.append_beat(campaign.branch_id, module_events)
+
+    async def agenda_tick(self, branch_id: str, days: int) -> None:
+        """The downtime/agenda pass (docs/17 INC-4, D-33): advance in-fiction time on `branch_id`,
+        then fire the world's AGENDA rules whose cadence boundary the skip crossed — off-screen
+        faction/actor movement (edges, rumors) during downtime. Agenda events commit as a SEPARATE
+        caused_by=module beat after the TimeAdvanced commit (decided-OQ #1: separate ordered beat).
+        Deterministic: no wall-clock (day derived from the log), no ambient random; the whole
+        effect is events, so replay never re-runs it. No LLM — safe to run without a provider."""
+        from_day = await self._store.current_world_time(branch_id)
+        skip_commit = await self._store.time_skip(branch_id, days)
+        raw = await self._store.world_rule_pack(branch_id)
+        if not raw:
+            return
+        try:
+            pack = RulePack(**raw)
+        except ValidationError:
+            logger.warning("world rule pack failed to load; skipping agenda tick")
+            return
+        if not pack.agendas:
+            return
+        to_day = from_day + days
+        try:
+            fired = await evaluate_agendas(
+                self._store, branch_id, agendas=pack.agendas, from_day=from_day, to_day=to_day
+            )
+        except RuleBudgetExceeded as exc:
+            logger.warning("agenda tick exceeded its budget; skipping: %s", exc)
+            return
+        if not fired:
+            return
+        module_events = await run_rules_gauntlet(
+            self._store, branch_id, fired, trigger_commit=skip_commit.commit_id
+        )
+        if module_events:
+            await self._store.append_beat(branch_id, module_events)
 
     async def _beat_events(
         self,

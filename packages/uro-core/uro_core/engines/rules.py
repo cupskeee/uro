@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.worldpack.rules import (
     Action,
+    AgendaRule,
     CmpOp,
     Condition,
     Rule,
@@ -120,6 +121,30 @@ async def evaluate_rules(
         if rule.when is not None and not await _eval(
             store, branch_id, rule.when, world_day, budget
         ):
+            continue
+        for i, action in enumerate(rule.then):
+            fired.append(FiredAction(rule_id=rule.id, scope=rule.scope, action=action, index=i))
+    return fired
+
+
+async def evaluate_agendas(
+    store: ProjectionQueries,
+    branch_id: str,
+    *,
+    agendas: list[AgendaRule],
+    from_day: int,
+    to_day: int,
+) -> list[FiredAction]:
+    """Fire agenda rules whose cadence boundary was crossed by a time advance from `from_day` to
+    `to_day` AND whose condition holds at the post-skip state (INC-4 downtime tick). Deterministic:
+    a rule fires once per tick if `to_day // every_days > from_day // every_days` (at least one
+    boundary crossed) — bounded regardless of skip size. Total order by id."""
+    budget = [_MAX_NODES]
+    fired: list[FiredAction] = []
+    for rule in sorted(agendas, key=lambda r: r.id):
+        if to_day // rule.every_days <= from_day // rule.every_days:
+            continue  # no cadence boundary crossed in this skip
+        if rule.when is not None and not await _eval(store, branch_id, rule.when, to_day, budget):
             continue
         for i, action in enumerate(rule.then):
             fired.append(FiredAction(rule_id=rule.id, scope=rule.scope, action=action, index=i))

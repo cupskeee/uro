@@ -602,7 +602,10 @@ def branch_fork(
             w = await _world_or_exit(store, world)
             branch = await store.fork_branch(w.world_id, at, name)
             if time_skip_days > 0:
-                await store.time_skip(branch.branch_id, time_skip_days)
+                # agenda_tick time-skips AND fires the world's downtime agenda rules (docs/17); it
+                # needs no LLM, so a stub router suffices. A rule-less world → a plain time-skip.
+                engine = Engine(store, build_router("stub", None))
+                await engine.agenda_tick(branch.branch_id, time_skip_days)
         finally:
             await store.close()
         forked = branch.forked_from[:8] if branch.forked_from else "-"

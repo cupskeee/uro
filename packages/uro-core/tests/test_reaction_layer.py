@@ -295,3 +295,74 @@ async def test_gauntlet_is_deterministic_and_idempotent(store: PostgresEventStor
     b = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c9")
     assert [e.payload for e in a] == [e.payload for e in b]  # deterministic
     assert a[0].payload["claim_id"] == "m:c9:r1:0"  # keyed on trigger commit → idempotent upsert
+
+
+# --- INC-4: the downtime/agenda tick (docs/17) ---
+
+
+async def test_agenda_tick_fires_on_time_skip_and_replays(store: PostgresEventStore) -> None:
+    # an agenda rule: every 30 in-fiction days, two rival houses drift to war (an edge the module
+    # MAY touch — at_war_with, both ends in the faction scope). A 60-day skip crosses the boundary.
+    pack = {
+        "rules_api_version": 1,
+        "agendas": [
+            {
+                "id": "houses-drift-to-war",
+                "every_days": 30,
+                "then": [{"do": "add_edge", "src": "f:red", "rel": "at_war_with", "dst": "f:blue"}],
+                "scope": {"faction": "f:pact"},
+            }
+        ],
+    }
+    world = await store.create_world(f"agenda-{new_id()}", rule_pack=pack)
+    branch = world.main_branch_id
+    await store.append_beat(
+        branch,
+        [
+            faction_created(faction_id="f:pact", name="The Pact"),
+            faction_created(faction_id="f:red", name="Red"),
+            faction_created(faction_id="f:blue", name="Blue"),
+            edge_added(src="f:red", rel_type="member_of", dst="f:pact"),
+            edge_added(src="f:blue", rel_type="member_of", dst="f:pact"),
+        ],
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    await engine.agenda_tick(branch, 60)  # crosses the 30-day cadence
+
+    wars = [e for e in await store.list_edges(branch, "at_war_with") if e.src == "f:red"]
+    assert any(e.dst == "f:blue" for e in wars)  # the agenda moved the world off-screen
+    # the war edge survives a fork (rebuilt by replay)
+    fork = await store.fork_branch(world.world_id, await _head(store, branch), "later")
+    fork_wars = [
+        e for e in await store.list_edges(fork.branch_id, "at_war_with") if e.src == "f:red"
+    ]
+    assert any(e.dst == "f:blue" for e in fork_wars)
+
+
+async def test_agenda_does_not_fire_below_cadence(store: PostgresEventStore) -> None:
+    pack = {
+        "rules_api_version": 1,
+        "agendas": [
+            {
+                "id": "slow-burn",
+                "every_days": 365,
+                "then": [{"do": "add_edge", "src": "f:a", "rel": "at_war_with", "dst": "f:b"}],
+                "scope": {"faction": "f:p"},
+            }
+        ],
+    }
+    world = await store.create_world(f"agenda2-{new_id()}", rule_pack=pack)
+    branch = world.main_branch_id
+    await store.append_beat(
+        branch,
+        [
+            faction_created(faction_id="f:p", name="P"),
+            faction_created(faction_id="f:a", name="A"),
+            faction_created(faction_id="f:b", name="B"),
+            edge_added(src="f:a", rel_type="member_of", dst="f:p"),
+            edge_added(src="f:b", rel_type="member_of", dst="f:p"),
+        ],
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    await engine.agenda_tick(branch, 30)  # 30 < 365 → no cadence boundary crossed
+    assert not await store.list_edges(branch, "at_war_with")  # nothing fired
