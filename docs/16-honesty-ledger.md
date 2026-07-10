@@ -251,6 +251,7 @@ Pack-authored reactive behavior as DECLARATIVE data (`rules.yaml`/`agendas.yaml`
 | Declarative rule interpreter + gauntlet | proven | `engines/rules.py` + `rules_gauntlet.py`, pure in-ring; `test_reaction_layer.py`. |
 | Trust fence (no canon/mechanics/mint from a pack) | **proven (by construction)** | the closed `Action` Pydantic union cannot NAME a mechanical/lethal/canon event; gauntlet forces `truth=unknown`/`origin=module`, scope-fences, never mints an actor. No author code runs → the sandbox is structural. |
 | Thread lifecycle (dormant→active→resolved…) | proven | `ThreadStateChanged` (emitter M) advances `proj_threads.state`; the OQ-8 FSM that had no engine. |
+| Thread state reaches the narrator | proven | recall surfaces active/offered threads into the prompt ("ACTIVE THREADS"), so a module thread-activation influences the story, not just the projection — closes the gap the review implied. Place-state recall still deferred. |
 | Post-commit reaction + downtime agenda hooks | proven | `Engine.react` (from `_finish` AND the Chronicler path) + `Engine.agenda_tick` (at time-skip). Deterministic, replay-safe (never re-run), exception-isolated. |
 | `rules_api_version` pin | proven | enforced on the `RulePack` model → holds at parse, runtime, and import. |
 | Inline `WorldGenesis` carry | proven | rule pack travels with the world (export/import self-contained). |
