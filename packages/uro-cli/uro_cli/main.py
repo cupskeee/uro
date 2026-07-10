@@ -204,6 +204,7 @@ def world_create(
                 prompt_overrides=pack.prompts,
                 ruleset_id=pack.manifest.ruleset.id,
                 ruleset_version=pack.manifest.ruleset.version,
+                rule_pack=pack.rule_pack.model_dump() if pack.rule_pack else {},
                 extra_events=pack_to_events(pack),
             )
         finally:

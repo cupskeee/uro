@@ -27,6 +27,7 @@ from uro_core.worldpack.models import (
     WorldManifest,
     WorldPack,
 )
+from uro_core.worldpack.rules import RULES_API_VERSION, RulePack
 
 
 def parse_pack(root: str | Path) -> WorldPack:
@@ -43,7 +44,35 @@ def parse_pack(root: str | Path) -> WorldPack:
         claims=_seeds(root, "claims.yaml", ClaimSeed),
         lore=_read_tree(root / "lore", ".md"),
         prompts=_read_dir(root / "prompts", ".j2"),
+        rule_pack=_rule_pack(root),
     )
+
+
+def _rule_pack(root: Path) -> RulePack | None:
+    """Load `rules.yaml` / `agendas.yaml` (beside `world.toml`) into a validated `RulePack`, or
+    None if the pack ships neither. Fails LOUD on a schema violation or an unsupported
+    `rules_api_version` — an explicit, enforced version pin (decided-OQ #5, docs/17)."""
+    rules_path, agendas_path = root / "rules.yaml", root / "agendas.yaml"
+    if not rules_path.is_file() and not agendas_path.is_file():
+        return None
+    data: dict[str, object] = {}
+    for path, key in ((rules_path, "rules"), (agendas_path, "agendas")):
+        if not path.is_file():
+            continue
+        raw = yaml.safe_load(path.read_text()) or {}
+        if not isinstance(raw, dict):
+            raise PackError(f"{path.name} must be a YAML mapping (with rules_api_version + {key})")
+        data.setdefault("rules_api_version", raw.get("rules_api_version"))
+        data[key] = raw.get(key, [])
+    if data.get("rules_api_version") != RULES_API_VERSION:
+        raise PackError(
+            f"rule pack declares rules_api_version={data.get('rules_api_version')!r}; "
+            f"this engine supports {RULES_API_VERSION}"
+        )
+    try:
+        return RulePack(**data)  # type: ignore[arg-type]
+    except ValidationError as exc:
+        raise PackError(f"rule pack failed validation: {exc}") from exc
 
 
 def _manifest(path: Path) -> WorldManifest:

@@ -1,0 +1,17 @@
+# Reaction Layer (docs/17) — declarative rules the engine evaluates during play. Data, not code.
+rules_api_version: 1
+rules:
+  # When someone dies, the Saltborn's ritual thread resolves toward its reckoning.
+  - id: ritual-reckons-on-death
+    trigger:
+      event: ActorDied
+    when:
+      kind: thread_state
+      thread: "t:saltborn-ritual"
+      state: active
+    then:
+      - do: set_thread_state
+        thread: "t:saltborn-ritual"
+        to: resolved
+    scope:
+      thread: "t:saltborn-ritual"

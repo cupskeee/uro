@@ -8,14 +8,20 @@ like any other event. INC-3 replaces the hardcoded rule body with the pack-data 
 
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 
+import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import DomainEvent, actor_died, thread_created
 from uro_core.domain.ids import new_id
+from uro_core.errors import PackError
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.stub import hashing_embedding
 from uro_core.providers.base import CompletionRequest
 from uro_core.providers.router import ProviderRouter
+from uro_core.worldpack.parse import parse_pack
+
+WORLDS = Path(__file__).resolve().parents[3] / "worlds"
 
 
 class _Stub:
@@ -108,3 +114,60 @@ async def test_no_dormant_thread_is_a_no_op(store: PostgresEventStore) -> None:
     events: list[DomainEvent] = [actor_died(actor_id="a:x")]
     await _engine(store)._react(campaign, head_before, events)
     assert await _head(store, campaign.branch_id) == head_before  # nothing to do → no commit
+
+
+# --- INC-2: pack rule format, version pin, inline WorldGenesis carry (docs/17) ---
+
+
+def test_ashfall_rule_pack_parses() -> None:
+    pack = parse_pack(WORLDS / "ashfall")
+    assert pack.rule_pack is not None
+    assert pack.rule_pack.rules_api_version == 1
+    ids = [r.id for r in pack.rule_pack.rules]
+    assert "ritual-reckons-on-death" in ids
+
+
+def test_rule_pack_bad_version_fails_loud(tmp_path: Path) -> None:
+    (tmp_path / "world.toml").write_text('[world]\nname = "V"\n')
+    (tmp_path / "rules.yaml").write_text("rules_api_version: 999\nrules: []\n")
+    with pytest.raises(PackError, match="rules_api_version"):
+        parse_pack(tmp_path)
+
+
+def test_rule_pack_malformed_action_fails_loud(tmp_path: Path) -> None:
+    (tmp_path / "world.toml").write_text('[world]\nname = "V"\n')
+    (tmp_path / "rules.yaml").write_text(
+        "rules_api_version: 1\n"
+        "rules:\n"
+        "  - id: bad\n"
+        "    trigger: { event: ActorDied }\n"
+        "    then:\n"
+        "      - do: cast_fireball\n"  # not in the closed Action union → rejected
+        "    scope: { thread: t:x }\n"
+    )
+    with pytest.raises(PackError):
+        parse_pack(tmp_path)
+
+
+def test_no_rule_pack_is_none(tmp_path: Path) -> None:
+    (tmp_path / "world.toml").write_text('[world]\nname = "V"\n')
+    assert parse_pack(tmp_path).rule_pack is None  # a pack without rules.yaml is fine
+
+
+async def test_worldgenesis_carries_the_rule_pack_inline(store: PostgresEventStore) -> None:
+    # Decided-OQ: rule content is stamped INLINE in WorldGenesis (like prompt_overrides) so an
+    # exported→imported world stays self-contained (reactions fire without the pack files).
+    pack = parse_pack(WORLDS / "ashfall")
+    world = await store.create_world(
+        pack.manifest.name, rule_pack=pack.rule_pack.model_dump() if pack.rule_pack else {}
+    )
+    async with store.pool.acquire() as conn:
+        payload = await conn.fetchval(
+            "SELECT e.payload FROM events e JOIN commits c ON c.commit_id = e.commit_id "
+            "JOIN branches b ON b.world_id = c.world_id "
+            "WHERE b.branch_id = $1 AND e.event_type = 'WorldGenesis'",
+            world.main_branch_id,
+        )
+    payload = payload if isinstance(payload, dict) else json.loads(payload)
+    assert payload["rule_pack"]["rules_api_version"] == 1
+    assert payload["rule_pack"]["rules"][0]["id"] == "ritual-reckons-on-death"

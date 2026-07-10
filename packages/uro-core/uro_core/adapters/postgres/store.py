@@ -172,12 +172,13 @@ class PostgresEventStore:
         prompt_overrides: dict[str, str] | None = None,
         ruleset_id: str = "",
         ruleset_version: str = "",
+        rule_pack: dict[str, Any] | None = None,
         extra_events: list[DomainEvent] | None = None,
     ) -> World:
         """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
-        pack's tone + prompt overrides, docs/09) plus any `extra_events` — world-pack import
-        passes the authored seed events (emitter S) so authored geography/actors/factions exist
-        as state before any History seeding."""
+        pack's tone + prompt overrides + Reaction-Layer rule pack, docs/09, 17) plus any
+        `extra_events` — world-pack import passes the authored seed events (emitter S) so authored
+        geography/actors/factions exist as state before any History seeding."""
         genesis = [
             world_genesis(
                 name,
@@ -185,6 +186,7 @@ class PostgresEventStore:
                 prompt_overrides=prompt_overrides,
                 ruleset_id=ruleset_id,
                 ruleset_version=ruleset_version,
+                rule_pack=rule_pack,
             ),
             *(extra_events or []),
         ]

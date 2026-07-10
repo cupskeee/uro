@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from uro_core.worldpack.rules import RulePack
+
 Rating = Literal["none", "mild", "mature", "explicit"]
 PlaceKind = Literal["region", "settlement", "site"]
 
@@ -111,3 +113,4 @@ class WorldPack(BaseModel):
     claims: list[ClaimSeed] = Field(default_factory=list)
     lore: dict[str, str] = Field(default_factory=dict)  # relative path → markdown
     prompts: dict[str, str] = Field(default_factory=dict)  # filename → template override
+    rule_pack: RulePack | None = None  # rules.yaml/agendas.yaml — the Reaction Layer (docs/17)

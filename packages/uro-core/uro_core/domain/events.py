@@ -66,6 +66,10 @@ class WorldGenesisPayload(BaseModel):
     prompt_overrides: dict[str, str] = Field(default_factory=dict)  # pack prompts/ (filename→j2)
     ruleset_id: str = ""  # the pack's declared ruleset (docs/06); "" → the default (uro-basic)
     ruleset_version: str = ""
+    # The Reaction-Layer rule pack, carried INLINE (docs/17) — like prompt_overrides — so an
+    # exported world stays self-contained: reactions still fire after import on a host lacking the
+    # pack files. {} = no rule pack. Serialized RulePack (rules_api_version + rules + agendas).
+    rule_pack: dict[str, Any] = Field(default_factory=dict)
 
 
 class BeatResolvedPayload(BaseModel):
@@ -88,6 +92,7 @@ def world_genesis(
     prompt_overrides: dict[str, str] | None = None,
     ruleset_id: str = "",
     ruleset_version: str = "",
+    rule_pack: dict[str, Any] | None = None,
 ) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
@@ -98,6 +103,7 @@ def world_genesis(
             prompt_overrides=prompt_overrides or {},
             ruleset_id=ruleset_id,
             ruleset_version=ruleset_version,
+            rule_pack=rule_pack or {},
         ).model_dump(),
     )
 
