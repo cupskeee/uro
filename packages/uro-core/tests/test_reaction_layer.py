@@ -12,7 +12,13 @@ from pathlib import Path
 
 import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.domain.events import DomainEvent, actor_died, thread_created
+from uro_core.domain.events import (
+    actor_created,
+    actor_died,
+    edge_added,
+    faction_created,
+    thread_created,
+)
 from uro_core.domain.ids import new_id
 from uro_core.errors import PackError
 from uro_core.pipeline.engine import Engine
@@ -39,12 +45,28 @@ def _engine(store: PostgresEventStore) -> Engine:
     return Engine(store, ProviderRouter(bindings={}, default=_Stub()))
 
 
-async def _campaign_with_dormant_thread(store: PostgresEventStore):  # type: ignore[no-untyped-def]
-    world = await store.create_world(f"react-{new_id()}")
+# A pack rule: when someone dies, a dormant feud thread wakes. This is the death→activate mechanism
+# INC-1 hardcoded, now expressed as pack DATA (INC-3 evaluates it through the interpreter+gauntlet).
+_FEUD_PACK = {
+    "rules_api_version": 1,
+    "rules": [
+        {
+            "id": "death-wakes-the-feud",
+            "trigger": {"event": "ActorDied"},
+            "when": {"kind": "thread_state", "thread": "t:feud", "state": "dormant"},
+            "then": [{"do": "set_thread_state", "thread": "t:feud", "to": "active"}],
+            "scope": {"thread": "t:feud"},
+        }
+    ],
+}
+
+
+async def _campaign_with_rule(store: PostgresEventStore, *, feud_state: str = "dormant"):  # type: ignore[no-untyped-def]
+    world = await store.create_world(f"react-{new_id()}", rule_pack=_FEUD_PACK)
     campaign = await store.create_campaign(world.world_id, world.main_branch_id)
     await store.append_beat(
         campaign.branch_id,
-        [thread_created(thread_id="t:feud", stakes="the miners' feud", state="dormant")],
+        [thread_created(thread_id="t:feud", stakes="the miners' feud", state=feud_state)],
     )
     return world, campaign
 
@@ -61,7 +83,7 @@ async def _states(store: PostgresEventStore, branch_id: str) -> dict[str, str]:
 
 
 async def test_death_activates_dormant_thread_as_a_module_beat(store: PostgresEventStore) -> None:
-    _, campaign = await _campaign_with_dormant_thread(store)
+    _, campaign = await _campaign_with_rule(store)
     branch = campaign.branch_id
     died = [actor_died(actor_id="a:mook", cause="slain in the brawl")]
     await store.append_beat(branch, died)  # the trigger beat (a death committed)
@@ -79,11 +101,11 @@ async def test_death_activates_dormant_thread_as_a_module_beat(store: PostgresEv
     assert len(rows) == 1
     cb = rows[0]["caused_by"]
     cb = cb if isinstance(cb, dict) else json.loads(cb)
-    assert cb["kind"] == "module" and cb["rule_id"] == "inc1:death-activates-thread"
+    assert cb["kind"] == "module" and cb["rule_id"] == "death-wakes-the-feud"
 
 
 async def test_reaction_survives_a_fork(store: PostgresEventStore) -> None:
-    world, campaign = await _campaign_with_dormant_thread(store)
+    world, campaign = await _campaign_with_rule(store)
     branch = campaign.branch_id
     await store.append_beat(branch, [actor_died(actor_id="a:mook")])
     await _engine(store)._react(
@@ -94,26 +116,31 @@ async def test_reaction_survives_a_fork(store: PostgresEventStore) -> None:
     assert (await _states(store, fork.branch_id))["t:feud"] == "active"
 
 
-async def test_no_death_is_a_no_op(store: PostgresEventStore) -> None:
-    _, campaign = await _campaign_with_dormant_thread(store)
+async def test_no_trigger_event_is_a_no_op(store: PostgresEventStore) -> None:
+    _, campaign = await _campaign_with_rule(store)
     branch = campaign.branch_id
     head_before = await _head(store, branch)
-    await _engine(store)._react(campaign, head_before, [])  # no ActorDied in the trigger
+    await _engine(store)._react(campaign, head_before, [])  # no ActorDied → trigger doesn't match
     assert (await _states(store, branch))["t:feud"] == "dormant"  # untouched
     assert await _head(store, branch) == head_before  # no empty module commit
 
 
-async def test_no_dormant_thread_is_a_no_op(store: PostgresEventStore) -> None:
-    world = await store.create_world(f"react-{new_id()}")
+async def test_condition_gate_blocks_the_rule(store: PostgresEventStore) -> None:
+    # the feud is already active — the rule's `when: thread_state dormant` is false → no fire
+    _, campaign = await _campaign_with_rule(store, feud_state="active")
+    branch = campaign.branch_id
+    head_before = await _head(store, branch)
+    await _engine(store)._react(campaign, head_before, [actor_died(actor_id="a:x")])
+    assert await _head(store, branch) == head_before  # condition unmet → nothing committed
+
+
+async def test_no_rule_pack_short_circuits(store: PostgresEventStore) -> None:
+    # a rule-less world pays nothing — the pass returns before touching state
+    world = await store.create_world(f"react-{new_id()}")  # no rule_pack
     campaign = await store.create_campaign(world.world_id, world.main_branch_id)
-    # a thread that is already active — the death rule must not touch it
-    await store.append_beat(
-        campaign.branch_id, [thread_created(thread_id="t:x", stakes="s", state="active")]
-    )
     head_before = await _head(store, campaign.branch_id)
-    events: list[DomainEvent] = [actor_died(actor_id="a:x")]
-    await _engine(store)._react(campaign, head_before, events)
-    assert await _head(store, campaign.branch_id) == head_before  # nothing to do → no commit
+    await _engine(store)._react(campaign, head_before, [actor_died(actor_id="a:x")])
+    assert await _head(store, campaign.branch_id) == head_before
 
 
 # --- INC-2: pack rule format, version pin, inline WorldGenesis carry (docs/17) ---
@@ -171,3 +198,100 @@ async def test_worldgenesis_carries_the_rule_pack_inline(store: PostgresEventSto
     payload = payload if isinstance(payload, dict) else json.loads(payload)
     assert payload["rule_pack"]["rules_api_version"] == 1
     assert payload["rule_pack"]["rules"][0]["id"] == "ritual-reckons-on-death"
+
+
+# --- INC-3: the interpreter + gauntlet (scope, forced testimony, determinism) ---
+
+
+async def test_out_of_scope_action_is_dropped(store: PostgresEventStore) -> None:
+    # a thread-scoped rule may only touch its own thread — a set_thread_state on another is dropped
+    pack = {
+        "rules_api_version": 1,
+        "rules": [
+            {
+                "id": "overreach",
+                "trigger": {"event": "ActorDied"},
+                "then": [{"do": "set_thread_state", "thread": "t:other", "to": "active"}],
+                "scope": {"thread": "t:feud"},  # jurisdiction is t:feud, NOT t:other
+            }
+        ],
+    }
+    world = await store.create_world(f"scope-{new_id()}", rule_pack=pack)
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id,
+        [
+            thread_created(thread_id="t:feud", stakes="a", state="active"),
+            thread_created(thread_id="t:other", stakes="b", state="dormant"),
+        ],
+    )
+    await _engine(store)._react(
+        campaign, await _head(store, campaign.branch_id), [actor_died(actor_id="a:x")]
+    )
+    assert (await _states(store, campaign.branch_id))["t:other"] == "dormant"  # untouched
+
+
+async def test_record_rumor_is_forced_testimony(store: PostgresEventStore) -> None:
+    pack = {
+        "rules_api_version": 1,
+        "rules": [
+            {
+                "id": "guild-gossips",
+                "trigger": {"event": "ActorDied"},
+                "then": [
+                    {
+                        "do": "record_rumor",
+                        "text": "a death stirs the guild",
+                        "subjects": ["a:smith"],
+                    }
+                ],
+                "scope": {"faction": "f:guild"},
+            }
+        ],
+    }
+    world = await store.create_world(f"rumor-{new_id()}", rule_pack=pack)
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id,
+        [
+            faction_created(faction_id="f:guild", name="The Guild"),
+            actor_created(actor_id="a:smith", name="Smith", tier=1),
+            edge_added(src="a:smith", rel_type="member_of", dst="f:guild"),
+        ],
+    )
+    await _engine(store)._react(
+        campaign, await _head(store, campaign.branch_id), [actor_died(actor_id="a:smith")]
+    )
+    claims = await store.claims_about(campaign.branch_id, "a:smith")
+    rumor = next(c for c in claims if "stirs the guild" in c.statement)
+    assert rumor.truth == "unknown" and rumor.origin == "module"  # never canon
+
+
+async def test_gauntlet_is_deterministic_and_idempotent(store: PostgresEventStore) -> None:
+    # same (fired actions, trigger commit) → byte-identical events with a stable, keyed claim id
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActRecordRumor, Scope
+
+    world = await store.create_world(f"det-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id,
+        [
+            faction_created(faction_id="f:g", name="G"),
+            actor_created(actor_id="a:m", name="M", tier=1),
+            edge_added(src="a:m", rel_type="member_of", dst="f:g"),
+        ],
+    )
+    fired = [
+        FiredAction(
+            rule_id="r1",
+            scope=Scope(faction="f:g"),
+            action=ActRecordRumor(do="record_rumor", text="word spreads", subjects=["a:m"]),
+            index=0,
+        )
+    ]
+    a = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c9")
+    b = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c9")
+    assert [e.payload for e in a] == [e.payload for e in b]  # deterministic
+    assert a[0].payload["claim_id"] == "m:c9:r1:0"  # keyed on trigger commit → idempotent upsert

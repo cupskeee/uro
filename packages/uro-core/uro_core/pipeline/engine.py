@@ -16,7 +16,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from uro_core.domain.events import (
     CausedBy,
@@ -25,11 +25,11 @@ from uro_core.domain.events import (
     claim_recorded,
     item_transferred,
     mode_changed,
-    module_cause,
     sheet_updated,
-    thread_state_changed,
 )
 from uro_core.domain.ids import new_id
+from uro_core.engines.rules import RuleBudgetExceeded, evaluate_rules
+from uro_core.engines.rules_gauntlet import run_rules_gauntlet
 from uro_core.errors import (
     EmptyNarrationError,
     PlannerError,
@@ -65,6 +65,7 @@ from uro_core.rulesets.base import (
 )
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import Campaign
+from uro_core.worldpack.rules import RulePack
 
 logger = logging.getLogger(__name__)
 
@@ -347,33 +348,43 @@ class Engine:
     async def _react(
         self, campaign: Campaign, trigger_commit_id: str, trigger_events: list[DomainEvent]
     ) -> None:
-        """The post-beat Reaction pass (docs/17, D-33). INC-1 ships ONE hardcoded, TRUSTED
-        thread-FSM rule to prove the hook end-to-end (post-commit → a separate module-caused beat
-        → survives fork/replay); INC-3 replaces this body with the pack-data interpreter + gauntlet.
+        """The post-beat Reaction pass (docs/17, D-33): evaluate the world's pack rules against the
+        just-committed state and commit any consequences as a SEPARATE caused_by=module beat.
 
-        The reaction reads state as of the trigger commit (right after append_beat, under the
-        single-writer/round-robin turn model, current head IS the trigger commit — a party-safe
-        materialize-at-commit pin is the documented refinement). Its whole effect is committed as
-        events, so replay/fork re-applies them verbatim and this is never re-run.
+        Reads state as of the trigger commit (right after append_beat, under the single-writer/
+        round-robin turn model, current head IS the trigger commit — a party-safe materialize-at-
+        commit pin is the documented refinement). Its whole effect is committed as events, so
+        replay/fork re-applies them verbatim and this is never re-run (cf. distill_outcome).
         """
-        # RULE inc1:death-activates-thread — a death in the beat wakes any dormant thread.
-        if not any(e.event_type == "ActorDied" for e in trigger_events):
+        raw = await self._store.world_rule_pack(campaign.branch_id)
+        if not raw:  # no-rules fast short-circuit — a rule-less world pays ~nothing per beat
             return
-        dormant = [
-            t for t in await self._store.list_threads(campaign.branch_id) if t.state == "dormant"
-        ]
-        if not dormant:
+        try:
+            pack = RulePack(**raw)
+        except ValidationError:
+            logger.warning("world rule pack failed to load; skipping reactions")
             return
-        module_events = [
-            thread_state_changed(
-                thread_id=t.thread_id,
-                to_state="active",
-                from_state="dormant",
-                caused_by=module_cause("inc1:death-activates-thread"),
+        if not pack.rules:
+            return
+        world_day = await self._store.current_world_time(campaign.branch_id)
+        try:
+            fired = await evaluate_rules(
+                self._store,
+                campaign.branch_id,
+                rules=pack.rules,
+                trigger_events=trigger_events,
+                world_day=world_day,
             )
-            for t in dormant
-        ]
-        await self._store.append_beat(campaign.branch_id, module_events)
+        except RuleBudgetExceeded as exc:  # fail closed — drop the pass, the beat still stands
+            logger.warning("reaction pass exceeded its budget; skipping: %s", exc)
+            return
+        if not fired:
+            return
+        module_events = await run_rules_gauntlet(
+            self._store, campaign.branch_id, fired, trigger_commit=trigger_commit_id
+        )
+        if module_events:
+            await self._store.append_beat(campaign.branch_id, module_events)
 
     async def _beat_events(
         self,

@@ -45,6 +45,15 @@ class ProjectionQueries(Protocol):
         (docs/09), from its WorldGenesis. ('', {}) for a world created without a pack."""
         ...
 
+    async def world_rule_pack(self, branch_id: str) -> dict[str, Any]:
+        """The branch's world's Reaction-Layer rule pack (docs/17), from its WorldGenesis, inline.
+        {} for a world with no rule pack — the caller short-circuits (no reactions)."""
+        ...
+
+    async def current_world_time(self, branch_id: str) -> int:
+        """The branch's latest in-fiction day (max over its ancestry; 0 if unset)."""
+        ...
+
     async def get_sheet(self, branch_id: str, actor_id: str) -> dict[str, Any] | None:
         """An actor's ruleset character sheet as a raw dict (docs/06); None if unsheeted."""
         ...

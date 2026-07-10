@@ -32,11 +32,16 @@ async def propagate_belief(
     decay: float = 0.55,
     floor: float = 0.2,
     max_hops: int = 4,
+    caused_by: CausedBy | None = None,
 ) -> list[DomainEvent]:
     """Fan a belief about `claim_id` out from `witnesses` along `knows` edges. Returns the
     `BeliefChanged` events (the caller commits them). Confidence decays each hop; propagation
     stops below `floor` or past `max_hops`. First-hearer wins (a belief isn't overwritten by a
-    later, weaker path), which keeps the cascade finite and the `learned_from` chain a tree."""
+    later, weaker path), which keeps the cascade finite and the `learned_from` chain a tree.
+
+    `caused_by` defaults to the Actor service (agenda); the Reaction Layer passes module_cause so a
+    pack-spread rumor is auditable as a module emission, not laundered as trusted agency."""
+    cause = caused_by or _ACTOR_CAUSE
     events: list[DomainEvent] = []
     confidence: dict[str, float] = {}
     for witness in witnesses:  # direct observation → a strong, first-hand belief
@@ -49,7 +54,7 @@ async def propagate_belief(
                 claim_id=claim_id,
                 confidence=base_confidence,
                 learned_from=None,
-                caused_by=_ACTOR_CAUSE,
+                caused_by=cause,
             )
         )
     frontier = list(confidence)
@@ -71,7 +76,7 @@ async def propagate_belief(
                         claim_id=claim_id,
                         confidence=heard_confidence,
                         learned_from=src,
-                        caused_by=_ACTOR_CAUSE,
+                        caused_by=cause,
                     )
                 )
                 next_frontier.append(edge.dst)

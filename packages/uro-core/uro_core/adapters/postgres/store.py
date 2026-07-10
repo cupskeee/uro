@@ -1098,6 +1098,21 @@ class PostgresEventStore:
         payload = row["payload"]
         return ", ".join(payload.get("tone", [])), payload.get("prompt_overrides", {})
 
+    async def world_rule_pack(self, branch_id: str) -> dict[str, Any]:
+        """The branch's world's Reaction-Layer rule pack (docs/17), read inline from WorldGenesis.
+        {} for a world with no rule pack."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT e.payload FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "JOIN branches b ON b.world_id = c.world_id "
+                "WHERE b.branch_id = $1 AND e.event_type = 'WorldGenesis' LIMIT 1",
+                branch_id,
+            )
+        if row is None:
+            return {}
+        return row["payload"].get("rule_pack", {}) or {}
+
     async def world_ruleset(self, branch_id: str) -> tuple[str, str]:
         """The (ruleset_id, ruleset_version) a branch's world declares, read from its WorldGenesis
         (docs/06). ('', '') for a world created without a pack → the registry default (uro-basic).
