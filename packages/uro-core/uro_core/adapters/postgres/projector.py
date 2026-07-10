@@ -284,6 +284,18 @@ async def _thread_created(conn: asyncpg.Connection, branch_id: str, p: dict[str,
     )
 
 
+async def _thread_state_changed(
+    conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]
+) -> None:
+    # A no-op if the thread was never created (never mint a thread from a state change).
+    await conn.execute(
+        "UPDATE proj_threads SET state = $3 WHERE branch_id = $1 AND thread_id = $2",
+        branch_id,
+        p["thread_id"],
+        p["to_state"],
+    )
+
+
 _HANDLERS = {
     "ActorCreated": _actor_created,
     "ActorPromoted": _actor_promoted,
@@ -302,6 +314,7 @@ _HANDLERS = {
     "ItemCreated": _item_created,
     "ItemTransferred": _item_transferred,
     "ThreadCreated": _thread_created,
+    "ThreadStateChanged": _thread_state_changed,
     "FactionCreated": _faction_created,
     "EdgeAdded": _edge_added,
     "EdgeUpdated": _edge_added,

@@ -14,7 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from uro_core.domain.ids import new_id
 
 Segment = Literal["morning", "afternoon", "evening", "night"]
-CausedByKind = Literal["player_action", "agenda", "history", "ruleset", "system", "external"]
+CausedByKind = Literal[
+    "player_action", "agenda", "history", "ruleset", "system", "external", "module"
+]
 Truth = Literal["true", "false", "unknown"]  # engine-level ground truth of a claim (docs/02)
 
 
@@ -40,6 +42,7 @@ class CausedBy(BaseModel):
     beat_id: str | None = None
     history_pass: HistoryPass | None = Field(default=None, alias="pass")
     encounter_id: str | None = None  # ruleset kind: which encounter produced the effect
+    rule_id: str | None = None  # module kind: which reaction-layer rule emitted this (docs/17)
 
 
 class DomainEvent(BaseModel):
@@ -129,6 +132,12 @@ def beat_resolved(
 
 def _default_cause(caused_by: CausedBy | None) -> CausedBy:
     return caused_by or CausedBy(kind="system")
+
+
+def module_cause(rule_id: str) -> CausedBy:
+    """Provenance for a Reaction-Layer emission (docs/17, D-33). `kind="module"` keeps
+    pack-authored reactions auditable and stops them laundering as trusted agenda/history."""
+    return CausedBy(kind="module", rule_id=rule_id)
 
 
 class ActorCreatedPayload(BaseModel):
@@ -779,6 +788,9 @@ class EdgeRemovedPayload(BaseModel):
     dst: str
 
 
+ThreadState = Literal["dormant", "offered", "active", "resolved", "dead"]
+
+
 class ThreadCreatedPayload(BaseModel):
     v: int = 1
     thread_id: str
@@ -786,6 +798,13 @@ class ThreadCreatedPayload(BaseModel):
     state: str = "dormant"
     originator: str = ""
     provenance: str = "author"  # "ai_backfill" for machine-generated seeds (docs/09)
+
+
+class ThreadStateChangedPayload(BaseModel):
+    v: int = 1
+    thread_id: str
+    to_state: ThreadState
+    from_state: str = ""  # advisory (what the emitter believed it was); state is set to to_state
 
 
 class HistorySeededPayload(BaseModel):
@@ -881,6 +900,25 @@ def thread_created(
             state=state,
             originator=originator,
             provenance=provenance,
+        ).model_dump(),
+    )
+
+
+def thread_state_changed(
+    *,
+    thread_id: str,
+    to_state: ThreadState,
+    from_state: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    """Advance a thread through its lifecycle (dormant→offered→active→resolved/dead, docs/12).
+    The Reaction Layer (docs/17) is the first engine emitter; `caused_by=module_cause(...)`."""
+    return DomainEvent(
+        event_type="ThreadStateChanged",
+        entity_refs=[thread_id],
+        caused_by=_default_cause(caused_by),
+        payload=ThreadStateChangedPayload(
+            thread_id=thread_id, to_state=to_state, from_state=from_state
         ).model_dump(),
     )
 

@@ -25,7 +25,9 @@ from uro_core.domain.events import (
     claim_recorded,
     item_transferred,
     mode_changed,
+    module_cause,
     sheet_updated,
+    thread_state_changed,
 )
 from uro_core.domain.ids import new_id
 from uro_core.errors import (
@@ -329,6 +331,10 @@ class Engine:
                 narration,
                 [a.actor_id for a in ctx.recall.actors],
             )
+            # Reaction Layer (docs/17, D-33): after the beat commits, a post-beat pass reads the
+            # just-committed state and commits any consequences as a SEPARATE caused_by=module
+            # beat. Runs once per trigger; module events do not re-trigger it (no cascade).
+            await self._react(campaign, commit.commit_id, events)
         return BeatResult(
             beat_id=beat_id,
             narration=narration,
@@ -337,6 +343,37 @@ class Engine:
             checks=len(ctx.mechanics_traces),
             suggestions=ctx.suggestions,
         )
+
+    async def _react(
+        self, campaign: Campaign, trigger_commit_id: str, trigger_events: list[DomainEvent]
+    ) -> None:
+        """The post-beat Reaction pass (docs/17, D-33). INC-1 ships ONE hardcoded, TRUSTED
+        thread-FSM rule to prove the hook end-to-end (post-commit → a separate module-caused beat
+        → survives fork/replay); INC-3 replaces this body with the pack-data interpreter + gauntlet.
+
+        The reaction reads state as of the trigger commit (right after append_beat, under the
+        single-writer/round-robin turn model, current head IS the trigger commit — a party-safe
+        materialize-at-commit pin is the documented refinement). Its whole effect is committed as
+        events, so replay/fork re-applies them verbatim and this is never re-run.
+        """
+        # RULE inc1:death-activates-thread — a death in the beat wakes any dormant thread.
+        if not any(e.event_type == "ActorDied" for e in trigger_events):
+            return
+        dormant = [
+            t for t in await self._store.list_threads(campaign.branch_id) if t.state == "dormant"
+        ]
+        if not dormant:
+            return
+        module_events = [
+            thread_state_changed(
+                thread_id=t.thread_id,
+                to_state="active",
+                from_state="dormant",
+                caused_by=module_cause("inc1:death-activates-thread"),
+            )
+            for t in dormant
+        ]
+        await self._store.append_beat(campaign.branch_id, module_events)
 
     async def _beat_events(
         self,
