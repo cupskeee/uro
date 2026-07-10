@@ -20,7 +20,7 @@ from uro_core.domain.events import BeatResolvedPayload
 from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
-from uro_core.timeline.models import ActorView, BeliefView, ClaimView
+from uro_core.timeline.models import ActorView, BeliefView, ClaimView, ThreadView
 
 
 class RecallBundle(BaseModel):
@@ -32,6 +32,11 @@ class RecallBundle(BaseModel):
     # keeper's rumor about an absent hero) — carried only to render the belief, not as scene facts.
     belief_claims: list[ClaimView] = Field(default_factory=list)
     memories: list[str] = Field(default_factory=list)  # semantic recall of older beats (docs/04)
+    # LIVE plots (state active/offered) — campaign-wide context so the narrator can weave the
+    # ongoing stakes, and so a Reaction-Layer thread-state change (D-33) actually reaches the
+    # story instead of only mutating proj_threads invisibly. Not scene-scoped (threads have no
+    # entity refs); dormant/resolved/dead are excluded (not in play / concluded).
+    active_threads: list[ThreadView] = Field(default_factory=list)
 
 
 def _name_token(name: str) -> str:
@@ -86,12 +91,19 @@ async def assemble_recall(
     wanted = {b.claim_id for b in beliefs} - known_ids
     belief_claims = [c for c in all_claims if c.claim_id in wanted]
 
+    # Live plots (campaign-wide): the stakes the narrator should keep in play. Ordered by id for
+    # a deterministic prompt (list_threads is already branch-scoped + ordered).
+    active_threads = [
+        t for t in await store.list_threads(branch_id) if t.state in ("active", "offered")
+    ]
+
     return RecallBundle(
         recent_beats=recent,
         actors=on_stage,
         claims=claims,
         beliefs=beliefs,
         belief_claims=belief_claims,
+        active_threads=active_threads,
     )
 
 
@@ -155,6 +167,13 @@ def build_narrator_messages(
     if recall.actors:
         present = ", ".join(f"{a.name} ({a.role})" if a.role else a.name for a in recall.actors)
         context_lines.append(f"PRESENT: {present}")
+    # Ongoing plots (docs/17): the live stakes the narrator should keep in motion — this is how a
+    # Reaction-Layer thread-state change (a dormant plot the engine just woke) reaches the story.
+    if recall.active_threads:
+        context_lines.append(
+            "ACTIVE THREADS (ongoing plots — keep them in motion):\n"
+            + "\n".join(f"- {t.stakes}" for t in recall.active_threads)
+        )
     # Mechanics results the ruleset produced this beat (docs/06): the narrator MUST honor the
     # outcome — a failed persuade check cannot be narrated as a success.
     if mechanics_traces:

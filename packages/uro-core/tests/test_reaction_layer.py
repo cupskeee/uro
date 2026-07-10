@@ -421,3 +421,21 @@ async def test_runtime_rejects_an_unsupported_rules_api_version(store: PostgresE
         campaign, await _head(store, campaign.branch_id), [actor_died(actor_id="a:x")]
     )
     assert (await _states(store, campaign.branch_id))["t:feud"] == "dormant"  # disabled, not run
+
+
+async def test_module_activated_thread_reaches_the_narrator(store: PostgresEventStore) -> None:
+    # The loop that motivated wiring thread-recall: a Reaction-Layer rule activates a dormant
+    # thread, and that now-live plot surfaces in the NEXT beat's narrator context (was invisible —
+    # recall gathered actors/claims/beliefs but not threads). docs/17 + docs/04.
+    from uro_core.pipeline.recall import assemble_recall, build_narrator_messages
+
+    _, campaign = await _campaign_with_rule(store)  # feud dormant + death-wakes-the-feud rule
+    branch = campaign.branch_id
+    died = [actor_died(actor_id="a:mook")]
+    await store.append_beat(branch, died)
+    await _engine(store).react(campaign, await _head(store, branch), died)  # feud → active
+
+    recall = await assemble_recall(store, branch, "what now?", 8)
+    assert any(t.thread_id == "t:feud" for t in recall.active_threads)  # the woken plot is live
+    blob = "\n".join(m.content for m in build_narrator_messages(recall, "what now?"))
+    assert "ACTIVE THREADS" in blob and "the miners' feud" in blob  # and it reaches the prose

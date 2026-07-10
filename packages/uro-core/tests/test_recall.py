@@ -4,7 +4,7 @@ from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import actor_created, beat_resolved, claim_recorded
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.recall import RecallBundle, assemble_recall, build_narrator_messages
-from uro_core.timeline.models import ActorView, BeliefView, ClaimView
+from uro_core.timeline.models import ActorView, BeliefView, ClaimView, ThreadView
 
 
 async def _branch(store: PostgresEventStore) -> str:
@@ -83,3 +83,43 @@ def test_narrator_prompt_surfaces_recalled_memories() -> None:
     )
     blob = "\n".join(m.content for m in build_narrator_messages(recall, "what now?"))
     assert "The oracle warned of a great flood." in blob
+
+
+def test_narrator_prompt_surfaces_active_threads() -> None:
+    # Active/offered plots reach the narrator so it can keep them in motion (docs/17); a Reaction-
+    # Layer thread-state change is otherwise invisible to the story.
+    recall = RecallBundle(
+        recent_beats=[],
+        actors=[],
+        claims=[],
+        beliefs=[],
+        active_threads=[
+            ThreadView(
+                thread_id="t:ritual",
+                stakes="The Saltborn will drown Vel.",
+                state="active",
+                provenance="author",
+            ),
+        ],
+    )
+    blob = "\n".join(m.content for m in build_narrator_messages(recall, "I look around"))
+    assert "ACTIVE THREADS" in blob and "The Saltborn will drown Vel." in blob
+
+
+async def test_assemble_recall_surfaces_only_live_threads(store: PostgresEventStore) -> None:
+    from uro_core.domain.events import thread_created, thread_state_changed
+
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            thread_created(thread_id="t:live", stakes="a war brews", state="active"),
+            thread_created(thread_id="t:offer", stakes="a bargain offered", state="offered"),
+            thread_created(thread_id="t:sleep", stakes="a dormant plot", state="dormant"),
+            thread_created(thread_id="t:done", stakes="a settled matter", state="active"),
+            thread_state_changed(thread_id="t:done", to_state="resolved"),
+        ],
+    )
+    recall = await assemble_recall(store, branch, "what is happening?", 8)
+    live = {t.thread_id for t in recall.active_threads}
+    assert live == {"t:live", "t:offer"}  # active + offered only; dormant/resolved excluded
