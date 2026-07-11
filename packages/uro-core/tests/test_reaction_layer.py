@@ -403,24 +403,17 @@ async def test_chronicler_death_fires_a_reaction(store: PostgresEventStore) -> N
 
 
 async def test_runtime_rejects_an_unsupported_rules_api_version(store: PostgresEventStore) -> None:
-    # Phase-end review (low): the version pin is on the MODEL now, so an inline pack with a bad
-    # version fails RulePack() at runtime too — react() catches it and disables reactions (never
-    # runs wrong-version semantics), not just parse_pack.
+    # The version pin is on the MODEL, so RulePack() rejects a bad version at construction; and
+    # (gap-report Hollowloop G-6 fix) create_world validates the pack LOUDLY — a future-version pack
+    # fails at world creation, not silently at the first beat.
+    from pydantic import ValidationError
     from uro_core.worldpack.rules import RULES_API_VERSION, RulePack
 
     with pytest.raises(ValueError, match="unsupported"):
         RulePack(rules_api_version=RULES_API_VERSION + 1)
-    # a world carrying a future-version pack: react() must NOT activate the thread (fails closed)
     bad_pack = {**_FEUD_PACK, "rules_api_version": RULES_API_VERSION + 1}
-    world = await store.create_world(f"ver-{new_id()}", rule_pack=bad_pack)
-    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
-    await store.append_beat(
-        campaign.branch_id, [thread_created(thread_id="t:feud", stakes="s", state="dormant")]
-    )
-    await _engine(store).react(
-        campaign, await _head(store, campaign.branch_id), [actor_died(actor_id="a:x")]
-    )
-    assert (await _states(store, campaign.branch_id))["t:feud"] == "dormant"  # disabled, not run
+    with pytest.raises((ValidationError, ValueError)):
+        await store.create_world(f"ver-{new_id()}", rule_pack=bad_pack)
 
 
 async def test_module_activated_thread_reaches_the_narrator(store: PostgresEventStore) -> None:
@@ -439,3 +432,79 @@ async def test_module_activated_thread_reaches_the_narrator(store: PostgresEvent
     assert any(t.thread_id == "t:feud" for t in recall.active_threads)  # the woken plot is live
     blob = "\n".join(m.content for m in build_narrator_messages(recall, "what now?"))
     assert "ACTIVE THREADS" in blob and "the miners' feud" in blob  # and it reaches the prose
+
+
+# --- gap-report fixes: accepted-but-inert trigger validation (3-game) + loud pack death (G-6) ---
+
+
+def test_trigger_on_unknown_event_type_is_rejected() -> None:
+    from uro_core.worldpack.rules import RulePack
+
+    with pytest.raises(ValueError, match="not a known event type"):
+        RulePack(
+            rules_api_version=1,
+            rules=[
+                {
+                    "id": "inert",
+                    "trigger": {"event": "CheckResolved"},  # no such event → would never fire
+                    "then": [{"do": "set_thread_state", "thread": "t:x", "to": "active"}],
+                    "scope": {"thread": "t:x"},
+                }
+            ],
+        )
+
+
+def test_trigger_where_key_not_a_payload_field_is_rejected() -> None:
+    from uro_core.worldpack.rules import RulePack
+
+    with pytest.raises(ValueError, match="could never match"):
+        RulePack(
+            rules_api_version=1,
+            rules=[
+                {
+                    "id": "inert2",
+                    # actor.member_of is not a field of ActorDied's payload → silently never matched
+                    "trigger": {"event": "ActorDied", "where": {"actor.member_of": "f:x"}},
+                    "then": [{"do": "set_thread_state", "thread": "t:x", "to": "active"}],
+                    "scope": {"thread": "t:x"},
+                }
+            ],
+        )
+
+
+def test_valid_where_keys_still_pass() -> None:
+    from uro_core.worldpack.rules import RulePack
+
+    # real payload fields must pass (origin on ClaimRecorded, rel_type on EdgeAdded, actor_id on
+    # ActorDied) — the live game packs use exactly these
+    RulePack(
+        rules_api_version=1,
+        rules=[
+            {
+                "id": "ok",
+                "trigger": {"event": "ClaimRecorded", "where": {"origin": "narrator"}},
+                "then": [{"do": "record_rumor", "text": "x", "subjects": ["a:m"]}],
+                "scope": {"faction": "f:g"},
+            }
+        ],
+    )
+
+
+async def test_create_world_rejects_a_bad_rule_pack_loudly(store: PostgresEventStore) -> None:
+    # gap-report Hollowloop G-6: a malformed pack must fail at world creation, not silently disable
+    # every reaction at the first beat.
+    from pydantic import ValidationError
+
+    bad = {
+        "rules_api_version": 1,
+        "rules": [
+            {
+                "id": "typo",
+                "trigger": {"event": "Nonexistent"},
+                "then": [{"do": "set_thread_state", "thread": "t:x", "to": "active"}],
+                "scope": {"thread": "t:x"},
+            }
+        ],
+    }
+    with pytest.raises((ValidationError, ValueError)):
+        await store.create_world(f"bad-{new_id()}", rule_pack=bad)

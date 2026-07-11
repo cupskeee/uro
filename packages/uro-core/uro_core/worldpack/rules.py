@@ -19,13 +19,31 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from uro_core.domain import events as _events
 from uro_core.domain.events import ThreadState
 
 # The one supported grammar version. A pack MUST pin `rules_api_version`; a mismatch fails loud at
 # parse (closes the reserved-but-unenforced TEMPLATE_API_VERSION gap — decided-OQ, docs/17).
 RULES_API_VERSION = 1
+
+
+def _event_payload_fields() -> dict[str, frozenset[str]]:
+    """event_type → its payload's field names, derived from the domain payload models
+    (`<Name>Payload` → event `<Name>`). Used to reject a rule trigger that would VALIDATE but
+    never fire — an unknown event type (a typo like `CheckResolved`) or a `where` key that is not a
+    real payload field (`actor.member_of`). Gap-report finding, hit independently by 3 games:
+    accepted-but-inert is a sharper footgun than a loud refusal."""
+    out: dict[str, frozenset[str]] = {}
+    for name, obj in vars(_events).items():
+        if name.endswith("Payload") and isinstance(obj, type) and issubclass(obj, BaseModel):
+            out[name[: -len("Payload")]] = frozenset(obj.model_fields)
+    out.setdefault("EdgeUpdated", out.get("EdgeAdded", frozenset()))  # reuses EdgeAddedPayload
+    return out
+
+
+_EVENT_FIELDS = _event_payload_fields()
 
 # Relations a module MAY touch — non-authoritative social/political edges only. Never `owns`/`rules`
 # (ownership/authority is canon, not a module's to assert). The gauntlet re-checks this (INC-3).
@@ -190,6 +208,25 @@ class Rule(BaseModel):
     when: Condition | None = None
     then: list[Action] = Field(min_length=1)
     scope: Scope
+
+    @model_validator(mode="after")
+    def _trigger_can_fire(self) -> Rule:
+        # Reject a trigger that would VALIDATE but never fire (gap-report footgun): an unknown event
+        # type, or a `where` key that is not a real field of that event's payload. Caught at parse
+        # (and, via create_world, at world creation) instead of silently never matching at runtime.
+        ev = self.trigger.event
+        if ev not in _EVENT_FIELDS:
+            raise ValueError(
+                f"rule {self.id!r}: trigger.event {ev!r} is not a known event type — it would "
+                f"validate but never fire. Known event types: {', '.join(sorted(_EVENT_FIELDS))}"
+            )
+        unknown = [k for k in self.trigger.where if k not in _EVENT_FIELDS[ev]]
+        if unknown:
+            raise ValueError(
+                f"rule {self.id!r}: trigger.where key(s) {unknown} are not fields of {ev} "
+                f"(fields: {', '.join(sorted(_EVENT_FIELDS[ev]))}) — the filter could never match"
+            )
+        return self
 
 
 class AgendaRule(BaseModel):

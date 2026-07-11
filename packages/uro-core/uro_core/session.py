@@ -118,11 +118,18 @@ class PartyArbiter:
             return
         idx = ring.index(participant_id)
         ring.remove(participant_id)
-        # Keep the token pointing at the SAME surviving holder: removing someone at/before the
-        # cursor shifts everyone down by one, so decrement to compensate (clamped by the modulo).
+        if not ring:
+            self._turn.pop(campaign_id, None)
+            return
+        # Keep the token correct after removal (gap-report Seventh Vault G-17 — the old `idx <= cur`
+        # form stepped the cursor BACKWARD when the HOLDER left, giving one player a double turn and
+        # skipping the next). Only a member strictly BEFORE the holder shifts the holder down a
+        # slot; when the holder THEMSELVES leaves (idx == cur) the successor slides into the
+        # cursor's slot, so the token stays put and hands off. Wrap into the shrunk ring either way.
         cur = self._turn.get(campaign_id, 0)
-        if ring and idx <= cur % (len(ring) + 1):
-            self._turn[campaign_id] = max(0, cur - 1)
+        if idx < cur:
+            cur -= 1
+        self._turn[campaign_id] = cur % len(ring)
 
     async def beat_committed(self, campaign_id: str, participant_id: str, beat_id: str) -> None:
         ring = self._ring.get(campaign_id)

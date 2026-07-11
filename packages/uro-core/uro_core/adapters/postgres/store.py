@@ -179,6 +179,13 @@ class PostgresEventStore:
         pack's tone + prompt overrides + Reaction-Layer rule pack, docs/09, 17) plus any
         `extra_events` — world-pack import passes the authored seed events (emitter S) so authored
         geography/actors/factions exist as state before any History seeding."""
+        if rule_pack:
+            # Validate the Reaction-Layer pack LOUDLY at creation (gap-report Hollowloop G-6): a bad
+            # pack must not persist and then die silently at the first beat (react()/agenda_tick
+            # swallow load errors as a warning, disabling the whole pack). Fail here instead.
+            from uro_core.worldpack.rules import RulePack
+
+            RulePack(**rule_pack)  # raises on a bad version / unknown trigger / malformed action
         genesis = [
             world_genesis(
                 name,

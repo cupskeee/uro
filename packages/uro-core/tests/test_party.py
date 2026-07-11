@@ -225,6 +225,31 @@ async def test_party_arbiter_departure_passes_the_token() -> None:
     assert await a.admit("c", "px", "x") == AdmitDecision.NOT_YOUR_TURN  # a non-member never holds
 
 
+async def test_party_arbiter_holder_departs_at_nonzero_cursor() -> None:
+    # gap-report Seventh Vault G-17: the old note_left stepped the cursor BACKWARD when the holder
+    # left from a NON-ZERO position (the existing test masked it — its holder departs at cursor 0,
+    # where max(0, cur-1) clamps right by coincidence). Rotate the token first so the holder is p2.
+    a = PartyArbiter()
+    for p in ("p1", "p2", "p3"):
+        await a.note_joined("c", p)
+    await a.beat_committed("c", "p1", "b1")  # token 0 -> 1, holder is now p2
+    assert await a.admit("c", "p2", "x") == AdmitDecision.ADMITTED
+    await a.note_left("c", "p2")  # the HOLDER (cursor 1) leaves → token must hand off to p3, not p1
+    assert await a.admit("c", "p3", "x") == AdmitDecision.ADMITTED  # successor, not backward to p1
+    assert await a.admit("c", "p1", "x") == AdmitDecision.NOT_YOUR_TURN
+
+
+async def test_party_arbiter_member_before_holder_departs_keeps_holder() -> None:
+    # a member strictly BEFORE the holder leaving must keep the SAME holder (shift the cursor down).
+    a = PartyArbiter()
+    for p in ("p1", "p2", "p3"):
+        await a.note_joined("c", p)
+    await a.beat_committed("c", "p1", "b1")
+    await a.beat_committed("c", "p2", "b2")  # token now 2, holder is p3
+    await a.note_left("c", "p1")  # before the holder → p3 stays the holder (now at index 1)
+    assert await a.admit("c", "p3", "x") == AdmitDecision.ADMITTED
+
+
 async def test_party_arbiter_empty_roster_admits() -> None:
     a = PartyArbiter()  # no one noted joined (e.g. a direct in-process call) → degenerate admit
     assert await a.admit("c", "p1", "x") == AdmitDecision.ADMITTED
