@@ -508,3 +508,20 @@ async def test_create_world_rejects_a_bad_rule_pack_loudly(store: PostgresEventS
     }
     with pytest.raises((ValidationError, ValueError)):
         await store.create_world(f"bad-{new_id()}", rule_pack=bad)
+
+
+async def test_append_and_react_fires_rules_on_authored_events(store: PostgresEventStore) -> None:
+    # gap-report B1 (all 4 games): store.append_beat commits but runs NO rules; append_and_react is
+    # the one-call path that both commits and reacts. Here an AUTHORED death wakes the feud —
+    # whereas a bare append_beat would leave it dormant (the silent-dead-rules footgun).
+    _, campaign = await _campaign_with_rule(store)
+    branch = campaign.branch_id
+
+    # bare append_beat: commits the death but the pack rule does NOT run
+    await store.append_beat(branch, [actor_died(actor_id="a:extra1")])
+    assert (await _states(store, branch))["t:feud"] == "dormant"  # rules never ran
+
+    # append_and_react: commits AND fires the rule → the feud wakes
+    commit = await _engine(store).append_and_react(campaign, [actor_died(actor_id="a:extra2")])
+    assert commit.commit_id
+    assert (await _states(store, branch))["t:feud"] == "active"

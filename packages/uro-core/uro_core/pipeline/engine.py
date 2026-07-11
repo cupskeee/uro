@@ -64,7 +64,7 @@ from uro_core.rulesets.base import (
     Ruleset,
 )
 from uro_core.rulesets.rng import Rng
-from uro_core.timeline.models import Campaign
+from uro_core.timeline.models import Campaign, Commit
 from uro_core.worldpack.rules import RulePack
 
 logger = logging.getLogger(__name__)
@@ -387,6 +387,17 @@ class Engine:
                 await self._store.append_beat(campaign.branch_id, module_events)
         except Exception as exc:  # the beat is already durable — a reaction fault must not fail it
             logger.warning("reaction pass failed; the beat stands, no reactions: %s", exc)
+
+    async def append_and_react(self, campaign: Campaign, events: list[DomainEvent]) -> Commit:
+        """Commit authored events AND run the Reaction Layer over them — the one-call path an
+        embedder wants (gap-report B1, hit by all four games). `store.append_beat` commits but never
+        runs rules; only run_beat and the server outcome route did. Callers that authored events
+        directly (musters, thread/lifecycle events, a library Chronicler ingest) had to remember a
+        second `engine.react(...)` call, and forgetting it silently killed every pack rule. Returns
+        the Commit. react() is exception-isolated, so a reaction fault never fails the commit."""
+        commit = await self._store.append_beat(campaign.branch_id, events)
+        await self.react(campaign, commit.commit_id, events)
+        return commit
 
     async def agenda_tick(self, branch_id: str, days: int) -> None:
         """The downtime/agenda pass (docs/17 INC-4, D-33): advance in-fiction time on `branch_id`,

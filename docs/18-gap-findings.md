@@ -36,7 +36,7 @@ Confirmed against the code, in-scope, small — fixed immediately:
 
 | # | Finding | Games | What Uro needs | Notes |
 |---|---|---|---|---|
-| B1 | **`append_beat` doesn't run the Reaction Layer** | **all 4** (Sable G-4, Ironwake, Seventh G-23, Hollow G-12) | `store.append_and_react(...)` or a documented post-commit hook (react is only in `_finish` + the server outcome path) | Small, unanimous. An embedder who forgets the second call gets silently dead rules. Lowest-risk P0. |
+| B1 | **`append_beat` doesn't run the Reaction Layer** | **all 4** (Sable G-4, Ironwake, Seventh G-23, Hollow G-12) | ✅ **DONE** — `Engine.append_and_react(campaign, events) -> Commit` (commits + reacts in one exception-isolated call) | Small, unanimous. Was: an embedder who forgot the second `react()` call got silently dead rules. |
 | B2 | **The computation / scripting tier (D-33 Stage B)** | **all 4** — Sable Court's **12-rule refusal log** (exact wished syntax) is the headline; Ironwake's 7, Seventh's alarm-meter, Hollowloop's RL-1 corroborate | The reserved WASM tier, **or** at minimum engine-owned numeric state (`counter` condition + `increment`/`set` actions, comparisons, a seeded RNG table) | **The evidence gate we set for Stage B has fired** (see below). New argument: refused counters live in game code, so `fork_branch` no longer covers game state — **the two flagship features undermine each other** (Sable G-10, Ironwake row 6). |
 
 ### P1 — hit by 2 games, real blocker for a consumer class
