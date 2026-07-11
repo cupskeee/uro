@@ -15,7 +15,19 @@ from codex import FileCodex, open_codex
 from loop import begin_loop, bootstrap, commit_the_fall
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.ids import new_id
-from world import CLUES, KEYSTONES, ORIGIN_REF, PARTICIPANT, PC_ID, VALE
+from uro_core.pipeline.recall import assemble_recall
+from world import (
+    CLUES,
+    DOOM,
+    DOOM_SEGMENT,
+    DOOM_STATES,
+    DOOM_WORDS,
+    KEYSTONES,
+    ORIGIN_REF,
+    PARTICIPANT,
+    PC_ID,
+    VALE,
+)
 
 
 @pytest.fixture
@@ -226,12 +238,98 @@ async def test_both_codex_backends_carry_the_same_knowledge(
     assert reloaded.entries()[0].loop == "loop-0001"
 
 
+async def test_the_reaction_layer_actually_fires(store: PostgresEventStore, out: Path) -> None:
+    """The dread ladder and the villagers' unease are load-bearing (they carry target 6's verdict,
+    and commit_the_fall assumes t:doom reached `active`). A schema-VALID pack that simply never
+    fires would leave every other test green — G-6's exact failure mode — so pin it."""
+    vale = await _vale(store, out)
+    loop = await begin_loop(vale, 1)
+    threads = {t.thread_id: t.state for t in await store.list_threads(loop.branch_id)}
+    assert threads[DOOM] == DOOM_STATES["looming"], "dawn: the doom is unseen"
+
+    for _ in range(DOOM_SEGMENT):  # 6 segments of agenda_tick
+        await loopmod.advance(loop)
+
+    # the Reaction Layer escalated the thread, purely from world_day conditions
+    threads = {t.thread_id: t.state for t in await store.list_threads(loop.branch_id)}
+    assert threads[DOOM] == DOOM_STATES["imminent"], (
+        f"at last light the doom must be imminent, not {DOOM_WORDS.get(threads[DOOM])}"
+    )
+    # ...and the module-authored rumors are on the branch (the only channel that carries
+    # ESCALATING dread into the narrator's prose — a thread's stakes text never changes)
+    rumors = [c for c in await store.list_claims(loop.branch_id) if c.origin == "module"]
+    assert rumors, "the unease agendas must have recorded rumors"
+
+    # The doom thread reaches the narrator (active/offered threads carry their STAKES text)...
+    recall = await assemble_recall(store, loop.branch_id, "what is coming?", 6)
+    assert any("Fall will end the Vale" in t.stakes for t in recall.active_threads)
+    # ...and a module rumor reaches it only when its SUBJECT is on-stage — recall carries a claim
+    # iff one of its subject_refs is an actor mentioned in the intent or the recent beats
+    # (recall.py:73-79). So the villagers' unease surfaces when you are talking to a villager.
+    with_sela = await assemble_recall(store, loop.branch_id, "I ask Chaplain Sela about the sky", 6)
+    assert any(c.statement in {r.statement for r in rumors} for c in with_sela.claims), (
+        "the unease rumor must reach the narrator when its subject is on-stage"
+    )
+
+    # the Fall then closes the ladder to its terminal state
+    await commit_the_fall(loop)
+    threads = {t.thread_id: t.state for t in await store.list_threads(loop.branch_id)}
+    assert threads[DOOM] == DOOM_STATES["fallen"]
+
+
+async def test_a_whatif_fork_carries_the_clock_and_the_reactions(
+    store: PostgresEventStore, out: Path
+) -> None:
+    """A sideways fork must be taken from the branch HEAD, not from the last beat's commit —
+    otherwise it silently drops that segment's time-skip and its Reaction-Layer rumors."""
+    vale = await _vale(store, out)
+    main = await begin_loop(vale, 1)
+    for _ in range(4):
+        await loopmod.advance(main)
+    assert main.segment == 4
+
+    wi = await begin_loop(
+        vale, 0, from_ref=await main.head(), name="whatif-probe", place=main.place
+    )
+    # the what-if hydrated its clock FROM the branch — same segment, not one behind
+    assert wi.segment == main.segment == 4
+    assert await store.current_world_time(wi.branch_id) == 4
+    # ...and it inherited the dread the agendas had already committed on the main line
+    threads = {t.thread_id: t.state for t in await store.list_threads(wi.branch_id)}
+    assert threads[DOOM] == DOOM_STATES["gathering"]
+    assert [c for c in await store.list_claims(wi.branch_id) if c.origin == "module"]
+
+
+async def test_the_codex_is_scoped_to_its_world(store: PostgresEventStore, out: Path) -> None:
+    """A shared codex file would carry the Loopwalker's knowledge into a BRAND-NEW Vale, so a
+    fresh game would start already knowing K1-K4 and be winnable on loop 1. Each world's Codex
+    must be its own."""
+    v1 = await _vale(store, out)
+    c1 = await open_codex("file", store=store, world_id=v1.world_id, out_dir=out)
+    await c1.record("K1", loop="loop-0001", segment=1)
+    assert c1.known() == {"K1"}
+
+    v2 = await _vale(store, out)  # a NEW Vale, same out_dir
+    c2 = await open_codex("file", store=store, world_id=v2.world_id, out_dir=out)
+    assert c2.known() == set(), "a fresh world must start with an empty Codex"
+    assert c2.complete() is False
+
+
 async def test_scale_harness_runs(store: PostgresEventStore, out: Path) -> None:
-    """A small scale run, so CI proves the harness itself works (the real evidence is N=500)."""
+    """A small scale run, so CI proves the harness itself works (the real evidence is N=500).
+    Also pins the two shipped-evidence claims the GAP report quotes."""
     from scale import run_scale
 
     summary = await run_scale(store, 5, out)
     assert summary["n"] == 5
-    assert summary["branches"] == 7  # main + codex + 5 loops
+    assert summary["branches"] > 7  # main + codex + 5 loops + the fork-cost benchmark's forks
     assert summary["events"] > 0
     assert (out / "scale-5.csv").exists()
+    assert (out / "scale-5-summary.json").exists()
+
+    # the snapshot finding, measured by the shipped harness (not asserted in prose)
+    assert summary["snapshots"] == 1, "only the origin marker's snapshot ever exists"
+    assert summary["max_commit_depth"] < 50, "no branch reaches the depth%50 cadence"
+    # ...and the fork-cost inversion: the DEEPER, more RECENT commit is the slower fork point
+    assert summary["deep_commit_depth"] > 1
+    assert summary["fork_from_deep_ms"] > summary["fork_from_marker_ms"]

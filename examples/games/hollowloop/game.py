@@ -15,7 +15,6 @@ import argparse
 import asyncio
 import os
 import sys
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +24,6 @@ import frictionlog
 import loop as loopmod
 import script
 from codex import Codex, open_codex
-from frictionlog import gap
 from loop import Loop, Vale, begin_loop, bootstrap, can_ring, choose, commit_the_fall, options
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.ids import new_id
@@ -36,7 +34,6 @@ from world import (
     DOOM_SEGMENT,
     DSN_DEFAULT,
     KEYSTONES,
-    ORIGIN_REF,
     PLACE_NAMES,
     RULE_PACK,
     VALE,
@@ -66,13 +63,54 @@ async def connect(dsn: str | None = None) -> PostgresEventStore:
 
 
 def render_loops(rows: list[dict[str, Any]]) -> str:
-    w = max((len(r["name"]) for r in rows), default=8) + 2
-    out = ["", "THE LOOP TREE  (every line is a real Uro branch)", ""]
-    out.append(f"  {'branch':<{w}} {'seg':>3}  {'the Vale':<10} {'doom':<10} clues")
+    """The fork TREE — children indented under the commit they forked from (Stage 5)."""
+    by_commit: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
+        by_commit.setdefault(r["forked_from"] or "", []).append(r)
+    # a row is a ROOT if nothing in this world's tree is its parent's head; `main` always is
+    heads = {r["name"]: r for r in rows}
+    roots = [r for r in rows if not r["forked_from"]] or [heads["main"]]
+
+    def ending(r: dict[str, Any]) -> str:
+        if r["doom"] == "warded":
+            return "WARDED — the loop broke"
+        if r["doom"] == "fallen":
+            return f"fell @ seg {r['segment']}"
+        return f"in progress @ seg {r['segment']}"
+
+    w = max((len(r["name"]) for r in rows), default=8) + 2
+    out = ["", "THE LOOP TREE  (every line is a real Uro branch; indent = forked from)", ""]
+    out.append(f"  {'branch':<{w + 2}} {'branch':<10} {'ending':<24} clues")
+    seen: set[str] = set()
+
+    def emit(r: dict[str, Any], depth: int) -> None:
+        if r["name"] in seen:
+            return
+        seen.add(r["name"])
+        pad = "  " + ("   " * depth) + r["name"]
         clues = ",".join(r["clues"]) or "—"
-        out.append(f"  {r['name']:<{w}} {r['segment']:>3}  {r['vale']:<10} {r['doom']:<10} {clues}")
+        out.append(f"{pad:<{w + 4}} …{r['branch_id'][-6:]:<9} {ending(r):<24} {clues}")
+        # children of THIS branch are those forked from a commit on it; we can only see the
+        # forked_from commit id, so match children whose parent commit belongs to this branch
+        for child in rows:
+            if child["name"] not in seen and child["forked_from"] and _is_child(child, r, rows):
+                emit(child, depth + 1)
+
+    for root in roots:
+        emit(root, 0)
+    for r in rows:  # anything the walk missed (a fork whose parent commit we can't attribute)
+        emit(r, 1)
     return "\n".join(out)
+
+
+def _is_child(child: dict[str, Any], parent: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+    """A what-if forked from a loop's head; a loop forked from the origin (which lives on main).
+    We only have `forked_from` (a commit id), so attribute by name convention + the origin."""
+    if child["name"].startswith(f"whatif-{parent['name']}-"):
+        return True
+    return parent["name"] == "main" and (
+        child["name"].startswith("loop-") or child["name"] == "codex"
+    )
 
 
 def render_codex(codex: Codex) -> str:
@@ -143,13 +181,19 @@ async def story(vale: Vale, codex: Codex, *, verbose: bool = False) -> dict[str,
         print(f"\n=== {l1.name} ===\n\n  {script.WAKE}")
     await _run_route(l1, codex, DISCOVERY_ROUTE[:4], verbose=verbose)
 
-    # A sideways fork, MID-LOOP, from an arbitrary commit (not the origin marker) — the
-    # fork-from-anywhere leg. The main line is untouched and plays on below.
+    # A sideways fork, MID-LOOP, from this branch's HEAD (not the origin marker) — the
+    # fork-from-anywhere leg. Forking from the branch head (not the last beat's commit) matters:
+    # `advance` commits TimeAdvanced + the agenda beat AFTER the beat, so a fork rooted at the
+    # beat would silently drop that segment's time-skip and its Reaction-Layer rumors. The new
+    # Loop hydrates its segment/holds_key/discovered straight from the forked branch.
     whatif = await begin_loop(
-        vale, 0, from_ref=l1.last_commit, name=f"whatif-{l1.name}-seg{l1.segment}"
+        vale,
+        0,
+        from_ref=await l1.head(),
+        name=f"whatif-{l1.name}-seg{l1.segment}",
+        place=l1.place,
     )
-    whatif.segment, whatif.place = l1.segment, l1.place
-    whatif.discovered = list(l1.discovered)
+    assert whatif.segment == l1.segment, (whatif.segment, l1.segment)  # the clock came with it
     await _run_route(whatif, codex, ["go:p:forge"], verbose=False)
     whatif.outcome = "abandoned (sideways)"
     result["whatif"] = {
@@ -233,49 +277,93 @@ async def story(vale: Vale, codex: Codex, *, verbose: bool = False) -> dict[str,
 
 async def play(vale: Vale, codex: Codex) -> None:
     n = 1
+    loop = await begin_loop(vale, n)
+    print(f"\n=== {loop.name} ===\n\n  {script.WAKE}")
+    main_line: list[Loop] = []  # the loops a what-if was forked away from, to `back` into
+
     while True:
-        loop = await begin_loop(vale, n)
-        print(f"\n=== {loop.name} ===\n\n  {script.WAKE}")
-        while loop.segment < DOOM_SEGMENT:
-            print(await render_scene(loop, codex))
-            opts = options(loop, codex)
-            for i, o in enumerate(opts, 1):
-                print(f"    {i:>2}. {o.label}")
-            print("     (or: codex / loops / whatif / quit)")
-            raw = (await _ainput("  > ")).strip().lower()
-            if raw in {"quit", "q"}:
-                return
-            if raw == "codex":
-                print(render_codex(codex))
-                continue
-            if raw == "loops":
-                print(render_loops(await loopmod.loop_tree(vale.store, vale.world_id)))
-                continue
-            if raw == "whatif":
-                wi = await begin_loop(
-                    vale,
-                    0,
-                    from_ref=loop.last_commit or ORIGIN_REF,
-                    name=f"whatif-{loop.name}-seg{loop.segment}-{new_id()[:4]}",
+        # --- the doom segment: ring, or watch it fall ----------------------------------------
+        if loop.segment >= DOOM_SEGMENT:
+            if can_ring(loop, codex):
+                print(await render_scene(loop, codex))
+                print(
+                    "     ring   — RING THE SKY-BELL\n     wait   — do nothing, and watch it fall"
                 )
-                print(f"  [forked sideways: {wi.name} — it will keep, unplayed, in the tree]")
+                if (await _ainput("  > ")).strip().lower() in {"ring", "1"}:
+                    print(f"\n  {await choose(loop, options(loop, codex)[0], codex)}\n")
+                    print(render_loops(await loopmod.loop_tree(vale.store, vale.world_id)))
+                    print("\n  You broke the loop. There is no tomorrow to wake into. Good.")
+                    return
+            print(f"\n  {await commit_the_fall(loop)}\n")
+            await codex.record("K4", loop=loop.name, segment=DOOM_SEGMENT)
+            if main_line:  # this was a what-if line; fall back to the loop we left
+                loop = main_line.pop()
+                print(f"  [back on {loop.name}, segment {loop.segment}]")
                 continue
-            if not raw.isdigit() or not 1 <= int(raw) <= len(opts):
-                print("  (no)")
-                continue
-            print(f"\n  {await choose(loop, opts[int(raw) - 1], codex)}\n")
-        # segment 6 — the doom
-        if can_ring(loop, codex):
+            n += 1
+            loop = await begin_loop(vale, n)
+            print(f"\n=== {loop.name} ===\n\n  {script.WAKE}")
+            continue
+
+        # --- an ordinary segment --------------------------------------------------------------
+        print(await render_scene(loop, codex))
+        opts = options(loop, codex)
+        for i, o in enumerate(opts, 1):
+            print(f"    {i:>2}. {o.label}")
+        back = "  / back" if main_line else ""
+        print(f"     (or: look / codex / loops / whatif{back} / quit)")
+        raw = (await _ainput("  > ")).strip().lower()
+
+        if raw in {"quit", "q"}:
+            return
+        if raw == "look":  # free — a read of committed state, not a beat
             print(await render_scene(loop, codex))
-            print("    1. RING THE SKY-BELL\n    2. do nothing, and watch it fall")
-            if (await _ainput("  > ")).strip() == "1":
-                print(f"\n  {await choose(loop, options(loop, codex)[0], codex)}\n")
-                print(render_loops(await loopmod.loop_tree(vale.store, vale.world_id)))
-                print("\n  You broke the loop. There is no tomorrow to wake into. Good.")
-                return
-        print(f"\n  {await commit_the_fall(loop)}\n")
-        await codex.record("K4", loop=loop.name, segment=DOOM_SEGMENT)
-        n += 1
+            print(
+                f"  {PLACE_NAMES[loop.place]}: "
+                + ("the doom hangs over the Vale." if loop.place != VALE else "")
+            )
+            continue
+        if raw == "codex":
+            print(render_codex(codex))
+            continue
+        if raw == "loops":
+            print(render_loops(await loopmod.loop_tree(vale.store, vale.world_id)))
+            continue
+        if raw == "back" and main_line:
+            loop = main_line.pop()
+            print(f"  [back on {loop.name}, segment {loop.segment} — the sideways line keeps]")
+            continue
+        if raw == "whatif":
+            # fork from THIS branch's head and SWITCH ONTO IT — the sideways line is playable,
+            # and `back` returns to the line you left (which is untouched, on its own branch).
+            wi = await begin_loop(
+                vale,
+                0,
+                from_ref=await loop.head(),
+                name=f"whatif-{loop.name}-seg{loop.segment}-{new_id()[:4]}",
+                place=loop.place,
+            )
+            main_line.append(loop)
+            loop = wi
+            print(
+                f"  [forked sideways onto {wi.name} at segment {wi.segment}. "
+                "Play it out; `back` returns to the line you left.]"
+            )
+            continue
+
+        # typed aliases for the menu (the numbered menu is the primary form)
+        chosen = None
+        if raw.isdigit() and 1 <= int(raw) <= len(opts):
+            chosen = opts[int(raw) - 1]
+        else:
+            for o in opts:
+                if raw == o.key or (raw == "wait" and o.key == "wait"):
+                    chosen = o
+                    break
+        if chosen is None:
+            print("  (no — pick a number, or look / codex / loops / whatif / quit)")
+            continue
+        print(f"\n  {await choose(loop, chosen, codex)}\n")
 
 
 async def _ainput(prompt: str) -> str:
@@ -298,14 +386,26 @@ async def _main() -> None:
     OUT_DIR.mkdir(exist_ok=True)
     store = await connect()
     try:
-        if args.scale:
+        if args.scale is not None:
+            if args.scale < 1:
+                raise SystemExit("--scale needs N >= 1")
             from scale import run_scale
 
-            await run_scale(store, args.scale, OUT_DIR)
+            await run_scale(store, args.scale, OUT_DIR, codex_kind=args.codex)
         else:
-            vale = await bootstrap(store, OUT_DIR, f"Vale of Mourn ({new_id()[:6]})")
+            # Opt-in real model: bound to the NARRATOR ROLE ONLY, through the router's public
+            # per-role `bindings` seam (providers/router.py `_provider_for`). The extractor stays
+            # scripted on purpose — a real one would paraphrase the keystones, and clue identity
+            # is prose-keyed because the engine mints claim ids (G-2), so the game would stop
+            # recognising its own clues.
+            narrator = None
             if args.provider != "stub":
-                _wire_real_narrator(vale, args.provider)
+                from uro_cli.wiring import build_provider
+
+                narrator = build_provider(args.provider, args.model)
+            vale = await bootstrap(
+                store, OUT_DIR, f"Vale of Mourn ({new_id()[:6]})", narrator=narrator
+            )
             codex = await open_codex(
                 args.codex, store=store, world_id=vale.world_id, out_dir=OUT_DIR
             )
@@ -321,61 +421,6 @@ async def _main() -> None:
         frictionlog.print_gap_table()
         frictionlog.print_refusal_log()
         frictionlog.print_timings()
-
-
-def _wire_real_narrator(vale: Vale, provider: str) -> None:
-    """Opt-in real model: the NARRATOR is live; the extractor stays scripted (a real extractor
-    would paraphrase the keystones and the clue-matching — which is prose-keyed because Uro mints
-    claim ids — would stop recognising them; see GAP_REPORT)."""
-    from uro_cli.wiring import build_router
-
-    real = build_router(provider, None)
-    scripted = vale.provider
-
-    class Hybrid:
-        async def stream(self, req: Any) -> AsyncIterator[str]:
-            scripted.served.append(req.messages[-1].content)
-            async for chunk in real.stream("narrator", req.messages):
-                yield chunk
-
-        async def complete(self, req: Any) -> str:
-            return await scripted.complete(req)
-
-        async def embed(self, texts: list[str]) -> list[list[float]]:
-            return await scripted.embed(texts)
-
-    vale.engine._router = ProviderRouterShim(Hybrid())  # type: ignore[attr-defined]
-    gap(
-        gap="Narrate with a real model while keeping the game's fact extraction deterministic",
-        happened="The provider port is all-or-nothing per role, and the ROUTER is a private "
-        "engine field — there is no supported way to bind a real narrator and a scripted "
-        "extractor without reaching into Engine._router",
-        workaround="game.py _wire_real_narrator swaps a hybrid router in by hand",
-        severity="cosmetic",
-        needs="public per-role provider binding on Engine (the ProviderRouter already has "
-        "`bindings` — expose it)",
-        evidence="game.py _wire_real_narrator; uro_core/providers/router.py",
-    )
-
-
-class ProviderRouterShim:
-    """The engine calls router.stream(role, messages) / router.complete(role, messages)."""
-
-    def __init__(self, provider: Any) -> None:
-        self._p = provider
-
-    def stream(self, role: str, messages: Any) -> Any:
-        from uro_core.providers.base import CompletionRequest
-
-        return self._p.stream(CompletionRequest(messages=messages, stage_tag=role))
-
-    async def complete(self, role: str, messages: Any) -> str:
-        from uro_core.providers.base import CompletionRequest
-
-        return await self._p.complete(CompletionRequest(messages=messages, stage_tag=role))
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return await self._p.embed(texts)
 
 
 if __name__ == "__main__":

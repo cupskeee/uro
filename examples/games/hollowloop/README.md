@@ -13,9 +13,9 @@ Every loop is a **real `fork_branch` from one fixed origin marker**. The world r
 construction; the Codex does not. The Fall is a committed `PlaceDestroyed` on that loop's branch.
 This is [the meteor test](../../../packages/uro-core/tests/test_meteor.py) as an entire game.
 
-**The biggest wall:** not performance — 500 loops forked in ~6 ms each, flat — but *knowledge*.
-Uro has no concept of anything that survives a fork, which is the one thing a time-loop game is
-made of. See [`GAP_REPORT.md`](GAP_REPORT.md).
+**The biggest wall:** not performance — 500 loops, flat fork latency — but *knowledge*. Uro has
+no concept of anything that survives a fork, which is the one thing a time-loop game is made of.
+See [`GAP_REPORT.md`](GAP_REPORT.md).
 
 ## Run it
 
@@ -25,14 +25,20 @@ uv run python examples/games/hollowloop/game.py              # play it
 uv run python examples/games/hollowloop/game.py --demo       # the scripted story, no input
 uv run python examples/games/hollowloop/game.py --scale 60   # the branching-at-scale harness
 uv run python examples/games/hollowloop/game.py --scale 500 --print-log   # the full evidence run
-uv run pytest examples/games/hollowloop/tests                # the contract (9 tests)
+uv run pytest examples/games/hollowloop/tests                # the contract (12 tests)
 ```
 
 Deterministic with the scripted provider and **no API key**. `--codex file|branch` picks the
-Codex backend (both are implemented — see below). `--provider openai` narrates with a real model
-(the clue *extraction* stays scripted, or the keystones would be paraphrased and the game would
-stop being a game) — opt-in, never required. The tests are not collected by `just test` (the root
-`testpaths` is `packages/`); run them explicitly as above.
+Codex backend (both are implemented — see below). `--provider openai|anthropic` binds a real model
+to the **narrator role only**, through the router's public per-role `bindings` seam; the clue
+*extraction* stays scripted deliberately (a real extractor would paraphrase the keystones, and
+clue identity is prose-keyed because the engine mints claim ids — G-2 — so the game would stop
+recognising its own clues). Opt-in, never required. The tests are not collected by `just test`
+(the root `testpaths` is `packages/`); run them explicitly as above.
+
+Evidence under `out/` is **regenerated**, not committed: `--scale N` writes `out/scale-N.csv`
+(per loop) and `out/scale-N-summary.json` (every number the GAP report quotes — fork percentiles,
+snapshot count, the fork-cost benchmark, and the `EXPLAIN ANALYZE` of the fork's memory scan).
 
 ## One loop
 
@@ -50,8 +56,9 @@ being in the right place at the right segment is what lets you learn things:
 
 Assemble all four in the **Codex**, retrieve the key, be at the tower at nightfall, and `ring`.
 
-Commands: `go`, `talk` (numbered menu), `wait`, `whatif` (fork sideways from *this very commit*),
-`loops` (the fork tree), `codex`, `ring`, `quit`.
+Commands: a numbered menu (`go` / `talk` / `wait` / `search` / `ring`), plus `look`, `whatif`
+(fork sideways from this branch's head and **play it**), `back` (return to the line you left),
+`loops` (the fork tree), `codex`, `quit`.
 
 ## The knowledge boundary (the research target)
 
@@ -75,14 +82,18 @@ provider, the extractor + gauntlet, `agenda_tick` (the Reaction Layer's dread la
 
 Headline findings (all evidenced in the GAP report, all reproducible from the commands above):
 
-- **Fork latency is flat**: 500 loops, 502 branches, 16,526 events — `fork_branch` mean **6.9 ms**,
-  +12% drift end-to-end. The branching substrate passed the test it was built for.
-- **The ~50-commit snapshot cadence never fires** in a fork-per-loop world (a 502-branch world
-  contained exactly **one** snapshot). Markers silently do 100% of the materialization work — and
-  so forking from the *ancient* origin (5.5 ms) is **faster** than forking from a *recent*
-  mid-loop commit (7.0 ms).
+- **Fork latency is flat in the number of loops**: 500 loops, 502 branches, 16,526 events —
+  `fork_branch` mean **8 ms**, O(origin world state) not O(branches). The branching substrate
+  passed the test it was built for.
+- **...but every fork sequentially scans a global table.** `EXPLAIN ANALYZE` of the engine's own
+  fork query shows a **`Seq Scan` over `memory_index` discarding ~17,000 rows** — 30-60% of a
+  fork — because that table is indexed on `(branch_id)` while the fork filters on `commit_id`.
+  It holds a row per beat of *every world in the database*. **One index fixes it.**
+- **The ~50-commit snapshot cadence never fires** in a fork-per-loop world (exactly **one**
+  snapshot in a 502-branch world) — so forking from the *ancient* origin (5.5 ms) is **faster**
+  than forking from a *recent* mid-loop commit (9.0 ms, depth 18).
 - **There is no cross-branch query API**: drawing the loop tree — the core UI of a branching game
-  — costs N × 4 round-trips, **811 ms at 502 loops**.
+  — costs N × 4 round-trips, **937 ms at 502 loops**.
 - **The extractor won't let a game key its own facts** (`claim_id` is minted, `truth` is derived),
   so cross-loop clue identity is prose string-matching.
 - **A campaign cannot be rebound onto a fork.** The `model_copy` trick appears to work and is

@@ -29,6 +29,9 @@ Severity = str  # blocker | major | annoyance | cosmetic
 
 @dataclass(frozen=True)
 class GapEntry:
+    id: str  # the STABLE row id ("G-1"...) — the same one GAP_REPORT.md's table uses. Runtime
+    #          insertion order varies by which code path a run takes, so numbering the printed
+    #          log by enumerate() would silently disagree with the report.
     gap: str  # what we wanted
     happened: str  # actual API behavior / error / downgrade / measured cost
     workaround: str  # or "BLOCKED"
@@ -51,9 +54,17 @@ TIMINGS: dict[str, list[float]] = defaultdict(list)  # label -> durations in ms
 
 
 def gap(
-    *, gap: str, happened: str, workaround: str, severity: Severity, needs: str, evidence: str
+    *,
+    id: str,
+    gap: str,
+    happened: str,
+    workaround: str,
+    severity: Severity,
+    needs: str,
+    evidence: str,
 ) -> None:
     entry = GapEntry(
+        id=id,
         gap=gap,
         happened=happened,
         workaround=workaround,
@@ -122,9 +133,9 @@ def print_refusal_log() -> None:
 
 
 def print_gap_table() -> None:
-    print(f"\nFRICTION LOG — {len(GAPS)} gaps hit at the API surface:")
-    for i, g in enumerate(GAPS, 1):
-        print(f"\n  G-{i} [{g.severity}] {g.gap}")
+    print(f"\nFRICTION LOG — {len(GAPS)} gaps hit at the API surface (ids match GAP_REPORT.md):")
+    for g in sorted(GAPS, key=lambda e: int(e.id.split("-")[1])):
+        print(f"\n  {g.id} [{g.severity}] {g.gap}")
         print(f"      happened:   {g.happened}")
         print(f"      workaround: {g.workaround}")
         print(f"      needs:      {g.needs}")

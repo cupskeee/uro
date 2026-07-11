@@ -155,6 +155,7 @@ def _decode(claim_id: str, statement: str) -> tuple[str, str, int]:
 async def open_codex(kind: str, *, store: Any, world_id: str, out_dir: Path) -> Codex:
     """Open the Codex in the chosen backend. Logs the gap that forced this layer to exist."""
     gap(
+        id="G-1",
         gap="Player knowledge that survives a fork (the whole premise of a time loop)",
         happened="Uro has NO cross-branch or player-scoped persistent memory. A fork is a full "
         "copy-on-write of world state at a commit and every loop is a fork from the same origin "
@@ -176,6 +177,9 @@ async def open_codex(kind: str, *, store: Any, world_id: str, out_dir: Path) -> 
         assert branch is not None, "the codex branch must be created at world genesis"
         codex: Codex = BranchCodex(store, world_id, branch.branch_id)
     else:
-        codex = FileCodex(out_dir / "codex.json")
+        # Scoped to the WORLD. A single shared codex.json would carry the Loopwalker's knowledge
+        # into a brand-new Vale, so a fresh game would start already knowing K1-K4 and be
+        # winnable on loop 1 — the fiction (and the knowledge-boundary demo) would collapse.
+        codex = FileCodex(out_dir / f"codex-{world_id}.json")
     await codex.load()
     return codex

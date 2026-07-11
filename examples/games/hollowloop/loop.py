@@ -68,11 +68,22 @@ class Vale:
     out_dir: Path
 
 
-async def bootstrap(store: PostgresEventStore, out_dir: Path, name: str) -> Vale:
+async def bootstrap(
+    store: PostgresEventStore, out_dir: Path, name: str, *, narrator: Any = None
+) -> Vale:
     """Create the world, bind the Loopwalker, and mark the ORIGIN — the fixed commit every loop
-    forks from for the rest of the game's life."""
+    forks from for the rest of the game's life.
+
+    `narrator` (optional) is a real LLM provider bound to the NARRATOR ROLE ONLY, through the
+    router's public per-role `bindings` seam. The extractor stays scripted deliberately: a real
+    extractor would paraphrase the keystones, and clue identity is prose-keyed (the engine mints
+    claim ids — G-2), so the game would stop recognising its own clues.
+    """
     provider = ScriptedProvider()
-    engine = Engine(store, ProviderRouter(bindings={}, default=provider))  # no ruleset, no key
+    router = ProviderRouter(
+        bindings={"narrator": narrator} if narrator is not None else {}, default=provider
+    )
+    engine = Engine(store, router)  # no ruleset bound → the Phase-1 recall/narrate/extract flow
 
     world = await store.create_world(
         name,
@@ -88,9 +99,10 @@ async def bootstrap(store: PostgresEventStore, out_dir: Path, name: str) -> Vale
         new_pc_name="the Loopwalker",
         new_pc_id=PC_ID,
     )
-    # THE ORIGIN. `create_marker` also writes a snapshot at that commit (store.py:912 — "markers
-    # are the guaranteed snapshot points a fork can root from"), which is exactly why forking
-    # hundreds of loops from it replays ZERO events: materialization is a pure snapshot restore.
+    # THE ORIGIN. `create_marker` also writes a snapshot at that commit (store.py:912), so a fork
+    # from here restores that snapshot and replays nothing. (NB: that saving is small — the origin
+    # sits at depth 1, so even with no snapshot only the genesis commits would replay. The
+    # snapshot matters for DEEP fork points, not this one; see GAP_REPORT G-4.)
     marker = await store.create_marker(world.world_id, ORIGIN_REF, world.main_branch_id)
 
     # The Codex's never-forked ledger branch (the BranchCodex backend lives here).
@@ -110,6 +122,7 @@ async def bootstrap(store: PostgresEventStore, out_dir: Path, name: str) -> Vale
 
 def _log_bootstrap_gaps() -> None:
     gap(
+        id="G-13",
         gap="A scripted provider keyed by the player's INTENT, so the same intent replays "
         "identically in any loop (the brief's own design)",
         happened="Not implementable: the extractor never sees the intent. "
@@ -127,6 +140,7 @@ def _log_bootstrap_gaps() -> None:
         evidence="script.py ScriptedProvider.arm; pipeline/extraction.py:92-112",
     )
     gap(
+        id="G-6",
         gap="Author the doom ladder in the fiction's own words "
         "(looming -> gathering -> imminent -> warded)",
         happened="REJECTED by the Reaction-Layer grammar: ThreadState is the closed literal "
@@ -186,6 +200,13 @@ def _log_bootstrap_gaps() -> None:
 
 @dataclass
 class Loop:
+    """One loop = one branch. Everything canonical is DERIVED from Uro (`hydrate`), never cached:
+    `segment` is the branch's `world_day`, `holds_key` is real item ownership, `discovered` is the
+    claims actually on the branch. The ONLY genuinely game-side field is `place` — the Loopwalker's
+    position, which Uro *could* own as a `located_in` edge but which this game keeps client-side
+    (disclosed in GAP_REPORT; navigation is UI, and committing an edge per step buys nothing here).
+    """
+
     vale: Vale
     name: str
     branch_id: str
@@ -194,7 +215,6 @@ class Loop:
     place: str = START_PLACE
     holds_key: bool = False
     outcome: str = "in progress"
-    last_commit: str = ""
     discovered: list[str] = field(default_factory=list)
     beats: int = 0
 
@@ -202,9 +222,35 @@ class Loop:
     def segment_name(self) -> str:
         return SEGMENTS[min(self.segment, DOOM_SEGMENT)]
 
+    async def head(self) -> str:
+        """This branch's ACTUAL head commit — the only correct thing to fork a what-if from.
+        (A beat's own commit_id is NOT the head: `advance` commits TimeAdvanced + the agenda
+        module beat on top of it, so forking from the beat would silently drop that segment's
+        time-skip and its Reaction-Layer rumors.)"""
+        branch = await self.vale.store.get_branch(self.branch_id)
+        assert branch is not None
+        return branch.head_commit
 
-async def begin_loop(vale: Vale, n: int, *, from_ref: str = ORIGIN_REF, name: str = "") -> Loop:
-    """Wake at dawn: fork a pristine day from the origin marker and adopt the Loopwalker on it."""
+    async def hydrate(self) -> None:
+        """Re-derive the loop's state FROM URO. Called after every fork and every commit, so the
+        game never trusts its own memory about anything the engine owns."""
+        store = self.vale.store
+        self.segment = await store.current_world_time(self.branch_id)
+        # `items_owned_by` returns item IDS (store.py:1133) — the win gate reads real ownership
+        self.holds_key = TOWER_KEY in await store.items_owned_by(self.branch_id, PC_ID)
+        with timed("list_claims"):
+            claims = await store.list_claims(self.branch_id)
+        for claim in claims:
+            key = CLUE_BY_STATEMENT.get(claim.statement)
+            if key and key not in self.discovered:
+                self.discovered.append(key)
+
+
+async def begin_loop(
+    vale: Vale, n: int, *, from_ref: str = ORIGIN_REF, name: str = "", place: str = START_PLACE
+) -> Loop:
+    """Wake at dawn: fork a day from the origin marker (or, for a what-if, from any commit) and
+    adopt the Loopwalker on it. The new Loop hydrates its whole state from the forked branch."""
     loop_name = name or f"loop-{n:04d}"
     with timed("fork_branch"):
         branch = await vale.store.fork_branch(vale.world_id, from_ref, loop_name)
@@ -222,11 +268,16 @@ async def begin_loop(vale: Vale, n: int, *, from_ref: str = ORIGIN_REF, name: st
             adopt_actor_id=PC_ID,
         )
     _log_rebind_gap()
-    return Loop(vale=vale, name=loop_name, branch_id=branch.branch_id, campaign=campaign)
+    loop = Loop(
+        vale=vale, name=loop_name, branch_id=branch.branch_id, campaign=campaign, place=place
+    )
+    await loop.hydrate()  # segment / holds_key / discovered come from the BRANCH, not from us
+    return loop
 
 
 def _log_rebind_gap() -> None:
     gap(
+        id="G-3",
         gap="Re-point the existing campaign at the loop's forked branch "
         "(the brief's own words: 'rebind the campaign onto the forked branch')",
         happened="There is NO rebind. `campaigns.branch_id` is written once at INSERT and never "
@@ -263,7 +314,6 @@ async def act(loop: Loop, beat: Beat, *, tick: bool = True) -> str:
     vale.provider.arm(beat)
     with timed("run_beat"):
         result = await vale.engine.run_beat(loop.campaign, PARTICIPANT, beat.intent)
-    loop.last_commit = result.commit_id
     loop.beats += 1
     await _harvest_clues(loop)
     if tick:
@@ -283,8 +333,10 @@ async def advance(loop: Loop) -> None:
         return
     with timed("agenda_tick"):
         await loop.vale.engine.agenda_tick(loop.branch_id, 1)
-    loop.segment += 1
+    # the segment IS the branch's world_day — read it back, never count it ourselves
+    loop.segment = await loop.vale.store.current_world_time(loop.branch_id)
     gap(
+        id="G-9",
         gap="A clock finer than a day (the loop is ONE day in seven segments)",
         happened="`world_day` is day-granular — `current_world_time(branch) -> int` and "
         "`time_skip(branch, days)` take whole days. `WorldTime` HAS a `segment` field "
@@ -318,6 +370,7 @@ async def _harvest_clues(loop: Loop) -> None:
         if key and key not in loop.discovered:
             loop.discovered.append(key)
     gap(
+        id="G-2",
         gap="Ask a branch whether it holds clue K1 (a stable, game-chosen claim key)",
         happened="The extractor MINTS the claim id (`claim_id = f'c:{new_id()}'`, "
         "extraction.py:185) and `ProposedClaim` has no id field (extraction.py:60-68) — a game "
@@ -435,6 +488,7 @@ async def choose(loop: Loop, option: Option, codex: Codex) -> str:
 async def take_the_key(loop: Loop) -> None:
     """The key leaves Wren's hands and enters the Loopwalker's — a real ItemTransferred."""
     gap(
+        id="G-8",
         gap="A beat that picks something up commits the ownership change",
         happened="A free-roam beat CANNOT commit an ItemTransferred: the extractor's whole "
         "vocabulary is actors+claims (pipeline/extraction.py:71-73), and the Reaction Layer's "
@@ -456,7 +510,9 @@ async def take_the_key(loop: Loop) -> None:
             )
         ],
     )
-    loop.holds_key = True
+    # ...and READ IT BACK. `holds_key` — the win gate — is real item ownership on this branch,
+    # not a flag the game set and then believed.
+    await loop.hydrate()
 
 
 async def _author(loop: Loop, events: list[Any]) -> str:
@@ -465,8 +521,8 @@ async def _author(loop: Loop, events: list[Any]) -> str:
     with timed("append_beat"):
         commit = await loop.vale.store.append_beat(loop.branch_id, events)
     await loop.vale.engine.react(loop.campaign, commit.commit_id, events)
-    loop.last_commit = commit.commit_id
     gap(
+        id="G-12",
         gap="Host-authored events run the Reaction Layer the way played beats do",
         happened="`store.append_beat` commits but fires NO pack rules; only `Engine._finish` "
         "(run_beat) and the server's Chronicler path call `engine.react`. An embedder who "
@@ -490,8 +546,8 @@ async def commit_the_fall(loop: Loop) -> str:
     loop.vale.provider.arm(script.FALL)
     with timed("run_beat"):
         result = await loop.vale.engine.run_beat(loop.campaign, PARTICIPANT, script.FALL.intent)
-    loop.last_commit = result.commit_id
     loop.beats += 1
+    assert result.commit_id
 
     # The Fall is HOST-AUTHORED: the Reaction Layer cannot destroy a place (trust fence) and the
     # extractor can only propose actors+claims. `place_destroyed` + `append_beat` is the only
@@ -502,30 +558,35 @@ async def commit_the_fall(loop: Loop) -> str:
     # without a claim the destruction of the Vale would be invisible to the prose forever. It
     # doubles as K4: witnessing a full loop to the Fall teaches you the hour.
     facts = script.fall_narration_facts()
-    await _author(
-        loop,
-        [
-            terrain_changed(
-                place_id=VALE,
-                description="a glassed crater where the Vale of Mourn stood",
-                effects=["starfall"],
-            ),
-            place_destroyed(place_id=VALE, cause="the Fall"),
-            thread_state_changed(
-                thread_id=DOOM,
-                to_state=DOOM_STATES["fallen"],
-                from_state=DOOM_STATES["imminent"],
-            ),
+    events = [
+        terrain_changed(
+            place_id=VALE,
+            description="a glassed crater where the Vale of Mourn stood",
+            effects=["starfall"],
+        ),
+        place_destroyed(place_id=VALE, cause="the Fall"),
+        thread_state_changed(
+            thread_id=DOOM,
+            to_state=DOOM_STATES["fallen"],
+            from_state=DOOM_STATES["imminent"],
+        ),
+    ]
+    # ...but only teach K4 if this loop has not ALREADY learned it from Harrow. Otherwise the
+    # same statement would be committed twice on one branch (once by the extractor with a minted
+    # id, once here with `c:timing`), leaving two claims saying the same thing.
+    if "K4" not in loop.discovered:
+        events.append(
             claim_recorded(
                 claim_id=CLUES["K4"]["id"],  # a stable id — because the GAME authored this one
                 statement=facts["statement"],
                 subject_refs=["a:harrow", VALE],
                 truth="true",
                 origin="narration",
-            ),
-        ],
-    )
+            )
+        )
+    await _author(loop, events)
     gap(
+        id="G-7",
         gap="The destruction of the Vale reaches the narrator's prose",
         happened="`PlaceDestroyed` flips `proj_places.status='destroyed'` and nothing else. "
         "Place state is NOT assembled into the narrator prompt at all — RecallBundle has no "
@@ -548,7 +609,6 @@ async def ring_the_bell(loop: Loop, codex: Codex) -> str:
     loop.vale.provider.arm(script.RING)
     with timed("run_beat"):
         result = await loop.vale.engine.run_beat(loop.campaign, PARTICIPANT, script.RING.intent)
-    loop.last_commit = result.commit_id
     loop.beats += 1
     await _author(
         loop,
@@ -630,6 +690,7 @@ async def loop_tree(store: PostgresEventStore, world_id: str) -> list[dict[str, 
             }
         )
     gap(
+        id="G-5",
         gap="Compare loops: 'which loop found which clue, when did each Vale fall, what "
         "endings happened' — one query across N branches",
         happened="There is NO cross-branch or aggregate query surface. `list_branches(world_id)` "

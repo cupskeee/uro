@@ -4,34 +4,37 @@ N loops, each a real `fork_branch(world_id, "origin", "loop-NNNN")` + a full 7-s
 committed Fall. Every loop does IDENTICAL work, so any change in latency as N grows is a
 property of the SUBSTRATE, not of the game.
 
-What we are actually testing (URO_INTEGRATION item 12: "untested at the scale of
-hundreds/thousands of forks"):
+Three hypotheses, and what actually happened (URO_INTEGRATION item 12: "untested at the scale of
+hundreds/thousands of forks"). All three results are recorded honestly, including the one that
+refuted its own hypothesis:
 
-  H1  fork latency is FLAT in the number of loops.
-      The origin is a marker, and `create_marker` writes a snapshot at that commit
-      (store.py:912), so `_materialize_into` finds a snapshot at exactly the fork point and
-      replays ZERO events (store.py:1200-1229). `_ancestry` only walks UP from the origin, so
-      the hundreds of sibling loops are invisible to it. Fork cost should therefore be
-      O(rows in the origin's world state) and independent of N.
+  H1  fork latency is FLAT in the number of loops.  -> HELD.
+      `_ancestry` only walks UP from the fork point, so hundreds of sibling loops are invisible
+      to it; fork cost is O(rows in the origin's world state), not O(branches). Measured flat to
+      N=500.
 
-  H2  ...except that `_copy_memory` (store.py:1231-1257) selects
-      `FROM memory_index WHERE commit_id = ANY($1)`, and `memory_index` has exactly ONE index:
-      `(branch_id)` (migration 004:23). There is NO index on `commit_id`. Every beat of every
-      loop adds a row to that table (Engine._remember), so the table grows ~7 rows per loop and
-      each fork sequentially scans ALL of it. Fork latency should therefore grow with N.
+  H2  ...but `_copy_memory` (store.py:1231-1257) selects `FROM memory_index WHERE commit_id =
+      ANY($1)`, and `memory_index` has exactly ONE index: `(branch_id)` (migration 004:23) — none
+      on `commit_id`.  -> CONFIRMED by `_explain_fork_memory_scan`: Postgres SEQUENTIALLY SCANS
+      that table on every fork, discarding ~17k rows to find a handful, at 30-60% of total fork
+      cost. And the table is GLOBAL (a row per beat of EVERY world in the DB), so fork latency
+      grows with every beat ever played in the deployment. One index removes it.
 
-  H3  the ~50-commit snapshot cadence interacts pathologically with fork-per-loop.
-      `_append` snapshots when `depth % 50 == 0` (store.py:815-816) — and depth is the COMMIT's
-      depth, which every loop branch inherits from the shared origin. So every loop crosses the
-      same depth boundaries at the same segment: either ALL loops pay for a snapshot at the same
-      beat, or none do. It is a systematic, aligned cost, not an amortised one.
+  H3  the ~50-commit snapshot cadence interacts pathologically with fork-per-loop.  -> CONFIRMED,
+      and more sharply than expected: it never fires AT ALL. `_append` snapshots when
+      `depth % 50 == 0` (store.py:815-816), and `depth` is distance from GENESIS — every loop
+      restarts at the origin's depth, so no branch ever gets deep enough. `_totals` counts the
+      snapshots to prove it, and `_fork_cost_benchmark` measures the consequence: a fork from a
+      DEEP, RECENT, un-snapshotted commit is SLOWER than a fork from the ancient origin marker.
 
-The table this prints (and out/scale-N.csv) is the evidence for the branching verdict.
+Evidence shipped per run: out/scale-N.csv (per loop) and out/scale-N-summary.json (every number
+the GAP report quotes).
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import statistics
 import time
 from pathlib import Path
@@ -48,16 +51,19 @@ from uro_core.domain.ids import new_id
 UNIFORM_ROUTE = ["go:p:chapel", "wait", "wait", "go:p:well", "wait", "wait"]
 
 
-async def run_scale(store: PostgresEventStore, n: int, out_dir: Path) -> dict[str, Any]:
+async def run_scale(
+    store: PostgresEventStore, n: int, out_dir: Path, *, codex_kind: str = "file"
+) -> dict[str, Any]:
     out_dir.mkdir(exist_ok=True)
     vale = await bootstrap(store, out_dir, f"Vale of Mourn — scale {n} ({new_id()[:6]})")
-    codex = await open_codex("file", store=store, world_id=vale.world_id, out_dir=out_dir)
+    codex = await open_codex(codex_kind, store=store, world_id=vale.world_id, out_dir=out_dir)
 
     print(
         f"\nHOLLOWLOOP — scale run: {n} loops, each a fork from the '{loopmod.ORIGIN_REF}' marker\n"
     )
     per_loop: list[dict[str, Any]] = []
     t_start = time.perf_counter()
+    deep_commit = ""  # a mid-loop commit, kept for the fork-cost benchmark below
 
     for i in range(1, n + 1):
         t0 = time.perf_counter()
@@ -68,6 +74,8 @@ async def run_scale(store: PostgresEventStore, n: int, out_dir: Path) -> dict[st
         for key in UNIFORM_ROUTE:
             opts = {o.key: o for o in loopmod.options(loop, codex)}
             await loopmod.choose(loop, opts[key], codex)
+        if not deep_commit:
+            deep_commit = await loop.head()  # a DEEP (un-snapshotted) fork point
         await commit_the_fall(loop)
 
         per_loop.append(
@@ -77,6 +85,7 @@ async def run_scale(store: PostgresEventStore, n: int, out_dir: Path) -> dict[st
                 "fork_ms": round(fork_ms, 2),
                 "loop_ms": round((time.perf_counter() - t0) * 1000, 2),
                 "beats": loop.beats,
+                "events": await _branch_events(store, loop.branch_id),
                 "segment": loop.segment,
                 "outcome": loop.outcome,
             }
@@ -95,27 +104,133 @@ async def run_scale(store: PostgresEventStore, n: int, out_dir: Path) -> dict[st
     tree = await loopmod.loop_tree(store, vale.world_id)
     tree_ms = (time.perf_counter() - t0) * 1000
 
+    bench = await _fork_cost_benchmark(store, vale.world_id, deep_commit)
+    scan = await _explain_fork_memory_scan(store, vale.world_id)
     branches = await store.list_branches(vale.world_id)
     markers = await store.list_markers(vale.world_id)
-    events, commits = await _totals(store, vale.world_id)
+    events, commits, snapshots, max_depth = await _totals(store, vale.world_id)
 
     summary = {
         "n": n,
         "wall_s": round(wall, 1),
         "branches": len(branches),
-        "markers": len(markers),
+        "markers": len(markers),  # NB: only ever 1 ('origin') — the scale run never wins
         "commits": commits,
         "events": events,
+        "snapshots": snapshots,  # the H3 evidence: expected to be exactly 1
+        "max_commit_depth": max_depth,  # ...because no branch ever reaches depth 50
         "loop_tree_ms": round(tree_ms, 1),
         "loops_in_tree": len(tree),
+        **bench,
+        **scan,
     }
     _report(per_loop, summary, out_dir, n)
     _log_scale_gaps(per_loop, summary)
     return summary
 
 
-async def _totals(store: PostgresEventStore, world_id: str) -> tuple[int, int]:
-    """Total events + commits in the world. NOTE: there is no engine API for this — the game
+async def _fork_cost_benchmark(
+    store: PostgresEventStore, world_id: str, deep_commit: str, k: int = 15
+) -> dict[str, Any]:
+    """THE fork-cost experiment, shipped: fork K times from the SNAPSHOTTED origin marker, and K
+    times from a DEEP un-snapshotted mid-loop commit. Materialization replays every commit after
+    the nearest ancestor snapshot, so the deep fork should be the slower one — which inverts the
+    intuition that forking from the distant past must be expensive."""
+    if not deep_commit:
+        return {}
+
+    async def bench(from_ref: str, label: str) -> list[float]:
+        out: list[float] = []
+        for i in range(k):
+            t0 = time.perf_counter()
+            await store.fork_branch(world_id, from_ref, f"bench-{label}-{i}-{new_id()[:5]}")
+            out.append((time.perf_counter() - t0) * 1000)
+        return out
+
+    marker_ms = await bench(loopmod.ORIGIN_REF, "marker")
+    deep_ms = await bench(deep_commit, "deep")
+    async with store._pool.acquire() as conn:  # type: ignore[attr-defined]
+        depth = await conn.fetchval("SELECT depth FROM commits WHERE commit_id = $1", deep_commit)
+    return {
+        "fork_from_marker_ms": round(statistics.fmean(marker_ms), 2),
+        "fork_from_deep_ms": round(statistics.fmean(deep_ms), 2),
+        "deep_commit_depth": int(depth or 0),
+        "fork_bench_k": k,
+    }
+
+
+async def _explain_fork_memory_scan(store: PostgresEventStore, world_id: str) -> dict[str, Any]:
+    """The mechanism probe for G-10, shipped: EXPLAIN ANALYZE the exact query `_copy_memory`
+    runs on every fork (store.py:1231-1257). `memory_index` is indexed on `(branch_id)` only
+    (migration 004:23) — there is NO index on `commit_id`, which is what this query filters on —
+    so Postgres sequentially scans the table. And that table is GLOBAL: it holds a row per beat
+    of every world in the database. This reports how many rows the fork's memory-copy actually
+    had to scan, and how long it took."""
+    async with store._pool.acquire() as conn:  # type: ignore[attr-defined]
+        total = await conn.fetchval("SELECT count(*) FROM memory_index")
+        sample = [
+            r["commit_id"]
+            for r in await conn.fetch(
+                "SELECT commit_id FROM commits WHERE world_id = $1 ORDER BY depth LIMIT 3",
+                world_id,
+            )
+        ]
+        plan = await conn.fetch(
+            "EXPLAIN (ANALYZE, FORMAT JSON) "
+            "SELECT DISTINCT ON (commit_id, content_hash) commit_id, content_hash, kind, text, "
+            "entity_refs FROM memory_index WHERE commit_id = ANY($1::text[])",
+            sample,
+        )
+    node = plan[0][0] if isinstance(plan[0][0], dict) else json.loads(plan[0][0])[0]
+    root = node["Plan"]
+
+    def find_scan(p: dict[str, Any]) -> dict[str, Any] | None:
+        if "Scan" in p.get("Node Type", ""):
+            return p
+        for child in p.get("Plans", []):
+            hit = find_scan(child)
+            if hit:
+                return hit
+        return None
+
+    scan = find_scan(root) or {}
+    return {
+        "memory_index_rows_in_db": int(total or 0),
+        "fork_memory_scan_node": scan.get("Node Type", "?"),
+        "fork_memory_rows_discarded": int(scan.get("Rows Removed by Filter", 0) or 0),
+        "fork_memory_scan_ms": round(float(node.get("Execution Time", 0.0)), 2),
+    }
+
+
+async def _branch_events(store: PostgresEventStore, branch_id: str) -> int:
+    """Events committed on THIS loop's own commits — i.e. its ancestry chain from the branch head
+    back down to (but excluding) the commit it forked from. Stage 6 asks for a per-loop event
+    count, and there is no engine API for it (G-14), so this walks the chain in raw SQL."""
+    async with store._pool.acquire() as conn:  # type: ignore[attr-defined]
+        return int(
+            await conn.fetchval(
+                """
+                WITH RECURSIVE b AS (
+                    SELECT head_commit, forked_from FROM branches WHERE branch_id = $1
+                ), chain AS (
+                    SELECT c.commit_id, c.parent_id FROM commits c, b
+                     WHERE c.commit_id = b.head_commit
+                    UNION ALL
+                    SELECT c.commit_id, c.parent_id
+                      FROM commits c JOIN chain ch ON c.commit_id = ch.parent_id, b
+                     WHERE ch.commit_id IS DISTINCT FROM b.forked_from
+                )
+                SELECT count(*) FROM events e JOIN chain ON chain.commit_id = e.commit_id, b
+                 WHERE chain.commit_id IS DISTINCT FROM b.forked_from
+                """,
+                branch_id,
+            )
+            or 0
+        )
+
+
+async def _totals(store: PostgresEventStore, world_id: str) -> tuple[int, int, int, int]:
+    """Total events + commits + SNAPSHOTS + max depth. NOTE: there is no engine API for this —
     reaches into the pool with raw SQL, which a real consumer should never have to do."""
     async with store._pool.acquire() as conn:  # type: ignore[attr-defined]
         commits = await conn.fetchval("SELECT count(*) FROM commits WHERE world_id = $1", world_id)
@@ -124,18 +239,28 @@ async def _totals(store: PostgresEventStore, world_id: str) -> tuple[int, int]:
             "WHERE c.world_id = $1",
             world_id,
         )
+        snapshots = await conn.fetchval(
+            "SELECT count(*) FROM snapshots s JOIN commits c ON c.commit_id = s.commit_id "
+            "WHERE c.world_id = $1",
+            world_id,
+        )
+        max_depth = await conn.fetchval(
+            "SELECT max(depth) FROM commits WHERE world_id = $1", world_id
+        )
     gap(
-        gap="Ask the engine how big a world is (events, commits, branches) — basic telemetry",
-        happened="No API. `list_branches`/`list_markers` exist, but nothing counts events or "
-        "commits; the scale harness had to reach into `store._pool` and run raw SQL against the "
-        "`commits`/`events` tables",
+        id="G-14",
+        gap="Ask the engine how big a world is (events, commits, snapshots, depth) — telemetry",
+        happened="No API. `list_branches`/`list_markers` exist, but nothing counts events, "
+        "commits, or snapshots; the scale harness had to reach into `store._pool` and run raw "
+        "SQL against the `commits`/`events`/`snapshots` tables to answer the most basic question "
+        "a branching consumer has ('how big is this world, and is anything being snapshotted?')",
         workaround="scale.py _totals executes raw SQL through the private pool",
         severity="annoyance",
-        needs="`world_stats(world_id) -> {branches, commits, events, snapshots}` (a graph/vector "
-        "store swap-in would need this seam anyway)",
+        needs="`world_stats(world_id) -> {branches, commits, events, snapshots, max_depth}` (a "
+        "graph/vector store swap-in would need this seam anyway)",
         evidence="scale.py _totals (raw SQL via store._pool)",
     )
-    return int(events), int(commits)
+    return int(events), int(commits), int(snapshots), int(max_depth or 0)
 
 
 def _report(per_loop: list[dict[str, Any]], summary: dict[str, Any], out: Path, n: int) -> None:
@@ -149,6 +274,22 @@ def _report(per_loop: list[dict[str, Any]], summary: dict[str, Any], out: Path, 
     f_first = statistics.fmean(r["fork_ms"] for r in first)
     f_last = statistics.fmean(r["fork_ms"] for r in last)
     drift = (f_last / f_first - 1) * 100 if f_first else 0.0
+    fork = timing_stats("fork_branch")
+
+    # the SUMMARY row — every number the GAP report quotes, persisted next to the per-loop CSV,
+    # so the report's evidence is reproducible from shipped artifacts rather than from prose.
+    summary_out = {
+        **summary,
+        "fork_mean_ms": round(fork.get("mean_ms", 0), 2),
+        "fork_p50_ms": round(fork.get("p50_ms", 0), 2),
+        "fork_p95_ms": round(fork.get("p95_ms", 0), 2),
+        "fork_max_ms": round(fork.get("max_ms", 0), 2),
+        "fork_first_decile_ms": round(f_first, 2),
+        "fork_last_decile_ms": round(f_last, 2),
+        "fork_drift_pct": round(drift, 1),
+    }
+    summary_path = out / f"scale-{n}-summary.json"
+    summary_path.write_text(json.dumps(summary_out, indent=2, sort_keys=True) + "\n")
 
     print(
         f"\n{'=' * 78}\nSCALE RESULT — {n} loops, {summary['branches']} branches, "
@@ -159,10 +300,24 @@ def _report(per_loop: list[dict[str, Any]], summary: dict[str, Any], out: Path, 
     print(f"\n  fork_branch, first 10%:  {f_first:7.1f} ms")
     print(f"  fork_branch, last  10%:  {f_last:7.1f} ms   ({drift:+.0f}% drift across the run)")
     print(
-        f"  the player's `loops` view over {summary['loops_in_tree']} branches: "
+        f"\n  SNAPSHOTS in this whole world: {summary['snapshots']}  "
+        f"(max commit depth {summary['max_commit_depth']} — the depth%50 cadence never fires)"
+    )
+    if "fork_from_marker_ms" in summary:
+        print(
+            f"  fork from the 'origin' MARKER (snapshotted):     "
+            f"{summary['fork_from_marker_ms']:6.2f} ms"
+        )
+        print(
+            f"  fork from a mid-loop commit (depth "
+            f"{summary['deep_commit_depth']}, NO snapshot): "
+            f"{summary['fork_from_deep_ms']:6.2f} ms   <- the DEEPER, more RECENT commit is slower"
+        )
+    print(
+        f"\n  the player's `loops` view over {summary['loops_in_tree']} branches: "
         f"{summary['loop_tree_ms']:.0f} ms  (N x 4 queries — there is no aggregate API)"
     )
-    print(f"\n  per-loop CSV -> {csv_path}")
+    print(f"\n  per-loop CSV -> {csv_path}\n  summary JSON -> {summary_path}")
 
 
 def _log_scale_gaps(per_loop: list[dict[str, Any]], summary: dict[str, Any]) -> None:
@@ -181,28 +336,39 @@ def _log_scale_gaps(per_loop: list[dict[str, Any]], summary: dict[str, Any]) -> 
         f"first-10% {f_first:.1f} ms -> last-10% {f_last:.1f} ms ({drift:+.0f}%). "
         "Not a gap — a pass.]"
     )
+    scan_ms = summary.get("fork_memory_scan_ms", 0.0)
+    scan_rows = summary.get("memory_index_rows_in_db", 0)
+    discarded = summary.get("fork_memory_rows_discarded", 0)
+    share = (scan_ms / fork.get("mean_ms", 1)) * 100 if fork.get("mean_ms") else 0
     gap(
-        gap="Fork the world hundreds of times without the fork path degrading (a time-loop "
-        "game forks on EVERY new day — it is the hot path)",
-        happened=f"IT HELD, and that is the headline result: MEASURED over {n} loops, "
-        f"fork_branch mean {fork.get('mean_ms', 0):.1f} ms, p95 {fork.get('p95_ms', 0):.1f} ms, "
-        f"drift {drift:+.0f}% from first-10% to last-10%. But ONE latent defect sits on that hot "
-        "path: `_copy_memory` (store.py:1231-1257) selects `FROM memory_index WHERE commit_id = "
-        "ANY($1)` and `memory_index` has NO index on `commit_id` (only `(branch_id)`, migration "
-        "004:23). Every fork therefore sequentially scans that table — which is shared across "
-        "ALL worlds in the database and grows with every beat ever played. It did not bite at "
-        "N=500 (the table was only ~8.5k rows) but it is O(total beats in the deployment) on "
-        "the single hottest call a branching game makes",
+        id="G-10",
+        gap="Fork the world hundreds of times without the fork path degrading (a time-loop game "
+        "forks on EVERY new day — it is the hot path)",
+        happened=f"Fork stays flat IN the number of loops (mean {fork.get('mean_ms', 0):.1f} ms, "
+        f"p95 {fork.get('p95_ms', 0):.1f} ms, {drift:+.0f}% drift over {n} loops) — "
+        "materialization is O(origin world state), not O(branches). BUT the dominant COMPONENT "
+        "of that cost is "
+        "a sequential scan that grows with the whole DEPLOYMENT: `_copy_memory` "
+        "(store.py:1231-1257) "
+        "filters `memory_index` on `commit_id`, and that table is indexed on `(branch_id)` ONLY "
+        f"(migration 004:23). MEASURED by EXPLAIN ANALYZE of the engine's own query: a "
+        f"{summary.get('fork_memory_scan_node', 'Seq Scan')} over {scan_rows:,} rows, discarding "
+        f"{discarded:,} of them to find a handful, costing {scan_ms:.1f} ms — roughly {share:.0f}% "
+        "of a whole fork. And `memory_index` is GLOBAL: one row per beat of EVERY world in the "
+        "database. So fork latency is O(total beats ever played in the deployment), on the single "
+        "hottest call a branching game makes. It is invisible on a small database and unbounded on "
+        "a real one",
         workaround="None available to a consumer — the fork path is entirely inside the engine. "
-        "The game simply measured it",
-        severity="annoyance",
-        needs="`CREATE INDEX memory_index_commit_idx ON memory_index(commit_id)` (one line), and "
-        "set-based inserts in restore_snapshot/_copy_memory (both are row-at-a-time today: "
-        "projector.py:377-386)",
-        evidence=f"scale.py run_scale (N={n}); out/scale-{n}.csv; store.py:1231-1257 vs "
-        "migration 004:23",
+        "The game measured it and proved the mechanism",
+        severity="major",
+        needs="`CREATE INDEX memory_index_commit_idx ON memory_index(commit_id)` — one line, and "
+        "it removes the scan entirely. (Also: set-based inserts in restore_snapshot/_copy_memory, "
+        "which are row-at-a-time today, projector.py:377-386)",
+        evidence=f"scale.py _explain_fork_memory_scan (shipped EXPLAIN ANALYZE; numbers in "
+        f"out/scale-{n}-summary.json); store.py:1231-1257 vs migration 004:23",
     )
     gap(
+        id="G-11",
         gap="Prune abandoned loops (a time-loop game forks forever; most loops are dead ends)",
         happened=f"There is NO branch deletion, GC, or prune API anywhere in the store — after "
         f"this run the world carries {summary['branches']} permanent branches and "
@@ -216,40 +382,53 @@ def _log_scale_gaps(per_loop: list[dict[str, Any]], summary: dict[str, Any]) -> 
         evidence=f"scale.py run_scale: {summary['branches']} branches after {n} loops, no way to "
         "remove any of them",
     )
+    bench = ""
+    if "fork_from_marker_ms" in summary:
+        bench = (
+            f" MEASURED by the shipped benchmark (_fork_cost_benchmark, "
+            f"{summary['fork_bench_k']} forks each): from the snapshotted origin marker "
+            f"{summary['fork_from_marker_ms']:.1f} ms vs from an un-snapshotted mid-loop commit "
+            f"(depth {summary['deep_commit_depth']}) {summary['fork_from_deep_ms']:.1f} ms — the "
+            "RECENT commit is the slower fork point, because materialization replays every commit "
+            "after the nearest ancestor snapshot. A what-if fork therefore gets steadily more "
+            "expensive the later in the loop it is taken."
+        )
     gap(
+        id="G-4",
         gap="The ~50-commit snapshot cadence amortises materialization cost across loops",
-        happened="It NEVER FIRES. Snapshots are written when `depth % 50 == 0` "
-        "(store.py:815-816) and `depth` is the commit's distance from GENESIS — but every loop "
-        "branch is forked from the origin and so restarts at the origin's depth (1) and only "
-        "reaches depth ~20. MEASURED: a 502-branch, 9502-commit world contained exactly ONE "
-        "snapshot — the one `create_marker` forced at the origin (store.py:912). The entire "
-        "snapshot machinery is inert in a fork-per-loop workload, and the marker is silently "
-        "doing 100% of the materialization work. Consequence, measured: forking from the ancient "
-        "origin marker (5.5 ms) is FASTER than forking from a RECENT mid-loop commit (7.0 ms, "
-        "depth 16) — because the recent commit has no snapshot and materialization must replay "
-        "every event after the origin's. The cost of a what-if fork therefore grows with how "
-        "deep into the loop you take it",
-        workaround="Fork every loop from the marker (which is the design anyway); accept that "
-        "sideways what-if forks get linearly more expensive the later they are taken",
-        severity="major",
-        needs="snapshot on a per-BRANCH commit count (or on materialization cost), not on "
-        "absolute depth from genesis — and/or an explicit `snapshot(commit_id)` a consumer can "
-        "call before forking repeatedly from a hot commit",
-        evidence="tests/test_hollowloop.py::test_the_snapshot_cadence_never_fires_in_a_fork_per_"
-        "loop_game (asserts exactly 1 snapshot, max depth < 50); the fork-from-marker vs "
-        "fork-from-mid-loop benchmark in GAP_REPORT target 1",
+        happened=f"It NEVER FIRES. Snapshots are written when `depth % 50 == 0` "
+        f"(store.py:815-816), and `depth` is the commit's distance from GENESIS — but every loop "
+        f"is forked from the origin and so restarts at the origin's depth, never getting deep "
+        f"enough. MEASURED this run: {summary['snapshots']} snapshot(s) in a "
+        f"{summary['branches']}-branch, {summary['commits']}-commit world, max commit depth "
+        f"{summary['max_commit_depth']}. The whole snapshot machinery is inert in a fork-per-loop "
+        f"workload.{bench} HONEST SCOPE: this costs this game almost nothing (the origin sits at "
+        "depth 1, so even with no snapshot at all a fork would replay only the genesis commits) — "
+        "it is a latent design mismatch, not a live wound, and it would bite a game whose fork "
+        "point is DEEP (a long prologue, or loops forked from the end of the previous loop)",
+        workaround="Fork every loop from the marker (the design anyway); accept that sideways "
+        "what-if forks cost linearly more the later they are taken",
+        severity="annoyance",
+        needs="snapshot on a per-BRANCH commit count (or on measured materialization cost) rather "
+        "than absolute depth from genesis — and an explicit `snapshot(commit_id)` a consumer can "
+        "call to pin a hot fork point deliberately instead of relying on create_marker's "
+        "side-effect",
+        evidence="scale.py _fork_cost_benchmark (shipped; numbers in out/scale-N-summary.json); "
+        "tests/test_hollowloop.py::test_the_snapshot_cadence_never_fires_in_a_fork_per_loop_game",
     )
     gap(
-        gap="Render the loop tree — the game's core UI, and the whole point of branching",
-        happened=f"MEASURED: {summary['loop_tree_ms']:.0f} ms for "
-        f"{summary['loops_in_tree']} branches, because there is no aggregate query surface — it "
-        "is `list_branches` + N x (current_world_time + get_place + list_threads + list_claims). "
-        "`current_world_time` alone is a recursive CTE to genesis per branch (store.py:748-765)",
-        workaround="loop.py loop_tree fans out by hand; the game caches nothing (Uro owns the "
-        "truth)",
-        severity="major",
-        needs="`query_across(branch_ids, projection) -> rows` + `diff_branches(a,b)` "
-        "(see GAP_REPORT target 4)",
-        evidence=f"scale.py run_scale: loop_tree over {summary['loops_in_tree']} branches took "
-        f"{summary['loop_tree_ms']:.0f} ms",
+        id="G-15",
+        gap="Exercise marker management AT SCALE (the target asks about hundreds of markers)",
+        happened=f"NOT EXERCISED, and the game says so rather than claiming a pass: this world "
+        f"holds {summary['markers']} marker(s). The origin marker is created once and resolved by "
+        f"NAME on every one of the {n} forks (index-backed: markers has UNIQUE(world_id, name)), "
+        "which is the ergonomics this game actually needed — but 'hundreds of markers' was never "
+        "driven, because the game has no reason to mint one per loop",
+        workaround="n/a — reported as untested rather than asserted",
+        severity="cosmetic",
+        needs="nothing here; the finding is that the BRANCH half of this target scaled (502) and "
+        "the MARKER half is simply not what a time-loop game stresses",
+        evidence=f"scale.py run_scale: summary['markers'] == {summary['markers']}",
     )
+    # (the cross-branch-query gap, G-5, is logged at its own call site — loop.py loop_tree, which
+    # this harness calls; the measured cost at this N is printed above and in the summary JSON)
