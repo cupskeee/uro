@@ -102,6 +102,15 @@ async def _eval(
     if kind == "counter":
         value = await store.get_counter(branch_id, cond.scope_ref, cond.key)  # type: ignore[union-attr]
         return _cmp(value, cond.op, cond.value)  # type: ignore[union-attr]
+    if kind == "counter_compare":
+        left = await store.get_counter(branch_id, cond.left.scope_ref, cond.left.key)  # type: ignore[union-attr]
+        right = await store.get_counter(branch_id, cond.right.scope_ref, cond.right.key)  # type: ignore[union-attr]
+        # integer cross-multiply — left * left_mul OP right * right_mul (no float)
+        return _cmp(left * cond.left_mul, cond.op, right * cond.right_mul)  # type: ignore[union-attr]
+    if kind == "count_edges":
+        edges = await store.edges_from(branch_id, cond.src)  # type: ignore[union-attr]
+        n = len([e for e in edges if e.rel_type == cond.rel])  # type: ignore[union-attr]
+        return _cmp(n, cond.op, cond.value)  # type: ignore[union-attr]
     return False  # unreachable — the union is closed
 
 

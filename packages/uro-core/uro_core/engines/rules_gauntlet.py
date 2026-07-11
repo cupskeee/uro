@@ -47,10 +47,13 @@ _MAX_COUNTER = (
 )
 
 
-async def _scope_refs(store: ProjectionQueries, branch_id: str, scope: Scope) -> set[str]:
-    """The set of entity refs a rule may touch — its jurisdiction. A thread scope is just that
-    thread; a faction scope is the faction + its members; a place scope is the place + its
-    occupants. Any emitted ref outside this set is dropped."""
+async def _scope_refs(store: ProjectionQueries, branch_id: str, scope: Scope) -> set[str] | None:
+    """The set of entity refs a rule may touch — its jurisdiction. `None` means UNRESTRICTED (a
+    `world` scope, docs/19 C2). A thread scope is just that thread; a faction scope is the faction +
+    its members; a place scope is the place + its occupants. Any emitted ref outside the set is
+    dropped (the action fence still applies regardless — a world rule still cannot mint canon)."""
+    if scope.world:
+        return None  # whole-realm jurisdiction — takes precedence
     if scope.thread is not None:
         return {scope.thread}
     if scope.faction is not None:
@@ -62,6 +65,11 @@ async def _scope_refs(store: ProjectionQueries, branch_id: str, scope: Scope) ->
     return set()
 
 
+def _in_scope(allowed: set[str] | None, ref: str) -> bool:
+    """A ref is in jurisdiction if the scope is unrestricted (world → None) or names it."""
+    return allowed is None or ref in allowed
+
+
 def _clamp(v: int) -> int:
     return max(-_MAX_COUNTER, min(_MAX_COUNTER, v))
 
@@ -70,7 +78,7 @@ async def _translate(
     store: ProjectionQueries,
     branch_id: str,
     fired: FiredAction,
-    allowed: set[str],
+    allowed: set[str] | None,
     trigger_commit: str,
     pending: dict[tuple[str, str], int],
     world_day: int,
@@ -80,7 +88,7 @@ async def _translate(
     if a.do in ("set_counter", "adjust_counter", "reset_counter"):
         # Computation Layer (docs/19, D-34): scope-fence the write, accumulate within the pass
         # (read-your-writes so two adjusts to one key both count), clamp fail-closed, emit ABSOLUTE.
-        if a.scope_ref not in allowed:
+        if not _in_scope(allowed, a.scope_ref):
             logger.warning(
                 "rule %r: counter write to %r dropped (out of scope)", fired.rule_id, a.scope_ref
             )
@@ -109,14 +117,14 @@ async def _translate(
             )
         ]
     if a.do == "set_thread_state":
-        if a.thread not in allowed:
+        if not _in_scope(allowed, a.thread):
             return []
         exists = any(t.thread_id == a.thread for t in await store.list_threads(branch_id))
         if not exists:  # never mint a thread via a state change
             return []
         return [thread_state_changed(thread_id=a.thread, to_state=a.to, caused_by=cause)]
     if a.do == "create_thread":
-        if a.thread not in allowed:
+        if not _in_scope(allowed, a.thread):
             return []
         if any(t.thread_id == a.thread for t in await store.list_threads(branch_id)):
             return []  # idempotent — already created
@@ -130,12 +138,12 @@ async def _translate(
             )
         ]
     if a.do in ("add_edge", "remove_edge"):
-        if a.src not in allowed or a.dst not in allowed:  # both ends in jurisdiction
+        if not (_in_scope(allowed, a.src) and _in_scope(allowed, a.dst)):  # both ends in scope
             return []
         ctor = edge_added if a.do == "add_edge" else edge_removed
         return [ctor(src=a.src, rel_type=a.rel, dst=a.dst, caused_by=cause)]
     if a.do == "record_rumor":
-        subjects = [s for s in a.subjects if s in allowed]
+        subjects = [s for s in a.subjects if _in_scope(allowed, s)]
         if a.subjects and not subjects:  # a rumor whose every subject is out of scope is dropped
             return []
         claim_id = f"m:{trigger_commit}:{fired.rule_id}:{fired.index}"  # deterministic → idempotent
@@ -152,7 +160,7 @@ async def _translate(
     if a.do == "spread_belief":
         if await store.get_claim(branch_id, a.claim) is None:
             return []  # never spread a belief about a nonexistent claim
-        witnesses = [w for w in a.witnesses[:_MAX_WITNESSES] if w in allowed]
+        witnesses = [w for w in a.witnesses[:_MAX_WITNESSES] if _in_scope(allowed, w)]
         if not witnesses:
             return []
         return await propagate_belief(

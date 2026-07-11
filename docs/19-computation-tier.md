@@ -121,9 +121,13 @@ games flagged) — ship it *with* the numbers.
    accepted-but-inert footgun). Wired at both hooks. Tests: accumulate + threshold (one-beat lag);
    **counter survives a fork**; two adjusts both count; out-of-scope write dropped; v1-pack compat.
    Covers RL-1 (all four games), single-entity fixed accumulation. Commit-ready.
-2. **INC-C2 (M — co-requisite pair):** the multi-ref / `world` scope generalization (B11 — a
-   cross-entity counter has *no* single-dimension jurisdiction today, so this is a hard co-requisite,
-   not optional) + `counter_compare` + `count_set`/`count_edges`. Covers RL-3, RL-5.
+2. **INC-C2 ✅ DONE (M — co-requisite pair):** the `world` scope (OQ-2 — whole-realm jurisdiction;
+   `_scope_refs` returns `None` = unrestricted, but the action fence still applies, so a world rule
+   still cannot mint canon) + `counter_compare` (integer cross-multiply `left*left_mul OP
+   right*right_mul`, no float) + `count_edges` (RL-5 via `edges_from` — the critic's lighter
+   mechanism than per-member counters; `count_set` deferred, unneeded). Tests: predator-war
+   cross-entity compare under `world` scope; fall-of-house `count owns == 0`; a narrow-scoped rule
+   still fenced from another faction (no regression). Covers RL-3, RL-5.
 3. **INC-C3 (M):** `for_each` (one bounded loop, capped) + `$trigger.<field>` binding (validated like
    `_trigger_can_fire`) + edge traversal, each neighbor scope-fenced. Covers RL-11 (single-hop).
 4. **INC-C4 (S):** `roll_table` (seeded integer-hash, baked). Covers RL-4, Seventh RL-6.

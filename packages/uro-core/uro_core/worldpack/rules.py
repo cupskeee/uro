@@ -111,6 +111,39 @@ class CondCounter(BaseModel):
     value: int
 
 
+class CounterRef(BaseModel):
+    model_config = _STRICT
+    scope_ref: str
+    key: str
+
+
+class CondCounterCompare(BaseModel):
+    """Cross-entity integer counter comparison (docs/19 C2, RL-3): evaluates
+    `left * left_mul  OP  right * right_mul` — integer cross-multiply, so `strength(A) >
+    strength(B)*1.2` is `left_mul=5, right_mul=6, op=">"` with no float. A READ (conditions read
+    freely, like actor_tier); the cross-entity ACTIONS it gates need a `world` scope."""
+
+    model_config = _STRICT
+    kind: Literal["counter_compare"]
+    left: CounterRef
+    right: CounterRef
+    op: CmpOp
+    left_mul: int = 1
+    right_mul: int = 1
+
+
+class CondCountEdges(BaseModel):
+    """Count a relation out of `src` and compare (docs/19 C2, RL-5 fall-of-house: owns == 0).
+    Reuses `edges_from`; no per-member counters needed (the critic's lighter mechanism)."""
+
+    model_config = _STRICT
+    kind: Literal["count_edges"]
+    src: str
+    rel: str
+    op: CmpOp
+    value: int = Field(ge=0)
+
+
 class CondAll(BaseModel):
     model_config = _STRICT
     kind: Literal["all"]
@@ -136,6 +169,8 @@ Condition = Annotated[
     | CondEdgeExists
     | CondWorldDay
     | CondCounter
+    | CondCounterCompare
+    | CondCountEdges
     | CondAll
     | CondAny
     | CondNot,
@@ -236,10 +271,16 @@ Action = Annotated[
 
 
 class Scope(BaseModel):
-    """A rule's jurisdiction — the gauntlet (INC-3) drops any emitted ref outside it (the
-    generalization of D-32 participant-scoping). Exactly one of the fields is set."""
+    """A rule's jurisdiction — the gauntlet drops any emitted ref outside it (the generalization of
+    D-32 participant-scoping). Set `world: true` for a whole-realm rule, else exactly one of
+    thread/faction/place. `world` (docs/19 C2, OQ-2) is the first-class form of the umbrella-faction
+    hack Sable/Ironwake used for cross-entity rules — it relaxes the JURISDICTION fence (any ref is
+    reachable), NOT the action fence: a rule still can only emit the closed, non-canon Action union
+    (no mint/kill/loot/truth=true), so a realm-wide rule can adjust any counter or move a
+    non-authoritative edge, never assert canon."""
 
     model_config = _STRICT
+    world: bool = False  # whole-realm jurisdiction (cross-entity rules); takes precedence
     thread: str | None = None  # the thread's stakeholders
     faction: str | None = None  # a faction's members
     place: str | None = None  # a place's occupants

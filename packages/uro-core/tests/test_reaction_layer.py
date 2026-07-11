@@ -15,8 +15,10 @@ from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import (
     actor_created,
     actor_died,
+    counter_changed,
     edge_added,
     faction_created,
+    module_cause,
     thread_created,
 )
 from uro_core.domain.ids import new_id
@@ -644,3 +646,121 @@ async def test_v1_packs_still_valid_under_v2_engine() -> None:
     from uro_core.worldpack.rules import RulePack
 
     RulePack(**_FEUD_PACK)  # declares version 1 — must still validate (additive grammar)
+
+
+# --- INC-C2: world scope + cross-entity counter_compare + count_edges (docs/19, RL-3/RL-5) ---
+
+
+async def test_world_scope_and_counter_compare_predator(store: PostgresEventStore) -> None:
+    # RL-3: a realm-wide rule declares war when one house outstrengths another (cross-entity compare
+    # gating a cross-entity edge — needs `world` scope (single-dimension scope can't span both).
+    pack = {
+        "rules_api_version": 2,
+        "rules": [
+            {
+                "id": "predator-smells-weakness",
+                "trigger": {"event": "ActorDied"},
+                "when": {
+                    "kind": "counter_compare",
+                    "left": {"scope_ref": "f:red", "key": "strength"},
+                    "right": {"scope_ref": "f:blue", "key": "strength"},
+                    "op": ">",
+                    "left_mul": 5,  # strength(red) * 5 > strength(blue) * 6  ==  red > blue * 1.2
+                    "right_mul": 6,
+                },
+                "then": [{"do": "add_edge", "src": "f:red", "rel": "at_war_with", "dst": "f:blue"}],
+                "scope": {"world": True},  # cross-entity edge → whole-realm jurisdiction
+            }
+        ],
+    }
+    world = await store.create_world(f"c2-{new_id()}", rule_pack=pack)
+    c = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        c.branch_id,
+        [
+            faction_created(faction_id="f:red", name="Red"),
+            faction_created(faction_id="f:blue", name="Blue"),
+        ],
+    )
+    # seed strengths directly (also proves cross-entity counter state)
+    setpack_beat = [actor_died(actor_id="a:x")]
+    # red=13, blue=10 → 13*5=65 > 10*6=60 → war
+    await store.append_beat(
+        c.branch_id,
+        [
+            counter_changed(
+                scope_ref="f:red", key="strength", to_value=13, caused_by=module_cause("seed")
+            ),
+            counter_changed(
+                scope_ref="f:blue", key="strength", to_value=10, caused_by=module_cause("seed")
+            ),
+        ],
+    )
+    await store.append_beat(c.branch_id, setpack_beat)
+    await _engine(store).react(c, await _head(store, c.branch_id), setpack_beat)
+    wars = [e for e in await store.list_edges(c.branch_id, "at_war_with") if e.src == "f:red"]
+    assert any(e.dst == "f:blue" for e in wars)  # red out-strengthed blue → war declared
+
+
+async def test_count_edges_fall_of_house(store: PostgresEventStore) -> None:
+    # RL-5: when a house holds zero territories (count owns == 0), its decline thread resolves.
+    pack = {
+        "rules_api_version": 2,
+        "rules": [
+            {
+                "id": "fall-of-house",
+                "trigger": {"event": "ActorDied"},
+                "when": {
+                    "kind": "count_edges",
+                    "src": "f:dell",
+                    "rel": "owns",
+                    "op": "==",
+                    "value": 0,
+                },
+                "then": [{"do": "set_thread_state", "thread": "t:dell-decline", "to": "resolved"}],
+                "scope": {"thread": "t:dell-decline"},
+            }
+        ],
+    }
+    world = await store.create_world(f"c2b-{new_id()}", rule_pack=pack)
+    c = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        c.branch_id,
+        [
+            faction_created(faction_id="f:dell", name="Dellmoor"),
+            thread_created(thread_id="t:dell-decline", stakes="Dellmoor fades", state="active"),
+        ],
+    )
+    # Dellmoor owns nothing → count owns == 0 → the rule fires
+    died = [actor_died(actor_id="a:y")]
+    await store.append_beat(c.branch_id, died)
+    await _engine(store).react(c, await _head(store, c.branch_id), died)
+    assert (await _states(store, c.branch_id))["t:dell-decline"] == "resolved"
+
+
+async def test_narrow_scope_still_fences_cross_entity_writes(store: PostgresEventStore) -> None:
+    # world scope is opt-in: a faction-scoped rule still cannot touch another faction (no regress)
+    pack = {
+        "rules_api_version": 2,
+        "rules": [
+            {
+                "id": "overreach",
+                "trigger": {"event": "ActorDied"},
+                "then": [{"do": "add_edge", "src": "f:red", "rel": "at_war_with", "dst": "f:blue"}],
+                "scope": {"faction": "f:red"},  # f:blue is NOT in this jurisdiction → dropped
+            }
+        ],
+    }
+    world = await store.create_world(f"c2c-{new_id()}", rule_pack=pack)
+    c = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        c.branch_id,
+        [
+            faction_created(faction_id="f:red", name="Red"),
+            faction_created(faction_id="f:blue", name="Blue"),
+        ],
+    )
+    died = [actor_died(actor_id="a:z")]
+    await store.append_beat(c.branch_id, died)
+    await _engine(store).react(c, await _head(store, c.branch_id), died)
+    assert not await store.list_edges(c.branch_id, "at_war_with")  # blue out of scope → dropped
