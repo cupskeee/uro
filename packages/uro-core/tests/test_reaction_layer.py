@@ -764,3 +764,36 @@ async def test_narrow_scope_still_fences_cross_entity_writes(store: PostgresEven
     await store.append_beat(c.branch_id, died)
     await _engine(store).react(c, await _head(store, c.branch_id), died)
     assert not await store.list_edges(c.branch_id, "at_war_with")  # blue out of scope → dropped
+
+
+async def test_concurrent_react_passes_do_not_lose_a_counter_increment(
+    store: PostgresEventStore,
+) -> None:
+    # Computation-tier review: adjust_counter is a read-modify-write; two react() passes on one
+    # branch (the un-arbitered Chronicler POST path / a multi-connection participant) must not
+    # interleave and lose an increment. The per-branch _react_lock serializes them in-process.
+    import asyncio as _asyncio
+
+    pack = {
+        "rules_api_version": 2,
+        "rules": [
+            {
+                "id": "bump",
+                "trigger": {"event": "ActorDied"},
+                "then": [{"do": "adjust_counter", "scope_ref": "f:h", "key": "n", "delta": 1}],
+                "scope": {"faction": "f:h"},
+            }
+        ],
+    }
+    world = await store.create_world(f"race-{new_id()}", rule_pack=pack)
+    c = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(c.branch_id, [faction_created(faction_id="f:h", name="H")])
+    engine = _engine(store)
+    # two reacts fired concurrently on the SAME branch, each with its own ActorDied trigger
+    died = [actor_died(actor_id="a:x")]
+    head = await _head(store, c.branch_id)
+    await _asyncio.gather(
+        engine.react(c, head, died),
+        engine.react(c, head, died),
+    )
+    assert await store.get_counter(c.branch_id, "f:h", "n") == 2  # both counted, none lost

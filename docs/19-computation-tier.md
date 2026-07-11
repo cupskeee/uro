@@ -1,10 +1,13 @@
 # 19 — The Computation Layer (engine-owned numeric state) — PROPOSAL
 
-> **STATUS: ACCEPTED (owner, 2026-07-12) — INC-C1 SHIPPED.** From the 2026-07-12 design pass
-> (ground → 4 approaches → 3 judge lenses → synthesize → risk critic), triggered because the **D-33
-> Stage-B evidence gate fired** (all four games in `examples/games/` produced refusal logs — see
-> `docs/18`). **D-34 is appended to `decisions.md` at the tier's phase-end review** (after the owner
-> decides how far to take the staged increments), per the repo rhythm.
+> **STATUS: ACCEPTED — INC-C1 + INC-C2 SHIPPED; phase-end review DONE; D-34 appended (2026-07-12).**
+> From the design pass (ground → 4 approaches → 3 judge lenses → synthesize → risk critic), triggered
+> because the **D-33 Stage-B evidence gate fired** (all four games in `examples/games/` produced
+> refusal logs — see `docs/18`). The phase-end SYSTEM-WIDE cross-phase review (P-comp × P0..P9) found
+> **2 confirmed (one root cause) → fixed** (a per-branch in-process `_react_lock` serializing
+> `adjust_counter`'s read-modify-write against the un-arbitered Chronicler POST path + a
+> multi-connection participant; P2 replay + P3 lethal-proxy confirmed clean). **D-34 is in
+> `decisions.md`.** C3–C6 remain staged (below), to build on further evidence.
 >
 > **Decided (owner):** OQ-1 → ship the counter core first, **defer computed-delta arithmetic** (the
 > economy-formula half) as the reserved tier's sharper gate. OQ-2 → the multi-ref scope (C2) will be

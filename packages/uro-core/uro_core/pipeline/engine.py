@@ -9,6 +9,7 @@ bound (Phase 0/1 compat, `--bare`) the planner/gate are skipped and the flow is 
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -121,6 +122,13 @@ class Engine:
         self._bare = bare
         # Per-branch prompt style (tone) + template env, from the world's pack (docs/09). Cached.
         self._style_cache: dict[str, tuple[str, PromptEnv]] = {}
+        # Per-branch lock serializing the Reaction pass IN-PROCESS (computation-tier review, D-34):
+        # adjust_counter is a non-atomic read-modify-write (read via get_counter, later append the
+        # baked absolute), so two react() passes that interleave on one branch lose an increment.
+        # Round-robin serializes distinct-participant WS beats but NOT the un-arbitered Chronicler
+        # POST path nor one participant on two connections — this lock covers both within a process.
+        # Cross-PROCESS serialization stays the named P7 `expected_head` deferral.
+        self._react_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def ruleset_id(self) -> str:
@@ -358,35 +366,44 @@ class Engine:
         — any error (budget, load, a transient store fault) is logged and the beat stands (mirrors
         _remember). Reactions are consequences, not the beat itself.
 
-        Reads state as of the trigger commit (right after append_beat, under the single-writer/
-        round-robin turn model, current head IS the trigger commit — a party-safe materialize-at-
-        commit pin is a documented future refinement, docs/17). Its whole effect is committed as
-        events, so replay/fork re-applies them verbatim and this is never re-run (cf. distill).
+        Reads state as of the trigger commit (right after append_beat). The per-branch `_react_lock`
+        serializes concurrent passes IN-PROCESS so `adjust_counter`'s read-modify-write can't lose
+        an increment across the un-arbitered Chronicler POST path or a multi-connection participant
+        (computation-tier review, D-34); cross-process serialization is the P7 `expected_head`
+        deferral. Its whole effect is committed as events, so replay/fork re-applies them verbatim
+        and this is never re-run (cf. distill).
         """
-        try:
-            raw = await self._store.world_rule_pack(campaign.branch_id)
-            if not raw:  # no-rules fast short-circuit — a rule-less world pays ~nothing per beat
-                return
-            pack = RulePack(**raw)  # bad/incompatible pack (e.g. version) → caught below, disabled
-            if not pack.rules:
-                return
-            world_day = await self._store.current_world_time(campaign.branch_id)
-            fired = await evaluate_rules(
-                self._store,
-                campaign.branch_id,
-                rules=pack.rules,
-                trigger_events=trigger_events,
-                world_day=world_day,
-            )
-            if not fired:
-                return
-            module_events = await run_rules_gauntlet(
-                self._store, campaign.branch_id, fired, trigger_commit=trigger_commit_id
-            )
-            if module_events:
-                await self._store.append_beat(campaign.branch_id, module_events)
-        except Exception as exc:  # the beat is already durable — a reaction fault must not fail it
-            logger.warning("reaction pass failed; the beat stands, no reactions: %s", exc)
+        async with self._react_lock(campaign.branch_id):
+            try:
+                raw = await self._store.world_rule_pack(campaign.branch_id)
+                if not raw:  # no-rules short-circuit — a rule-less world pays ~nothing per beat
+                    return
+                pack = RulePack(**raw)  # a bad/incompatible pack (e.g. version) → caught, disabled
+                if not pack.rules:
+                    return
+                world_day = await self._store.current_world_time(campaign.branch_id)
+                fired = await evaluate_rules(
+                    self._store,
+                    campaign.branch_id,
+                    rules=pack.rules,
+                    trigger_events=trigger_events,
+                    world_day=world_day,
+                )
+                if not fired:
+                    return
+                module_events = await run_rules_gauntlet(
+                    self._store, campaign.branch_id, fired, trigger_commit=trigger_commit_id
+                )
+                if module_events:
+                    await self._store.append_beat(campaign.branch_id, module_events)
+            except Exception as exc:  # the beat is durable — a reaction fault must not fail it
+                logger.warning("reaction pass failed; the beat stands, no reactions: %s", exc)
+
+    def _react_lock(self, branch_id: str) -> asyncio.Lock:
+        lock = self._react_locks.get(branch_id)
+        if lock is None:
+            lock = self._react_locks[branch_id] = asyncio.Lock()
+        return lock
 
     async def append_and_react(self, campaign: Campaign, events: list[DomainEvent]) -> Commit:
         """Commit authored events AND run the Reaction Layer over them — the one-call path an
@@ -409,27 +426,29 @@ class Engine:
         from_day = await self._store.current_world_time(branch_id)
         skip_commit = await self._store.time_skip(branch_id, days)  # the primary durable action
         # The agenda pass is best-effort over the already-committed time-skip — like react(), a
-        # fault here must not fail the skip (which stands).
-        try:
-            raw = await self._store.world_rule_pack(branch_id)
-            if not raw:
-                return
-            pack = RulePack(**raw)
-            if not pack.agendas:
-                return
-            to_day = from_day + days
-            fired = await evaluate_agendas(
-                self._store, branch_id, agendas=pack.agendas, from_day=from_day, to_day=to_day
-            )
-            if not fired:
-                return
-            module_events = await run_rules_gauntlet(
-                self._store, branch_id, fired, trigger_commit=skip_commit.commit_id
-            )
-            if module_events:
-                await self._store.append_beat(branch_id, module_events)
-        except Exception as exc:  # the time-skip is durable — an agenda fault must not fail it
-            logger.warning("agenda tick failed; the time-skip stands, no agendas: %s", exc)
+        # fault here must not fail the skip (which stands). Under the same per-branch lock so its
+        # counter read-modify-writes don't interleave with a concurrent react() (D-34 review).
+        async with self._react_lock(branch_id):
+            try:
+                raw = await self._store.world_rule_pack(branch_id)
+                if not raw:
+                    return
+                pack = RulePack(**raw)
+                if not pack.agendas:
+                    return
+                to_day = from_day + days
+                fired = await evaluate_agendas(
+                    self._store, branch_id, agendas=pack.agendas, from_day=from_day, to_day=to_day
+                )
+                if not fired:
+                    return
+                module_events = await run_rules_gauntlet(
+                    self._store, branch_id, fired, trigger_commit=skip_commit.commit_id
+                )
+                if module_events:
+                    await self._store.append_beat(branch_id, module_events)
+            except Exception as exc:  # the time-skip is durable — an agenda fault must not fail it
+                logger.warning("agenda tick failed; the time-skip stands, no agendas: %s", exc)
 
     async def _beat_events(
         self,

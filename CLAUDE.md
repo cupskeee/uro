@@ -1,6 +1,6 @@
 # CLAUDE.md — working in this repo
 
-Uro Engine: a headless, game-agnostic AI-RPG **engine** PoC (git-is-to-GitHub as Uro-is-to-a-game/platform). Python 3.12, `uv` workspace. Full design in `docs/` — read `docs/15-walkthroughs.md` for the map, `docs/10-roadmap.md` for status, `docs/16-honesty-ledger.md` for the honest proven/proxy/stub-only/deferred map, `docs/decisions.md` (D-1..D-33) for why things are the way they are. **The docs are authoritative; when code and docs disagree, fix one to match the other in the same commit.**
+Uro Engine: a headless, game-agnostic AI-RPG **engine** PoC (git-is-to-GitHub as Uro-is-to-a-game/platform). Python 3.12, `uv` workspace. Full design in `docs/` — read `docs/15-walkthroughs.md` for the map, `docs/10-roadmap.md` for status, `docs/16-honesty-ledger.md` for the honest proven/proxy/stub-only/deferred map, `docs/18-gap-findings.md` for the games-driven backlog, `docs/decisions.md` (D-1..D-34) for why things are the way they are. **The docs are authoritative; when code and docs disagree, fix one to match the other in the same commit.**
 
 ## Layout
 
@@ -126,4 +126,13 @@ Reverses **D-6** → **D-33**: pack-authored reactive behavior, built as a DECLA
 - **Stage-B evidence gate has FIRED:** D-33 reserved the WASM/computation tier "until a refusal log shows authors need computation the DSL can't express." All 4 games produced one (Sable Court's 12 wished-for rules in exact syntax is the headline), plus a new argument — refused counters live in game code and so **fall out of `fork_branch`**, making the two flagship features undermine each other. Next decision: scope engine-owned numeric state, superseding the D-33 reservation.
 - **Validated deferrals (killed speculative work):** a specialized graph/vector store is NOT justified (Postgres held flat to 500 forks); `entity_index` (OQ-3) is NOT justified (name+alias held, 0 false merges); the protection ceiling is a *feature*, not a defect.
 
-Next: act on `docs/18` — B1 `append_and_react` (unanimous, small) and the Stage-B computation-tier decision are the top of the list; the rest of the **Post-PoC horizon** (docs/10) as before.
+## Post-PoC Phase 10 — THE COMPUTATION LAYER (engine-owned counters) is COMPLETE through INC-C2 (2026-07-12, 262 tests green, deterministic)
+
+Acting on the games' gap reports (`docs/18`): **B1 `append_and_react`** shipped (the unanimous one-call authored-commit path), then the **Stage-B decision** via a design pass → **D-34** (`docs/19`), superseding the D-33 "computation is refused" clause. Numeric state is now engine-owned + **event-sourced so it forks by construction** — the fix for shadow game-code counters that didn't ride `fork_branch` (the two flagship features had been undermining each other).
+
+- **inc C1:** `CounterChanged`→`proj_counters` (migration 015, `_HANDLERS`+`_SNAPSHOT_TABLES`), `CondCounter` + `set/adjust/reset_counter`, in-pass read-your-writes accumulation, fail-closed `_MAX_COUNTER`, `RULES_API_VERSION` 1→2 (supported `{1,2}`; v1 packs stay valid), `CounterChanged` kept out of the trigger vocab (no accepted-but-inert).
+- **inc C2:** a `world` scope (unrestricted jurisdiction, action fence still holds) + `CondCounterCompare` (cross-entity integer cross-multiply, no float) + `CondCountEdges` (RL-5 fall-of-house).
+- **Phase-end SYSTEM-WIDE cross-phase review** (P-comp × P0..P9): **2 confirmed, one root cause → fixed** — `adjust_counter` is the first non-idempotent read-modify-write, so a per-branch in-process `_react_lock` serializes concurrent `react()` passes (the un-arbitered Chronicler POST path + a multi-connection participant); P2 replay-by-fork + P3 lethal-proxy confirmed clean. WASM stays reserved at a sharper structural gate.
+- **Deferred (named, staged in docs/19):** computed cross-counter arithmetic (economy formulas, OQ-1); `for_each`/`$trigger` (C3); seeded `roll_table` (C4); `expire_claim` (C5); bounded cascade (C6 — touches `react()`'s single-hop invariant, own review); cross-process serialization (P7 `expected_head`).
+
+Next: the rest of `docs/18` (place-state recall B4, cross-branch query B5, arbiter shapes B7, REST surface B3), the staged C3–C6 on evidence, or the **Post-PoC horizon** (docs/10).

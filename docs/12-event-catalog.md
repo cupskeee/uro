@@ -86,6 +86,11 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | `ThreadStateChanged` | thread_id, to_state (`dormant|offered|active|resolved|dead`), from_state (advisory) | M P H A | LIVE via emitter M (D-33): a pack rule advances a thread's lifecycle. Projector sets `proj_threads.state` (never mints a thread) |
 | `ThreadStepCompleted` | thread_id, step, outcome | P | reserved (no live emitter) |
 
+### Computation (numeric state)
+| event_type | payload | emit | notes |
+|---|---|---|---|
+| `CounterChanged` | scope_ref, key, to_value (int, ABSOLUTE), created_day, updated_day | M | LIVE via emitter M (D-34, Computation Layer): a pack rule sets a bounded integer counter. Projector UPSERTs `proj_counters` (preserves created_day). Structurally non-canon (writes only `proj_counters`); scope-fenced, magnitude-capped. NOT triggerable until cascade (C6) — popped from the trigger vocab to avoid accepted-but-inert |
+
 ### Play & campaign
 | event_type | payload | emit | notes |
 |---|---|---|---|
