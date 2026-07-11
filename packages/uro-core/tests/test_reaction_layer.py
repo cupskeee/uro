@@ -525,3 +525,122 @@ async def test_append_and_react_fires_rules_on_authored_events(store: PostgresEv
     commit = await _engine(store).append_and_react(campaign, [actor_died(actor_id="a:extra2")])
     assert commit.commit_id
     assert (await _states(store, branch))["t:feud"] == "active"
+
+
+# --- INC-C1: the Computation Layer — engine-owned integer counters (docs/19, D-34) ---
+
+_COUNTER_PACK = {
+    "rules_api_version": 2,
+    "rules": [
+        {  # each death bumps the houses' tension counter
+            "id": "bump-tension",
+            "trigger": {"event": "ActorDied"},
+            "then": [
+                {"do": "adjust_counter", "scope_ref": "f:houses", "key": "tension", "delta": 1}
+            ],
+            "scope": {"faction": "f:houses"},
+        },
+        {  # once tension reaches 2, the feud goes to war (threshold read — one-beat lag, expected)
+            "id": "boil-to-war",
+            "trigger": {"event": "ActorDied"},
+            "when": {
+                "kind": "counter",
+                "scope_ref": "f:houses",
+                "key": "tension",
+                "op": ">=",
+                "value": 2,
+            },
+            "then": [{"do": "set_thread_state", "thread": "t:feud", "to": "active"}],
+            "scope": {"thread": "t:feud"},
+        },
+    ],
+}
+
+
+async def _counter_campaign(store: PostgresEventStore, pack=_COUNTER_PACK):  # type: ignore[no-untyped-def]
+    world = await store.create_world(f"counter-{new_id()}", rule_pack=pack)
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id,
+        [
+            faction_created(faction_id="f:houses", name="The Houses"),
+            thread_created(thread_id="t:feud", stakes="the houses' feud", state="dormant"),
+        ],
+    )
+    return world, campaign
+
+
+async def _kill(store, campaign, actor="a:mook"):  # type: ignore[no-untyped-def]
+    died = [actor_died(actor_id=actor)]
+    await store.append_beat(campaign.branch_id, died)
+    await _engine(store).react(campaign, await _head(store, campaign.branch_id), died)
+
+
+async def test_counter_accumulates_and_threshold_fires(store: PostgresEventStore) -> None:
+    _, c = await _counter_campaign(store)
+    branch = c.branch_id
+    await _kill(store, c)  # tension 0->1
+    assert await store.get_counter(branch, "f:houses", "tension") == 1
+    await _kill(store, c)  # tension 1->2 (boil reads 1 at start → not yet)
+    assert await store.get_counter(branch, "f:houses", "tension") == 2
+    assert (await _states(store, branch))["t:feud"] == "dormant"  # one-beat lag (docs/19)
+    await _kill(store, c)  # boil reads tension=2 → war; bump → 3
+    assert (await _states(store, branch))["t:feud"] == "active"
+    assert await store.get_counter(branch, "f:houses", "tension") == 3
+
+
+async def test_counter_survives_a_fork(store: PostgresEventStore) -> None:
+    # THE load-bearing acceptance: engine-owned numeric state rides fork_branch (not shadow state)
+    world, c = await _counter_campaign(store)
+    await _kill(store, c)
+    await _kill(store, c)
+    fork = await store.fork_branch(world.world_id, await _head(store, c.branch_id), "sib")
+    assert (
+        await store.get_counter(fork.branch_id, "f:houses", "tension") == 2
+    )  # carried by the fork
+
+
+async def test_in_pass_accumulation_two_adjusts_both_count(store: PostgresEventStore) -> None:
+    # critic finding: two adjusts to one key in one pass must BOTH count (read-your-writes), not
+    # collide-and-drop-one under the absolute-baked model.
+    pack = {
+        "rules_api_version": 2,
+        "rules": [
+            {
+                "id": "double",
+                "trigger": {"event": "ActorDied"},
+                "then": [
+                    {"do": "adjust_counter", "scope_ref": "f:houses", "key": "x", "delta": 1},
+                    {"do": "adjust_counter", "scope_ref": "f:houses", "key": "x", "delta": 1},
+                ],
+                "scope": {"faction": "f:houses"},
+            }
+        ],
+    }
+    _, c = await _counter_campaign(store, pack)
+    await _kill(store, c)
+    assert await store.get_counter(c.branch_id, "f:houses", "x") == 2  # both, not 1
+
+
+async def test_counter_write_out_of_scope_is_dropped(store: PostgresEventStore) -> None:
+    pack = {
+        "rules_api_version": 2,
+        "rules": [
+            {
+                "id": "overreach",
+                "trigger": {"event": "ActorDied"},
+                # scoped to t:feud but writes a faction counter → out of jurisdiction → dropped
+                "then": [{"do": "adjust_counter", "scope_ref": "f:houses", "key": "y", "delta": 5}],
+                "scope": {"thread": "t:feud"},
+            }
+        ],
+    }
+    _, c = await _counter_campaign(store, pack)
+    await _kill(store, c)
+    assert await store.get_counter(c.branch_id, "f:houses", "y") == 0  # never written
+
+
+async def test_v1_packs_still_valid_under_v2_engine() -> None:
+    from uro_core.worldpack.rules import RulePack
+
+    RulePack(**_FEUD_PACK)  # declares version 1 — must still validate (additive grammar)

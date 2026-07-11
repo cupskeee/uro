@@ -1,10 +1,15 @@
 # 19 — The Computation Layer (engine-owned numeric state) — PROPOSAL
 
-> **STATUS: PROPOSAL, not accepted.** Nothing built; no `D-34` in `decisions.md` yet. Output of the
-> 2026-07-12 design pass (ground → 4 approaches → 3 judge lenses → synthesize → risk critic),
-> triggered because the **D-33 Stage-B evidence gate fired** (all four games in `examples/games/`
-> produced refusal logs — see `docs/18`). If accepted it supersedes one D-33 clause as **D-34**.
-> React to it — especially the **honest coverage boundary** and the open questions — before any code.
+> **STATUS: ACCEPTED (owner, 2026-07-12) — INC-C1 SHIPPED.** From the 2026-07-12 design pass
+> (ground → 4 approaches → 3 judge lenses → synthesize → risk critic), triggered because the **D-33
+> Stage-B evidence gate fired** (all four games in `examples/games/` produced refusal logs — see
+> `docs/18`). **D-34 is appended to `decisions.md` at the tier's phase-end review** (after the owner
+> decides how far to take the staged increments), per the repo rhythm.
+>
+> **Decided (owner):** OQ-1 → ship the counter core first, **defer computed-delta arithmetic** (the
+> economy-formula half) as the reserved tier's sharper gate. OQ-2 → the multi-ref scope (C2) will be
+> a **`world` scope** (explicit whole-realm jurisdiction — the thing Sable/Ironwake hacked around
+> with umbrella factions); exact shape finalized when C2 is built.
 
 ## The problem the games proved
 
@@ -107,13 +112,15 @@ games flagged) — ship it *with* the numbers.
 
 ## Staged build sequence
 
-1. **INC-C1 (L — the core + the shadow-state fix, MUST):** migration 015 + `CounterChanged` +
-   `_counter_changed` handler + `_SNAPSHOT_TABLES` entry + `get_counter`/`list_counters` +
-   `CondCounter` + `set/adjust/reset` + **in-pass accumulation** + mandatory `_MAX_COUNTER`
-   (fail-closed) + a **dropped/clamped audit trail** + `RULES_API_VERSION` 1→2 + docs/12 catalog +
-   emitter-whitelist (M). Wired at both hooks. **Acceptance MUST fork past a snapshot boundary and
-   assert the counter survives byte-identically**, + a meteor-with-counter replay test. Covers RL-1
-   (all four), single-entity fixed accumulation.
+1. **INC-C1 ✅ DONE (L — the core + the shadow-state fix):** migration 015 + `CounterChanged` +
+   `_counter_changed` handler + `_SNAPSHOT_TABLES["counters"]` + `get_counter`/`list_counters` +
+   `CondCounter` + `set/adjust/reset_counter` + **in-pass accumulation** (read-your-writes) +
+   mandatory `_MAX_COUNTER` (fail-closed) + **logged dropped/clamped diagnostics** (a projected
+   audit trail is the fuller B11 follow-up) + `RULES_API_VERSION` 1→2 (supported set `{1,2}` — v1
+   packs stay valid; `CounterChanged` deliberately **not** triggerable until C6/cascade to avoid the
+   accepted-but-inert footgun). Wired at both hooks. Tests: accumulate + threshold (one-beat lag);
+   **counter survives a fork**; two adjusts both count; out-of-scope write dropped; v1-pack compat.
+   Covers RL-1 (all four games), single-entity fixed accumulation. Commit-ready.
 2. **INC-C2 (M — co-requisite pair):** the multi-ref / `world` scope generalization (B11 — a
    cross-entity counter has *no* single-dimension jurisdiction today, so this is a hard co-requisite,
    not optional) + `counter_compare` + `count_set`/`count_edges`. Covers RL-3, RL-5.

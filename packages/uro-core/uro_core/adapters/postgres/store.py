@@ -1079,6 +1079,29 @@ class PostgresEventStore:
             )
         return [ThreadView(**dict(r)) for r in rows]
 
+    async def get_counter(self, branch_id: str, scope_ref: str, key: str) -> int:
+        """A Computation-Layer integer counter (docs/19, D-34); 0 when absent."""
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT value FROM proj_counters "
+                "WHERE branch_id = $1 AND scope_ref = $2 AND key = $3",
+                branch_id,
+                scope_ref,
+                key,
+            )
+        return int(value) if value is not None else 0
+
+    async def list_counters(self, branch_id: str, scope_ref: str) -> list[tuple[str, int]]:
+        """All (key, value) counters on a scope entity, ordered by key."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT key, value FROM proj_counters WHERE branch_id = $1 AND scope_ref = $2 "
+                "ORDER BY key",
+                branch_id,
+                scope_ref,
+            )
+        return [(r["key"], int(r["value"])) for r in rows]
+
     async def edges_from(self, branch_id: str, src: str) -> list[EdgeView]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(

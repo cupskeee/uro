@@ -27,7 +27,7 @@ from uro_core.worldpack.models import (
     WorldManifest,
     WorldPack,
 )
-from uro_core.worldpack.rules import RULES_API_VERSION, RulePack
+from uro_core.worldpack.rules import RulePack
 
 
 def parse_pack(root: str | Path) -> WorldPack:
@@ -64,12 +64,9 @@ def _rule_pack(root: Path) -> RulePack | None:
             raise PackError(f"{path.name} must be a YAML mapping (with rules_api_version + {key})")
         data.setdefault("rules_api_version", raw.get("rules_api_version"))
         data[key] = raw.get(key, [])
-    if data.get("rules_api_version") != RULES_API_VERSION:
-        raise PackError(
-            f"rule pack declares rules_api_version={data.get('rules_api_version')!r}; "
-            f"this engine supports {RULES_API_VERSION}"
-        )
     try:
+        # RulePack's model validator enforces the supported-version set (docs/19: v1 and v2) + the
+        # closed grammar — one authority for parse, runtime, and import.
         return RulePack(**data)  # type: ignore[arg-type]
     except ValidationError as exc:
         raise PackError(f"rule pack failed validation: {exc}") from exc

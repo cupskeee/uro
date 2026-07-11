@@ -813,6 +813,20 @@ class ThreadStateChangedPayload(BaseModel):
     from_state: str = ""  # advisory (what the emitter believed it was); state is set to to_state
 
 
+class CounterChangedPayload(BaseModel):
+    """The Computation Layer's numeric state (docs/19, D-34): a bounded integer counter keyed by
+    (scope_ref, key). Carries the ABSOLUTE value, never a delta (a delta double-counts on replay);
+    the projector UPSERTs by (branch, scope_ref, key) and preserves created_day. Bookkeeping DATA —
+    structurally never canon: this event can only ever touch proj_counters."""
+
+    v: int = 1
+    scope_ref: str
+    key: str
+    to_value: int
+    created_day: int = 0
+    updated_day: int = 0
+
+
 class HistorySeededPayload(BaseModel):
     v: int = 1
     seed: int
@@ -925,6 +939,32 @@ def thread_state_changed(
         caused_by=_default_cause(caused_by),
         payload=ThreadStateChangedPayload(
             thread_id=thread_id, to_state=to_state, from_state=from_state
+        ).model_dump(),
+    )
+
+
+def counter_changed(
+    *,
+    scope_ref: str,
+    key: str,
+    to_value: int,
+    created_day: int = 0,
+    updated_day: int = 0,
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    """Set a bounded integer counter to its ABSOLUTE value (docs/19, D-34). Emitted only by the
+    Reaction Layer gauntlet (`caused_by=module_cause(...)`); the projector UPSERTs proj_counters by
+    (branch, scope_ref, key) and preserves created_day, so replay/fork re-apply idempotently."""
+    return DomainEvent(
+        event_type="CounterChanged",
+        entity_refs=[scope_ref],
+        caused_by=_default_cause(caused_by),
+        payload=CounterChangedPayload(
+            scope_ref=scope_ref,
+            key=key,
+            to_value=to_value,
+            created_day=created_day,
+            updated_day=updated_day,
         ).model_dump(),
     )
 

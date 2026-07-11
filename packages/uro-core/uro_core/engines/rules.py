@@ -99,6 +99,9 @@ async def _eval(
         return any(e.rel_type == cond.rel and e.dst == cond.dst for e in edges)  # type: ignore[union-attr]
     if kind == "world_day":
         return _cmp(world_day, cond.op, cond.value)  # type: ignore[union-attr]
+    if kind == "counter":
+        value = await store.get_counter(branch_id, cond.scope_ref, cond.key)  # type: ignore[union-attr]
+        return _cmp(value, cond.op, cond.value)  # type: ignore[union-attr]
     return False  # unreachable — the union is closed
 
 

@@ -24,9 +24,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from uro_core.domain import events as _events
 from uro_core.domain.events import ThreadState
 
-# The one supported grammar version. A pack MUST pin `rules_api_version`; a mismatch fails loud at
-# parse (closes the reserved-but-unenforced TEMPLATE_API_VERSION gap — decided-OQ, docs/17).
-RULES_API_VERSION = 1
+# The current grammar version. v2 adds the Computation Layer's counter conditions/actions (docs/19,
+# D-34). The additions are purely additive, so v1 packs (no counters) remain valid — the engine
+# accepts the whole SUPPORTED set; a pack outside it fails loud at parse. A counter-using pack
+# should declare 2 so an old (v1) engine rejects it with a clear version error.
+RULES_API_VERSION = 2
+_SUPPORTED_VERSIONS = frozenset({1, 2})
 
 
 def _event_payload_fields() -> dict[str, frozenset[str]]:
@@ -40,6 +43,10 @@ def _event_payload_fields() -> dict[str, frozenset[str]]:
         if name.endswith("Payload") and isinstance(obj, type) and issubclass(obj, BaseModel):
             out[name[: -len("Payload")]] = frozenset(obj.model_fields)
     out.setdefault("EdgeUpdated", out.get("EdgeAdded", frozenset()))  # reuses EdgeAddedPayload
+    # CounterChanged is emitted ONLY by the reaction gauntlet, so it appears only in module beats —
+    # which react() does not re-process (single-hop, no cascade until C6). A trigger on it would be
+    # accepted-but-inert, so it is NOT triggerable yet (remove this line when C6 lands cascade).
+    out.pop("CounterChanged", None)
     return out
 
 
@@ -92,6 +99,18 @@ class CondWorldDay(BaseModel):
     value: int = Field(ge=0)
 
 
+class CondCounter(BaseModel):
+    """Compare a Computation-Layer counter to a constant (docs/19, D-34): the threshold read that
+    RL-1 (tension→war, heat→lockdown, dread-after-3) needs. Single-entity in C1."""
+
+    model_config = _STRICT
+    kind: Literal["counter"]
+    scope_ref: str
+    key: str
+    op: CmpOp
+    value: int
+
+
 class CondAll(BaseModel):
     model_config = _STRICT
     kind: Literal["all"]
@@ -116,6 +135,7 @@ Condition = Annotated[
     | CondActorIsPC
     | CondEdgeExists
     | CondWorldDay
+    | CondCounter
     | CondAll
     | CondAny
     | CondNot,
@@ -131,6 +151,33 @@ class ActSetThreadState(BaseModel):
     do: Literal["set_thread_state"]
     thread: str
     to: ThreadState
+
+
+# Computation Layer (docs/19, D-34): bounded integer-counter writes → CounterChanged events. The
+# gauntlet clamps to ±_MAX_COUNTER, scope-fences scope_ref, and accumulates within a pass
+# (read-your-writes). `adjust`'s delta is a LITERAL — computed-from-other-counter deltas (economy
+# formulas, RL-2/RL-6) are deliberately NOT in this tier (docs/19 OQ-1).
+class ActSetCounter(BaseModel):
+    model_config = _STRICT
+    do: Literal["set_counter"]
+    scope_ref: str
+    key: str
+    value: int
+
+
+class ActAdjustCounter(BaseModel):
+    model_config = _STRICT
+    do: Literal["adjust_counter"]
+    scope_ref: str
+    key: str
+    delta: int
+
+
+class ActResetCounter(BaseModel):
+    model_config = _STRICT
+    do: Literal["reset_counter"]
+    scope_ref: str
+    key: str
 
 
 class ActCreateThread(BaseModel):
@@ -177,7 +224,10 @@ Action = Annotated[
     | ActRecordRumor
     | ActSpreadBelief
     | ActAddEdge
-    | ActRemoveEdge,
+    | ActRemoveEdge
+    | ActSetCounter
+    | ActAdjustCounter
+    | ActResetCounter,
     Field(discriminator="do"),
 ]
 
@@ -253,10 +303,11 @@ class RulePack(BaseModel):
         # The version pin is enforced on the MODEL, not just at parse — so it holds on every
         # RulePack construction: parse_pack, the runtime _react/agenda_tick path (rebuilt from the
         # inline WorldGenesis payload), and import (which replays that payload without re-parsing).
-        # Closes the P5 seam where an imported v2 pack would run under v1 semantics (docs/17, D-33).
-        if v != RULES_API_VERSION:
+        # Closes the P5 seam where an imported pack would run under the wrong semantics (docs/17).
+        if v not in _SUPPORTED_VERSIONS:
             raise ValueError(
-                f"rules_api_version {v} unsupported; this engine supports {RULES_API_VERSION}"
+                f"rules_api_version {v} unsupported; this engine supports "
+                f"{sorted(_SUPPORTED_VERSIONS)}"
             )
         return v
 

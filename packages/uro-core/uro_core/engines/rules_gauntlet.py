@@ -21,9 +21,12 @@ enforces the Phase-8/D-32 bar on untrusted pack rules:
 
 from __future__ import annotations
 
+import logging
+
 from uro_core.domain.events import (
     DomainEvent,
     claim_recorded,
+    counter_changed,
     edge_added,
     edge_removed,
     module_cause,
@@ -35,8 +38,13 @@ from uro_core.engines.rules import FiredAction
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.worldpack.rules import Scope
 
+logger = logging.getLogger(__name__)
+
 _MAX_ACTIONS = 32  # per pass — a bundle cap (multi-campaign DoS guard)
 _MAX_WITNESSES = 64  # per spread_belief
+_MAX_COUNTER = (
+    1_000_000_000  # magnitude cap (docs/19 D-34): unbounded accumulation is the DoS vector
+)
 
 
 async def _scope_refs(store: ProjectionQueries, branch_id: str, scope: Scope) -> set[str]:
@@ -54,15 +62,52 @@ async def _scope_refs(store: ProjectionQueries, branch_id: str, scope: Scope) ->
     return set()
 
 
+def _clamp(v: int) -> int:
+    return max(-_MAX_COUNTER, min(_MAX_COUNTER, v))
+
+
 async def _translate(
     store: ProjectionQueries,
     branch_id: str,
     fired: FiredAction,
     allowed: set[str],
     trigger_commit: str,
+    pending: dict[tuple[str, str], int],
+    world_day: int,
 ) -> list[DomainEvent]:
     a = fired.action
     cause = module_cause(fired.rule_id)
+    if a.do in ("set_counter", "adjust_counter", "reset_counter"):
+        # Computation Layer (docs/19, D-34): scope-fence the write, accumulate within the pass
+        # (read-your-writes so two adjusts to one key both count), clamp fail-closed, emit ABSOLUTE.
+        if a.scope_ref not in allowed:
+            logger.warning(
+                "rule %r: counter write to %r dropped (out of scope)", fired.rule_id, a.scope_ref
+            )
+            return []
+        k = (a.scope_ref, a.key)
+        if k not in pending:  # seed the running value from committed state, once per pass
+            pending[k] = await store.get_counter(branch_id, a.scope_ref, a.key)
+        if a.do == "set_counter":
+            new_value = a.value
+        elif a.do == "reset_counter":
+            new_value = 0
+        else:  # adjust_counter
+            new_value = pending[k] + a.delta
+        clamped = _clamp(new_value)
+        if clamped != new_value:
+            logger.warning("rule %r: counter %s clamped to +/-_MAX_COUNTER", fired.rule_id, k)
+        pending[k] = clamped
+        return [
+            counter_changed(
+                scope_ref=a.scope_ref,
+                key=a.key,
+                to_value=clamped,
+                created_day=world_day,
+                updated_day=world_day,
+                caused_by=cause,
+            )
+        ]
     if a.do == "set_thread_state":
         if a.thread not in allowed:
             return []
@@ -126,7 +171,11 @@ async def run_rules_gauntlet(
     """Turn fired ACTION proposals into a bounded, safe event set (dropped actions contribute
     nothing). Deterministic: preserves the interpreter's total order; ids key on trigger_commit."""
     events: list[DomainEvent] = []
+    pending: dict[tuple[str, str], int] = {}  # in-pass counter accumulation (read-your-writes)
+    world_day = await store.current_world_time(branch_id)
     for f in fired[:_MAX_ACTIONS]:
         allowed = await _scope_refs(store, branch_id, f.scope)
-        events.extend(await _translate(store, branch_id, f, allowed, trigger_commit))
+        events.extend(
+            await _translate(store, branch_id, f, allowed, trigger_commit, pending, world_day)
+        )
     return events

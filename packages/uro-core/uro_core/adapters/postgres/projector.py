@@ -296,6 +296,23 @@ async def _thread_state_changed(
     )
 
 
+async def _counter_changed(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # Computation Layer (docs/19, D-34): UPSERT the absolute value; PRESERVE created_day on conflict
+    # (only updated_day moves) so counter/claim age math works. Idempotent by (branch, scope, key).
+    await conn.execute(
+        "INSERT INTO proj_counters (branch_id, scope_ref, key, value, created_day, updated_day) "
+        "VALUES ($1, $2, $3, $4, $5, $6) "
+        "ON CONFLICT (branch_id, scope_ref, key) DO UPDATE SET "
+        "value = EXCLUDED.value, updated_day = EXCLUDED.updated_day",
+        branch_id,
+        p["scope_ref"],
+        p["key"],
+        int(p["to_value"]),
+        int(p.get("created_day", 0)),
+        int(p.get("updated_day", 0)),
+    )
+
+
 _HANDLERS = {
     "ActorCreated": _actor_created,
     "ActorPromoted": _actor_promoted,
@@ -315,6 +332,7 @@ _HANDLERS = {
     "ItemTransferred": _item_transferred,
     "ThreadCreated": _thread_created,
     "ThreadStateChanged": _thread_state_changed,
+    "CounterChanged": _counter_changed,
     "FactionCreated": _faction_created,
     "EdgeAdded": _edge_added,
     "EdgeUpdated": _edge_added,
@@ -354,6 +372,7 @@ _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "factions": ("faction_id", "name", "kind", "description"),
     "edges": ("src", "rel_type", "dst", "weight", "attrs"),
     "threads": ("thread_id", "stakes", "state", "provenance"),
+    "counters": ("scope_ref", "key", "value", "created_day", "updated_day"),
 }
 
 

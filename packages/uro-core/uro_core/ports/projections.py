@@ -40,6 +40,14 @@ class ProjectionQueries(Protocol):
 
     async def list_threads(self, branch_id: str) -> list[ThreadView]: ...
 
+    async def get_counter(self, branch_id: str, scope_ref: str, key: str) -> int:
+        """A Computation-Layer integer counter (docs/19, D-34); 0 when absent."""
+        ...
+
+    async def list_counters(self, branch_id: str, scope_ref: str) -> list[tuple[str, int]]:
+        """All (key, value) counters on a scope entity, ordered by key (deterministic)."""
+        ...
+
     async def world_style(self, branch_id: str) -> tuple[str, dict[str, str]]:
         """The narrator style (tone joined) + prompt-template overrides for a branch's world
         (docs/09), from its WorldGenesis. ('', {}) for a world created without a pack."""
