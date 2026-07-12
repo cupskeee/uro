@@ -239,6 +239,7 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
                 pc_sheet=pc_sheet,
                 ruleset_id=ruleset_id,
                 ruleset_version=world_rver,
+                seed=int(body.get("seed") or 0),  # docs/18 G-3: reproducible-combat seed
             )
         except (ValueError, KeyError) as exc:  # bad PC choice, or world pins an absent ruleset
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -100,6 +100,16 @@ assert set(_SECTION_KEYS) == set(_SNAPSHOT_TABLES), (
 )
 
 
+# The campaign RNG seed (G-3) is stored in a signed BIGINT column; reject out-of-range values with a
+# clean ValueError (→ CLI error / REST 400) instead of a raw asyncpg OverflowError at the INSERT.
+_INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
+
+
+def _check_seed(seed: int) -> None:
+    if not (_INT64_MIN <= seed <= _INT64_MAX):
+        raise ValueError(f"seed {seed} out of range (must fit a signed 64-bit integer)")
+
+
 def _vector_literal(vector: list[float]) -> str:
     """pgvector text form: '[0.1,0.2,...]' — passed as text and cast ::vector in SQL."""
     return "[" + ",".join(f"{x:.6f}" for x in vector) + "]"
@@ -448,21 +458,24 @@ class PostgresEventStore:
             )
         return World(**dict(row)) if row else None
 
-    async def create_campaign(self, world_id: str, branch_id: str) -> Campaign:
+    async def create_campaign(self, world_id: str, branch_id: str, *, seed: int = 0) -> Campaign:
+        _check_seed(seed)  # G-3: uniform with start_campaign — this entry point can pin a seed too
         campaign_id = new_id()
         async with self.pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO campaigns (campaign_id, world_id, branch_id) VALUES ($1, $2, $3)",
+                "INSERT INTO campaigns (campaign_id, world_id, branch_id, seed) "
+                "VALUES ($1, $2, $3, $4)",
                 campaign_id,
                 world_id,
                 branch_id,
+                seed,
             )
-        return Campaign(campaign_id=campaign_id, world_id=world_id, branch_id=branch_id)
+        return Campaign(campaign_id=campaign_id, world_id=world_id, branch_id=branch_id, seed=seed)
 
     async def get_campaign(self, campaign_id: str) -> Campaign | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT campaign_id, world_id, branch_id, ruleset_id, ruleset_version "
+                "SELECT campaign_id, world_id, branch_id, ruleset_id, ruleset_version, seed "
                 "FROM campaigns WHERE campaign_id = $1",
                 campaign_id,
             )
@@ -493,6 +506,7 @@ class PostgresEventStore:
         caller (which holds the ruleset) builds the sheet; the store never interprets it."""
         if (adopt_actor_id is None) == (new_pc_name is None):
             raise ValueError("start_campaign needs exactly one of adopt_actor_id / new_pc_name")
+        _check_seed(seed)  # G-3: the RNG seed lands in a BIGINT column — validate before the INSERT
         campaign_id = new_id()
         events: list[DomainEvent] = []
         if adopt_actor_id is not None:
@@ -540,12 +554,13 @@ class PostgresEventStore:
                     )
             await conn.execute(
                 "INSERT INTO campaigns (campaign_id, world_id, branch_id, ruleset_id, "
-                "ruleset_version) VALUES ($1, $2, $3, $4, $5)",
+                "ruleset_version, seed) VALUES ($1, $2, $3, $4, $5, $6)",
                 campaign_id,
                 world_id,
                 branch_id,
                 ruleset_id,
                 ruleset_version,
+                seed,
             )
             await self._append(conn, branch_id, events)
         return Campaign(
@@ -554,6 +569,7 @@ class PostgresEventStore:
             branch_id=branch_id,
             ruleset_id=ruleset_id,
             ruleset_version=ruleset_version,
+            seed=seed,
         )
 
     async def end_campaign(
@@ -907,7 +923,7 @@ class PostgresEventStore:
         """All campaigns, optionally scoped to a world (docs/18 B3). Ordered by id."""
         async with self.pool.acquire() as conn:
             base = (
-                "SELECT campaign_id, world_id, branch_id, ruleset_id, ruleset_version "
+                "SELECT campaign_id, world_id, branch_id, ruleset_id, ruleset_version, seed "
                 "FROM campaigns"
             )
             if world_id is None:

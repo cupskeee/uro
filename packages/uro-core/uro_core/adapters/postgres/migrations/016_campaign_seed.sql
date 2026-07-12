@@ -1,0 +1,12 @@
+-- G-3 (docs/18): make a played-through campaign's mechanics REPRODUCIBLE run-to-run. Before this,
+-- Engine._beat_rng hashed (campaign_id : head_commit) — BOTH freshly random per run (new_id()) — so
+-- the same intents produced different d20/2d6 rolls every run (even on a REPLAY of the same log), and
+-- a "guaranteed-loss" fight would occasionally flip (a flaky gate, Seventh Vault G-3). The fix reseeds
+-- _beat_rng from the campaign's persisted seed + the commit DEPTH (a deterministic generation count),
+-- so the RNG STREAM is a pure function of (seed, depth) — a fight then replays identically given an
+-- identical event log up to it (which is what makes the deterministic-provider CI gate reproducible;
+-- live-LLM runs can still vary the log). The seed lives on CampaignStarted (payload) already;
+-- denormalize it here (like ruleset_id) so get_campaign can load it without replaying the event.
+-- BIGINT: the seed is a 48-bit-ish integer; DEFAULT 0 keeps every pre-existing campaign valid
+-- (seed 0 is a fine, fully-deterministic default — tests pin it, `uro campaign new --seed` sets it).
+ALTER TABLE campaigns ADD COLUMN seed BIGINT NOT NULL DEFAULT 0;

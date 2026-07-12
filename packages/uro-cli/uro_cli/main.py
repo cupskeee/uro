@@ -685,6 +685,9 @@ def campaign_new(
     adopt: str = typer.Option(None, "--adopt", help="adopt an existing actor id as the PC"),
     pc: str = typer.Option(None, "--pc", help="create a fresh PC with this name"),
     participant: str = typer.Option(PARTICIPANT, "--participant", help="participant id"),
+    seed: int = typer.Option(
+        0, "--seed", help="mechanics RNG seed (docs/18 G-3) — pin it for reproducible combat"
+    ),
 ) -> None:
     """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one)."""
 
@@ -723,6 +726,7 @@ def campaign_new(
                 starting_items=["a traveler's knife"] if pc is not None else None,
                 ruleset_id=ruleset_id,
                 ruleset_version=world_rver,
+                seed=seed,
             )
         finally:
             await store.close()

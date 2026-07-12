@@ -660,11 +660,21 @@ class Engine:
         return resolve_mechanics(self._ruleset, plan, sheets, pc_actor_id, rng)
 
     async def _beat_rng(self, campaign: Campaign) -> Rng:
-        """A per-beat seeded Rng derived from the campaign + the commit it builds on — stable
-        and reproducible for the same history, so a beat's rolls replay (docs/06, 10)."""
+        """A per-beat seeded Rng from the campaign SEED + the commit DEPTH it builds on (G-3).
+
+        The RNG STREAM is now a pure function of (seed, depth): the seed is fixed at campaign
+        creation (persisted) and depth is the generation count from genesis — no random per-run id.
+        (Before G-3 this hashed campaign_id:head_commit, both freshly `new_id()` per run, so even a
+        REPLAY of the same log rolled different dice and a guaranteed-loss fight would occasionally
+        flip — a flaky gate.) Honest scope: this fixes the RNG stream, not the whole outcome — the
+        outcome also depends on the sheets/combatants the beat feeds the ruleset. So a fight replays
+        identically GIVEN an identical event log up to it; that holds under a deterministic provider
+        (the stub — which is what makes the CI gate reproducible, G-3's actual target) or on replay,
+        but NOT necessarily across live-LLM runs, where the log (hence depth, hence whether/where a
+        fight even triggers) can itself vary."""
         branch = await self._store.get_branch(campaign.branch_id)
-        head = (branch.head_commit if branch else None) or campaign.branch_id
-        digest = hashlib.sha256(f"{campaign.campaign_id}:{head}".encode()).hexdigest()
+        depth = branch.head_depth if branch else 0
+        digest = hashlib.sha256(f"{campaign.seed}:{depth}".encode()).hexdigest()
         return Rng(int(digest[:12], 16))
 
     async def _remember(

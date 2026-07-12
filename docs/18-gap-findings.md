@@ -103,13 +103,27 @@ fork/event-sourcing) → adversarial verify (default-REJECTED) → a completenes
 
 ### P3 — smaller / documentation / ergonomics
 
-> **[DECIDE] G-3 — beat RNG isn't reproducible across runs** (Seventh Vault G-3; discovered during
-> the B4 build to be a **flaky-gate root cause**): `_beat_rng` seeds off the fresh-per-run
-> `campaign_id`, so combat outcomes vary run to run (a party test occasionally saw a PC survive a
-> guaranteed-loss fight). Proper fix = wire `CampaignStarted.seed` into `_beat_rng` — but that
-> changes every pinned combat outcome (meteor / seed-sweep / alien acceptance) and needs a
-> derivation choice, so it's its OWN increment, not a small fix. Interim: the affected party test
-> was pinned to seed-sweep-proven guaranteed-lose stats so the gate is deterministic.
+> **G-3 — beat RNG's flaky-gate root cause — ✅ DONE** (Seventh Vault G-3; discovered during the B4
+> build). `_beat_rng` hashed the fresh-per-run `campaign_id : head_commit` (both `new_id()`), so the
+> mechanics RNG differed **even on a replay of the same event log** — a guaranteed-loss fight would
+> occasionally flip (a flaky gate). **Fixed:** `_beat_rng` now derives from the campaign's
+> **persisted seed** + the commit **depth** (both deterministic, no per-run id). The seed lives on
+> `CampaignStarted` and is denormalized to `campaigns.seed` (migration 016, `DEFAULT 0` so
+> pre-existing campaigns stay valid); `start_campaign` writes it, `get_campaign`/`list_campaigns`
+> load it, `Campaign.seed` carries it; `uro campaign new --seed` (and REST `create_campaign` body
+> `seed`) pin it (validated to int64). No re-pin storm: the acceptances are seed-INVARIANT (PC loses
+> across all seeds) so all 34 integration combat tests passed unchanged; `tests/test_beat_rng.py`
+> proves the property.
+>
+> **Honest scope (don't overclaim):** the fix makes the **RNG stream** a pure function of
+> `(seed, depth)` — it does *not* make the whole combat *outcome* a function of only those (the
+> outcome also depends on the sheets/combatants the beat feeds the ruleset). A fight therefore
+> replays identically **given an identical event log up to it** — which holds under a deterministic
+> provider (the stub, so the **CI gate is now reproducible — G-3's actual target**) or on replay,
+> but **not necessarily across live-LLM runs**, where the extractor/planner can vary the events a
+> beat emits (and whether `react()` appends a module beat), shifting `depth` and even whether/where
+> a fight triggers. Committed *events* also still carry random ids, so it is not byte-identical-event
+> replay through the engine (the `run_encounter` UNIT, given a fixed `encounter_id`, already was).
 
 Item-transfer from a free-roam beat (Ironwake, Seventh G-7, Hollow G-8 — no non-encounter effect
 channel) · game↔world **time mapping** + `time_cost` is a dead field + once-per-skip agenda
