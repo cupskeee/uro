@@ -30,6 +30,35 @@ Confirmed against the code, in-scope, small — fixed immediately:
    exception-isolation → one typo darkened the whole pack. **Fixed:** `create_world` validates the
    pack loudly; the runtime swallow stays a safety net.
 
+## Holistic cross-item review (2026-07-12) — all [AUTO] items landed
+
+After the [AUTO] items shipped (B1, B2/D-34, B4, B5, B6, B3, small-fixes, the four landed-already
+fixes), a **system-wide cross-item review** ran per the owner directive ("a final review on all
+backlog holistically — redundancy or conflict between each backlog work"): 14 agents, five find
+dimensions (read-surface drift · write-path conflict · port/boundary · trust/authority ·
+fork/event-sourcing) → adversarial verify (default-REJECTED) → a completeness critic. **3 confirmed +
+2 critic → 6 fixes; 0 in the highest-risk seams** (read-surface drift, counter-RMW TOCTOU, and the
+`_SECTION_KEYS`/`_SNAPSHOT_TABLES` catalogs were all *verified* clean).
+
+- **[MEDIUM, the real one] B3 REST × D-30 + Phase-3.** REST `create_campaign`/`join` pinned no
+  ruleset (`ruleset_id=""`) and built no PC sheet — so a PbtA world's campaign started over REST
+  silently fell to `uro-basic` with mechanics disabled, *and* the empty pin bypassed the WS
+  cross-ruleset guard. **Fixed:** the REST path now reads `world_ruleset`, sheets the PC via the
+  registry, and pins `ruleset_id/version` exactly like the CLI — REST and CLI campaigns no longer
+  diverge.
+- **[LOW] B3 × B5 read-endpoint 400 contract.** `GET /state?sections=<typo>` (via B5
+  `query_across`) and `GET /chronicle?limit=abc` and `POST /time-skip {days<=0}` returned `500`,
+  unlike every mutating endpoint. **Fixed:** bad input → `400` across the read surface.
+- **[LOW, redundancy — the directive's headline] B1 × B6.** The server's outcome route hand-rolled
+  `append_beat` + `react` — the exact forgotten-`react` footgun **B1's `append_and_react` exists to
+  retire**. **Fixed:** it now calls `append_and_react`.
+- **[hardening] B5 × projector.** An import-time assert now keeps `_SECTION_KEYS` (diff PKs) and
+  `_SNAPSHOT_TABLES` (fork/query catalog) in lockstep, so a future projection can't drift them apart.
+- **Verified-clean (no change):** `/roster` vs `/state?sections=pcs` read the same authoritative
+  `proj_pcs` (no drift); `agenda_tick`'s window read is stale-safe because the `_react_lock` wraps
+  the whole counter RMW; the concrete store matches the B3/B5 ports and no core-ring module imports
+  the server or an adapter (the hexagonal contract is KEPT).
+
 ## The backlog (ranked by cross-game corroboration)
 
 > **Triage (2026-07-12) — autonomous vs needs-owner-decision.** Working the backlog under a directive

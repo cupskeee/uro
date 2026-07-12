@@ -67,6 +67,7 @@ class EventStore(Protocol):
         pc_sheet: dict[str, Any] | None = None,
         starting_items: list[str] | None = None,
         ruleset_id: str = "",
+        ruleset_version: str = "",
         seed: int = 0,
     ) -> Campaign:
         """Create a campaign on a branch and bind its PC (adopt an existing actor or make

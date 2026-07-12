@@ -91,6 +91,52 @@ async def test_management_surface_world_campaign_join_reads(store: PostgresEvent
         assert isinstance(chron["beats"], list)
 
 
+async def test_rest_campaign_pins_ruleset_and_sheets_the_pc(store: PostgresEventStore) -> None:
+    # holistic-review fix (B3 x D-30 + Phase-3): a REST-created campaign must pin the world's
+    # resolved ruleset (not "") and sheet its PC, matching the CLI path — else mechanics never
+    # engage and the WS cross-ruleset guard is bypassed by an empty pin.
+    async with _client(store) as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": "Pinned"})).json()["world_id"]
+        c = (
+            await client.post(
+                _q(f"/worlds/{world_id}/campaigns"),
+                json={"participant": "alice", "new_pc_name": "Ash"},
+            )
+        ).json()["campaign_id"]
+        # the campaign pins the resolved default ruleset (non-empty) — D-30
+        assert (await client.get(_q(f"/campaigns/{c}"))).json()["ruleset_id"] == "uro-basic"
+        # the fresh PC has a character sheet — Phase-3 (visible in the sheets projection)
+        sheets = (await client.get(_q(f"/campaigns/{c}/state?sections=sheets"))).json()
+        assert len(sheets["state"]["sheets"]) >= 1
+        # a joining participant is likewise sheeted
+        await client.post(
+            _q(f"/campaigns/{c}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+        )
+        sheets2 = (await client.get(_q(f"/campaigns/{c}/state?sections=sheets"))).json()
+        assert len(sheets2["state"]["sheets"]) >= 2
+
+
+async def test_bad_query_params_are_400(store: PostgresEventStore) -> None:
+    # holistic-review fix (B3 x B5 + B3-internal): read endpoints honor the same bad-input→400
+    # contract as the mutating ones (was: unknown ?sections= / non-int ?limit= / days<=0 → 500).
+    async with _client(store) as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": "R"})).json()["world_id"]
+        c = (
+            await client.post(
+                _q(f"/worlds/{world_id}/campaigns"),
+                json={"participant": "alice", "new_pc_name": "Ash"},
+            )
+        ).json()["campaign_id"]
+        assert (await client.get(_q(f"/campaigns/{c}/state?sections=bogus"))).status_code == 400
+        assert (await client.get(_q(f"/campaigns/{c}/chronicle?limit=abc"))).status_code == 400
+        assert (
+            await client.post(_q(f"/campaigns/{c}/time-skip"), json={"days": 0})
+        ).status_code == 400
+        assert (
+            await client.post(_q(f"/campaigns/{c}/time-skip"), json={"days": -5})
+        ).status_code == 400
+
+
 async def test_management_surface_requires_auth(store: PostgresEventStore) -> None:
     async with _client(store) as client:
         assert (await client.get("/worlds")).status_code == 401  # no token
@@ -102,6 +148,16 @@ async def test_management_surface_404s(store: PostgresEventStore) -> None:
         assert (await client.get(_q("/campaigns/nope"))).status_code == 404
         r = await client.post(_q("/worlds/nope/campaigns"), json={"participant": "alice"})
         assert r.status_code == 404
+
+
+async def test_bad_rule_pack_is_400_not_500(store: PostgresEventStore) -> None:
+    # cross-item seam (B3 REST x the landed "validate rule-pack loudly" fix): create_world raises
+    # a pydantic ValidationError (a ValueError) on a bad pack → the REST surface must 400, not 500.
+    async with _client(store) as client:
+        r = await client.post(
+            _q("/worlds"), json={"name": "Bad", "rule_pack": {"version": 999, "rules": []}}
+        )
+        assert r.status_code == 400
 
 
 async def test_malformed_body_is_400_not_500(store: PostgresEventStore) -> None:

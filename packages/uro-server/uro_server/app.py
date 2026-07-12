@@ -29,6 +29,28 @@ def _bearer_token(request: Request) -> str:
     return auth[7:] if auth.lower().startswith("bearer ") else ""
 
 
+def _default_sheet(ruleset_id: str, version: str) -> tuple[dict[str, Any], str]:
+    """A default character sheet from a world's declared ruleset (docs/06, D-30) — mirrors the
+    CLI's `_build_pc_sheet` so a REST-created PC is sheeted+pinned exactly like a CLI-created one
+    (else the ruleset's move/harm layer never engages and the WS cross-ruleset guard is bypassed by
+    an empty pin). Built via the registry, independent of the server's process-bound ruleset.
+    Returns (sheet, resolved ruleset id)."""
+    from uro_core.rulesets.base import CharSpec
+    from uro_core.rulesets.registry import resolve as _resolve
+    from uro_core.rulesets.rng import Rng
+
+    ruleset = _resolve(ruleset_id, version)
+    return ruleset.new_character(CharSpec(), Rng(0)), ruleset.id
+
+
+def _resolve_ruleset_id(ruleset_id: str, version: str) -> str:
+    """The resolved ruleset id for a world's declared (id, version) — for pinning a campaign whose
+    PC we don't (re)sheet (an adopted actor that already has one)."""
+    from uro_core.rulesets.registry import resolve as _resolve
+
+    return _resolve(ruleset_id, version).id
+
+
 @dataclass
 class ServerDeps:
     """The seam between the transport shell and the engine (docs/01: server sees only ports)."""
@@ -78,12 +100,13 @@ def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> S
             raise HTTPException(status_code=404, detail="no such campaign")
         bundle = OutcomeBundle.model_validate(bundle_json)
         result = await distill_outcome_with_receipt(store, campaign.branch_id, bundle)
-        commit = await store.append_beat(campaign.branch_id, result.events)
-        # Reaction Layer (docs/17, D-33): an EXTERNAL death is the war-story premise — combat is
-        # non-lethal (lethal=False), so the Chronicler is the only runtime ActorDied source, and a
-        # pack rule triggering on ActorDied must fire here too, not only on the run_beat path.
-        # react() is exception-isolated — the outcome beat is already durable.
-        await engine.react(campaign, commit.commit_id, result.events)
+        # Commit + react in ONE call (B1, docs/18): an EXTERNAL death is the war-story premise —
+        # combat is non-lethal, so the Chronicler is the only runtime ActorDied source, and a pack
+        # rule triggering on ActorDied must fire here too, not only on the run_beat path. Using
+        # append_and_react (not a hand-rolled append_beat + react) is exactly what B1 landed for —
+        # authored-commit callers shouldn't re-implement the react step. react() is
+        # exception-isolated, so the outcome beat is durable even if a rule raises.
+        commit = await engine.append_and_react(campaign, result.events)
         # The per-ref receipt (docs/18 B6) tells the reporting game what was applied/downgraded/
         # dropped and why — otherwise a Chronicler consumer couldn't see the D-32 downgrades.
         return {
@@ -166,9 +189,13 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         tone = body.get("tone")
         if isinstance(tone, str):  # allow a bare-string tone from a JSON consumer
             tone = [tone]
-        w = await _mgmt().create_world(
-            _require(body, "name"), tone=tone, rule_pack=body.get("rule_pack") or None
-        )
+        try:
+            # create_world validates a Reaction-Layer rule_pack LOUDLY (the "silent pack death" fix,
+            # docs/18): a malformed pack from a REST client is bad INPUT → 400, not a 500.
+            pack = body.get("rule_pack") or None
+            w = await _mgmt().create_world(_require(body, "name"), tone=tone, rule_pack=pack)
+        except ValueError as exc:  # pydantic ValidationError (bad rule_pack) subclasses ValueError
+            raise HTTPException(status_code=400, detail=f"invalid world: {exc}") from exc
         return {"world_id": w.world_id, "main_branch_id": w.main_branch_id, "name": w.name}
 
     @app.get("/worlds")
@@ -187,15 +214,33 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         world = await store.get_world(world_id)
         if world is None:
             raise HTTPException(status_code=404, detail="no such world")
+        participant = _require(body, "participant")
+        new_pc_name = body.get("new_pc_name")
+        adopt_actor_id = body.get("adopt_actor_id")
         try:
+            # Pin the WORLD's declared ruleset + sheet the PC (D-30 + Phase-3), like the CLI `uro
+            # campaign new` path — a REST-created PbtA campaign must not silently fall to an empty
+            # pin + no sheet (which bypasses the WS cross-ruleset guard and disables mechanics).
+            world_rid, world_rver = await store.world_ruleset(world.main_branch_id)
+            pc_sheet: dict[str, Any] | None = None
+            if new_pc_name is not None or (
+                adopt_actor_id is not None
+                and await store.get_sheet(world.main_branch_id, adopt_actor_id) is None
+            ):
+                pc_sheet, ruleset_id = _default_sheet(world_rid, world_rver)
+            else:  # adopting an already-sheeted actor: keep its sheet, still pin the ruleset
+                ruleset_id = _resolve_ruleset_id(world_rid, world_rver)
             c = await store.start_campaign(
                 world_id,
                 world.main_branch_id,
-                participant_id=_require(body, "participant"),
-                new_pc_name=body.get("new_pc_name"),
-                adopt_actor_id=body.get("adopt_actor_id"),
+                participant_id=participant,
+                new_pc_name=new_pc_name,
+                adopt_actor_id=adopt_actor_id,
+                pc_sheet=pc_sheet,
+                ruleset_id=ruleset_id,
+                ruleset_version=world_rver,
             )
-        except ValueError as exc:  # "exactly one of adopt_actor_id / new_pc_name"
+        except (ValueError, KeyError) as exc:  # bad PC choice, or world pins an absent ruleset
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"campaign_id": c.campaign_id, "branch_id": c.branch_id}
 
@@ -221,16 +266,29 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
     ) -> dict[str, Any]:
         _auth(request)
         store = _mgmt()
-        if await store.get_campaign(campaign_id) is None:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
+        participant = _require(body, "participant")
+        new_pc_name = body.get("new_pc_name")
+        adopt_actor_id = body.get("adopt_actor_id")
         try:
+            # Sheet the joining PC from the campaign's ruleset (D-30 + Phase-3), like CLI join.
+            pc_sheet: dict[str, Any] | None = None
+            if new_pc_name is not None or (
+                adopt_actor_id is not None
+                and await store.get_sheet(campaign.branch_id, adopt_actor_id) is None
+            ):
+                pc_sheet, _ = _default_sheet(campaign.ruleset_id, campaign.ruleset_version)
             actor_id = await store.bind_pc(
                 campaign_id,
-                _require(body, "participant"),
-                new_pc_name=body.get("new_pc_name"),
-                adopt_actor_id=body.get("adopt_actor_id"),
+                participant,
+                new_pc_name=new_pc_name,
+                adopt_actor_id=adopt_actor_id,
+                pc_sheet=pc_sheet,
+                ruleset_id=campaign.ruleset_id,
             )
-        except ValueError as exc:  # "exactly one of adopt_actor_id / new_pc_name"
+        except (ValueError, KeyError) as exc:  # bad PC choice, or an absent pinned ruleset
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"actor_id": actor_id}
 
@@ -248,7 +306,12 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             raise HTTPException(status_code=404, detail="no such campaign")
         raw = request.query_params.get("sections") or "actors,threads,places,factions"
         sections = raw.split(",")
-        across = await store.query_across([c.branch_id], sections)
+        try:
+            # query_across raises on an unknown section (typo-loud, B5) — a client typo is bad
+            # INPUT → 400, matching every mutating endpoint (not a bare 500).
+            across = await store.query_across([c.branch_id], sections)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"branch_id": c.branch_id, "state": across.get(c.branch_id, {})}
 
     @app.get("/campaigns/{campaign_id}/chronicle")
@@ -258,7 +321,10 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         c = await store.get_campaign(campaign_id)
         if c is None:
             raise HTTPException(status_code=404, detail="no such campaign")
-        limit = int(request.query_params.get("limit") or 20)
+        try:
+            limit = int(request.query_params.get("limit") or 20)
+        except ValueError as exc:  # ?limit=abc is bad input → 400, not a 500
+            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
         beats = await store.recent_beats(c.branch_id, limit)
         return {"beats": [b.model_dump() for b in beats]}
 
@@ -275,6 +341,8 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             days = int(_require(body, "days"))
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="days must be an integer") from exc
+        if days <= 0:  # store.time_skip rejects this deeper (a 500); catch it here as bad input
+            raise HTTPException(status_code=400, detail="days must be a positive integer")
         return await deps.advance_time(campaign_id, days)
 
     @app.websocket("/campaigns/{campaign_id}/play")

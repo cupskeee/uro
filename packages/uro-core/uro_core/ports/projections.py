@@ -67,6 +67,11 @@ class ProjectionQueries(Protocol):
         (docs/09), from its WorldGenesis. ('', {}) for a world created without a pack."""
         ...
 
+    async def world_ruleset(self, branch_id: str) -> tuple[str, str]:
+        """The (ruleset_id, ruleset_version) a branch's world declares (docs/06, D-30), from its
+        WorldGenesis. ('', '') for a world with no pinned ruleset → the registry default."""
+        ...
+
     async def world_rule_pack(self, branch_id: str) -> dict[str, Any]:
         """The branch's world's Reaction-Layer rule pack (docs/17), from its WorldGenesis, inline.
         {} for a world with no rule pack — the caller short-circuits (no reactions)."""

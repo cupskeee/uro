@@ -90,6 +90,15 @@ _SECTION_KEYS: dict[str, tuple[str, ...]] = {
     "counters": ("scope_ref", "key"),
 }
 
+# Fail-closed (docs/18 holistic review): query_across validates a section against _SNAPSHOT_TABLES,
+# but diff_branches indexes _SECTION_KEYS after defaulting to the full _SNAPSHOT_TABLES catalog — so
+# a future projection added to one dict but not the other would make diff KeyError instead of
+# raising typo-loud. Keep them in lockstep at import: adding a projection forces adding its PK here.
+assert set(_SECTION_KEYS) == set(_SNAPSHOT_TABLES), (
+    "_SECTION_KEYS (diff PKs) and _SNAPSHOT_TABLES (fork/query catalog) drifted: "
+    f"{set(_SECTION_KEYS) ^ set(_SNAPSHOT_TABLES)}"
+)
+
 
 def _vector_literal(vector: list[float]) -> str:
     """pgvector text form: '[0.1,0.2,...]' — passed as text and cast ::vector in SQL."""
