@@ -66,20 +66,26 @@ def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> S
             yield chunk
 
     async def report_outcome(campaign_id: str, bundle_json: dict[str, Any]) -> dict[str, Any]:
-        from uro_core.chronicler import OutcomeBundle, distill_outcome
+        from uro_core.chronicler import OutcomeBundle, distill_outcome_with_receipt
 
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
         bundle = OutcomeBundle.model_validate(bundle_json)
-        events = await distill_outcome(store, campaign.branch_id, bundle)
-        commit = await store.append_beat(campaign.branch_id, events)
+        result = await distill_outcome_with_receipt(store, campaign.branch_id, bundle)
+        commit = await store.append_beat(campaign.branch_id, result.events)
         # Reaction Layer (docs/17, D-33): an EXTERNAL death is the war-story premise — combat is
         # non-lethal (lethal=False), so the Chronicler is the only runtime ActorDied source, and a
         # pack rule triggering on ActorDied must fire here too, not only on the run_beat path.
         # react() is exception-isolated — the outcome beat is already durable.
-        await engine.react(campaign, commit.commit_id, events)
-        return {"committed_events": len(events), "commit_id": commit.commit_id}
+        await engine.react(campaign, commit.commit_id, result.events)
+        # The per-ref receipt (docs/18 B6) tells the reporting game what was applied/downgraded/
+        # dropped and why — otherwise a Chronicler consumer couldn't see the D-32 downgrades.
+        return {
+            "committed_events": len(result.events),
+            "commit_id": commit.commit_id,
+            "receipt": [r.model_dump() for r in result.receipt],
+        }
 
     return ServerDeps(
         resolve_participant=lambda token: tokens.get(token),

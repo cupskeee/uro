@@ -214,3 +214,28 @@ async def test_loot_to_a_fallen_recipient_is_dropped(store: PostgresEventStore) 
     await store.append_beat(branch, await distill_outcome(store, branch, bundle))
     item = await store.get_item(branch, "i:sword")
     assert item["owner_ref"] == "a:grull"  # never moved to the dead raider
+
+
+async def test_ingestion_receipt_reports_dispositions(store: PostgresEventStore) -> None:
+    # gap B6 (Ironwake rows 1-2, Seventh G-22): a Chronicler consumer learns per-ref what its bundle
+    # did — an applied death, a protected-canon DOWNGRADE, a dropped loot — not just a bare count.
+    from uro_core.chronicler import distill_outcome_with_receipt
+
+    branch = await _world(store)
+    bundle = OutcomeBundle(
+        encounter_id="e:receipt",
+        participants=["a:grull", "a:king", "a:hero"],
+        casualties=["a:grull", "a:king"],  # grull dies (T1 in-cast); king downgrades (T3 protected)
+        loot=[
+            LootTransfer(item_id="i:crown", from_ref="a:king", to_ref="a:hero")
+        ],  # king protected
+    )
+    result = await distill_outcome_with_receipt(store, branch, bundle)
+    by_ref = {(r.kind, r.ref): r.disposition for r in result.receipt}
+    assert by_ref[("casualty", "a:grull")] == "applied"
+    assert (
+        by_ref[("casualty", "a:king")] == "downgraded"
+    )  # protected → rumor, visible to the consumer
+    assert by_ref[("loot", "i:crown")] == "dropped"  # king's gear can't be looted out-of-band
+    # and the wrapper still returns just events for the ergonomic path
+    assert isinstance(await distill_outcome(store, branch, bundle), list)
