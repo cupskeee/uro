@@ -74,6 +74,14 @@ Confirmed against the code, in-scope, small — fixed immediately:
 
 ### P3 — smaller / documentation / ergonomics
 
+> **[DECIDE] G-3 — beat RNG isn't reproducible across runs** (Seventh Vault G-3; discovered during
+> the B4 build to be a **flaky-gate root cause**): `_beat_rng` seeds off the fresh-per-run
+> `campaign_id`, so combat outcomes vary run to run (a party test occasionally saw a PC survive a
+> guaranteed-loss fight). Proper fix = wire `CampaignStarted.seed` into `_beat_rng` — but that
+> changes every pinned combat outcome (meteor / seed-sweep / alien acceptance) and needs a
+> derivation choice, so it's its OWN increment, not a small fix. Interim: the affected party test
+> was pinned to seed-sweep-proven guaranteed-lose stats so the gate is deterministic.
+
 Item-transfer from a free-roam beat (Ironwake, Seventh G-7, Hollow G-8 — no non-encounter effect
 channel) · game↔world **time mapping** + `time_cost` is a dead field + once-per-skip agenda
 semantics (all 4) · `AliasAdded` / actor-merge for post-hoc entity repair (Sable G-5) · loot

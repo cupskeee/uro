@@ -151,6 +151,14 @@ async def test_encounter_aggressor_is_the_acting_participants_pc(store: Postgres
                 ruleset_id="uro-basic",
             ),
             item_created(item_id="i:club", name="club", owner_ref="a:grull"),
+            # Re-sheet Bob to the seed-sweep-proven guaranteed-LOSE stats (test_encounter asserts
+            # these lose across 300 seeds vs this brute), so the attribution assertion below is
+            # deterministic regardless of the per-run campaign_id in _beat_rng (the G-3 flake root).
+            sheet_updated(
+                actor_id="a:bob",
+                sheet=_sheet({"STR": 8, "DEX": 4, "CON": 18}),
+                ruleset_id="uro-basic",
+            ),
         ],
     )
     # p2 (Bob) attacks with NO explicit actor ref — the aggressor must default to Bob (p2's PC),

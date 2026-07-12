@@ -20,7 +20,7 @@ from uro_core.domain.events import BeatResolvedPayload
 from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
-from uro_core.timeline.models import ActorView, BeliefView, ClaimView, ThreadView
+from uro_core.timeline.models import ActorView, BeliefView, ClaimView, PlaceView, ThreadView
 
 
 class RecallBundle(BaseModel):
@@ -37,6 +37,10 @@ class RecallBundle(BaseModel):
     # story instead of only mutating proj_threads invisibly. Not scene-scoped (threads have no
     # entity refs); dormant/resolved/dead are excluded (not in play / concluded).
     active_threads: list[ThreadView] = Field(default_factory=list)
+    # PLACES the beat mentions (name-matched, like on-stage actors) — so the narrator sees a place's
+    # current state (docs/04 gap B4: a place changing hands or being DESTROYED was invisible; the
+    # meteor's crater, a holding that changed owner). Closes the last structured-recall deferral.
+    places: list[PlaceView] = Field(default_factory=list)
 
 
 def _name_token(name: str) -> str:
@@ -97,6 +101,10 @@ async def assemble_recall(
         t for t in await store.list_threads(branch_id) if t.state in ("active", "offered")
     ]
 
+    # Places the beat MENTIONS (by name), so the narrator sees their current state — especially a
+    # destroyed place or a changed description it would otherwise narrate as still-standing (B4).
+    places = [p for p in await store.list_places(branch_id) if _mentions(haystack, p.name)]
+
     return RecallBundle(
         recent_beats=recent,
         actors=on_stage,
@@ -104,6 +112,7 @@ async def assemble_recall(
         beliefs=beliefs,
         belief_claims=belief_claims,
         active_threads=active_threads,
+        places=places,
     )
 
 
@@ -174,6 +183,15 @@ def build_narrator_messages(
             "ACTIVE THREADS (ongoing plots — keep them in motion):\n"
             + "\n".join(f"- {t.stakes}" for t in recall.active_threads)
         )
+    # Places in the scene + their CURRENT state (docs/04 B4): so the narrator honors a place that
+    # was destroyed or changed — never describe a crater as the town it used to be.
+    if recall.places:
+        place_lines = []
+        for p in recall.places:
+            state = "" if p.status == "active" else f" [{p.status.upper()}]"
+            desc = f" — {p.description}" if p.description else ""
+            place_lines.append(f"- {p.name}{state}{desc}")
+        context_lines.append("PLACES (current state — honor it):\n" + "\n".join(place_lines))
     # Mechanics results the ruleset produced this beat (docs/06): the narrator MUST honor the
     # outcome — a failed persuade check cannot be narrated as a success.
     if mechanics_traces:

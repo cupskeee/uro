@@ -123,3 +123,43 @@ async def test_assemble_recall_surfaces_only_live_threads(store: PostgresEventSt
     recall = await assemble_recall(store, branch, "what is happening?", 8)
     live = {t.thread_id for t in recall.active_threads}
     assert live == {"t:live", "t:offer"}  # active + offered only; dormant/resolved excluded
+
+
+def test_narrator_prompt_surfaces_place_state() -> None:
+    from uro_core.timeline.models import PlaceView
+
+    recall = RecallBundle(
+        recent_beats=[],
+        actors=[],
+        claims=[],
+        beliefs=[],
+        places=[
+            PlaceView(
+                place_id="p:vel",
+                name="Vel",
+                kind="settlement",
+                status="destroyed",
+                description="a smoking crater where the city stood",
+            ),
+        ],
+    )
+    blob = "\n".join(m.content for m in build_narrator_messages(recall, "I ride toward Vel"))
+    assert "PLACES" in blob and "Vel [DESTROYED]" in blob and "smoking crater" in blob
+
+
+async def test_assemble_recall_surfaces_a_mentioned_place(store: PostgresEventStore) -> None:
+    from uro_core.domain.events import place_created, place_destroyed
+
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            place_created(place_id="p:vel", name="Vel", kind="settlement", description="a city"),
+            place_created(place_id="p:far", name="Faroff", kind="settlement", description="far"),
+            place_destroyed(place_id="p:vel", cause="the meteor"),
+        ],
+    )
+    recall = await assemble_recall(store, branch, "I approach the ruins of Vel", 8)
+    names = {p.name: p.status for p in recall.places}
+    assert names.get("Vel") == "destroyed"  # the mentioned place + its current state
+    assert "Faroff" not in names  # not mentioned → not surfaced
