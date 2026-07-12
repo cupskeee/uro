@@ -48,6 +48,20 @@ class ProjectionQueries(Protocol):
         """All (key, value) counters on a scope entity, ordered by key (deterministic)."""
         ...
 
+    async def query_across(
+        self, branch_ids: list[str], sections: list[str]
+    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        """Read projection `sections` across many branches, one query per section (docs/18 B5) →
+        {branch_id: {section: [rows]}} — the aggregate read a branch tree view needs."""
+        ...
+
+    async def diff_branches(
+        self, branch_a: str, branch_b: str, sections: list[str] | None = None
+    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        """What differs between two branches, per section: {section: {added, removed, changed}}
+        (docs/18 B5). Read-only."""
+        ...
+
     async def world_style(self, branch_id: str) -> tuple[str, dict[str, str]]:
         """The narrator style (tone joined) + prompt-template overrides for a branch's world
         (docs/09), from its WorldGenesis. ('', {}) for a world created without a pack."""

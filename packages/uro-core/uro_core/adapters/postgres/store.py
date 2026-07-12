@@ -14,6 +14,7 @@ from typing import Any
 import asyncpg
 
 from uro_core.adapters.postgres.projector import (
+    _SNAPSHOT_TABLES,
     apply_event,
     apply_raw,
     restore_snapshot,
@@ -72,6 +73,22 @@ from uro_core.timeline.models import (
 # replays forward, so this only trades snapshot storage for replay length — never
 # correctness. Instance-overridable so tests can exercise the snapshot path cheaply.
 SNAPSHOT_EVERY = 50
+
+# Per-section PRIMARY KEY columns — how diff_branches matches "the same row" across two branches
+# (docs/18 B5). A subset of each section's _SNAPSHOT_TABLES columns.
+_SECTION_KEYS: dict[str, tuple[str, ...]] = {
+    "actors": ("actor_id",),
+    "claims": ("claim_id",),
+    "beliefs": ("actor_id", "claim_id"),
+    "places": ("place_id",),
+    "pcs": ("campaign_id", "actor_id"),
+    "sheets": ("actor_id",),
+    "items": ("item_id",),
+    "factions": ("faction_id",),
+    "edges": ("src", "rel_type", "dst"),
+    "threads": ("thread_id",),
+    "counters": ("scope_ref", "key"),
+}
 
 
 def _vector_literal(vector: list[float]) -> str:
@@ -1101,6 +1118,57 @@ class PostgresEventStore:
                 scope_ref,
             )
         return [(r["key"], int(r["value"])) for r in rows]
+
+    async def query_across(
+        self, branch_ids: list[str], sections: list[str]
+    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        """Read `sections` (proj_* projection names) across many branches at once (docs/18 B5): the
+        core UI of a branching consumer (Hollowloop's loop tree) needed N-times-round-trips before;
+        this is ONE query per section (`branch_id = ANY(...)`). Returns {branch_id: {section:
+        [rows]}}, rows deterministically ordered. Unknown sections raise (typo-loud)."""
+        for s in sections:
+            if s not in _SNAPSHOT_TABLES:
+                raise ValueError(f"unknown section {s!r}; known: {sorted(_SNAPSHOT_TABLES)}")
+        out: dict[str, dict[str, list[dict[str, Any]]]] = {
+            b: {s: [] for s in sections} for b in branch_ids
+        }
+        async with self.pool.acquire() as conn:
+            for section in sections:
+                cols = _SNAPSHOT_TABLES[section]
+                rows = await conn.fetch(
+                    f"SELECT branch_id, {', '.join(cols)} FROM proj_{section} "
+                    f"WHERE branch_id = ANY($1::text[]) ORDER BY branch_id, {', '.join(cols)}",
+                    branch_ids,
+                )
+                for r in rows:
+                    d = dict(r)
+                    out[d.pop("branch_id")][section].append(d)
+        return out
+
+    async def diff_branches(
+        self, branch_a: str, branch_b: str, sections: list[str] | None = None
+    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+        """What differs between two branches, per section (docs/18 B5): {section: {added, removed,
+        changed}} keyed by each section's PK — `added` = in B not A, `removed` = in A not B,
+        `changed` = same PK, different non-key columns (each entry carries the B-side row). Sections
+        default to the full projection catalog. Read-only; touches no events/replay."""
+        sections = sections or list(_SNAPSHOT_TABLES)
+        both = await self.query_across([branch_a, branch_b], sections)
+        result: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        for section in sections:
+            key_cols = _SECTION_KEYS[section]
+
+            def _key(row: dict[str, Any]) -> tuple[Any, ...]:
+                return tuple(row[c] for c in key_cols)  # noqa: B023 (key_cols is per-iteration)
+
+            a_by = {_key(r): r for r in both[branch_a][section]}
+            b_by = {_key(r): r for r in both[branch_b][section]}
+            added = [b_by[k] for k in b_by if k not in a_by]
+            removed = [a_by[k] for k in a_by if k not in b_by]
+            changed = [b_by[k] for k in b_by if k in a_by and b_by[k] != a_by[k]]
+            if added or removed or changed:
+                result[section] = {"added": added, "removed": removed, "changed": changed}
+        return result
 
     async def edges_from(self, branch_id: str, src: str) -> list[EdgeView]:
         async with self.pool.acquire() as conn:
