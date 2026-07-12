@@ -52,7 +52,6 @@ class BeatPlan(BaseModel):
     # Advisory only — the pipeline decides the encounter transition from the invoked
     # `starts_encounter` affordance (mechanics-gated, D-21/D-26), NOT from this field.
     mode_transition: ModeTransition | None = None
-    time_cost: int = 0
     narration_directives: str = ""
     suggestions: list[str] = Field(default_factory=list)
 
@@ -88,7 +87,7 @@ def build_planner_messages(
         '"targets": [ids], "triggers": [categories], '
         '"mechanics": [{"affordance","actor","target","context"}], '
         '"mode_transition": null or {"to":"encounter","cause":""}, '
-        '"time_cost": 0, "narration_directives": "one line of pacing", "suggestions": ["..."]}'
+        '"narration_directives": "one line of pacing", "suggestions": ["..."]}'
     )
     system = (env or DEFAULT_ENV).render("planner.system.j2")
     return [Message(role="system", content=system), Message(role="user", content=user)]

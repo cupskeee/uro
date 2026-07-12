@@ -463,7 +463,10 @@ def serve(
     host: str = typer.Option("127.0.0.1", help="bind address"),
     port: int = typer.Option(8000, help="bind port"),
     token: list[str] = typer.Option(  # noqa: B008 (typer DI-style default, like every option here)
-        None, "--token", help="bearer token → participant (repeatable; token mode, docs/08)"
+        None,
+        "--token",
+        help="bearer token → participant (repeatable). `TOK=participant` names it explicitly (e.g. "
+        "--token tok-a=alice); a bare `TOK` maps positionally to player-1..N (docs/08, gap G-16)",
     ),
     provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
     model: str = typer.Option(None, help="model id for the provider"),
@@ -483,7 +486,12 @@ def serve(
     from uro_server.app import create_app, engine_deps
 
     toks = token or ["local"]
-    tokens = {t: f"player-{i + 1}" for i, t in enumerate(toks)}
+    # `TOK=participant` names the participant explicitly (gap G-16 — token order was load-bearing
+    # config); a bare `TOK` falls back to positional player-1..N.
+    tokens: dict[str, str] = {}
+    for i, t in enumerate(toks):
+        tok, sep, name = t.partition("=")
+        tokens[tok] = name if sep else f"player-{i + 1}"
     store = build_store()
     engine = Engine(store, build_router(provider, model), ruleset=build_ruleset(ruleset))
     # More than one token → a party: round-robin free-roam turns (OQ-7, D-31). One token → solo

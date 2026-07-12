@@ -170,6 +170,8 @@ async def distill_outcome(
             continue  # nonexistent item, or from_ref is not the current owner (forged transfer)
         if loot.from_ref not in participants or loot.to_ref not in participants:
             continue  # both sides must be declared combatants (scope)
+        if loot.to_ref in bundle.casualties:
+            continue  # gap Ironwake: a recipient reported as fallen can't carry loot off the field
         if await _is_protected(store, branch_id, loot.from_ref):
             continue  # a PC's / named actor's gear is not looted out-of-band by an external game
         events.append(

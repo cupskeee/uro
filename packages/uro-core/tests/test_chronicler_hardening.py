@@ -199,3 +199,18 @@ async def test_feat_actor_resolves_like_the_extractor_exact_name_wins(
     # the feat attaches to the EXACT-name actor (a:strexact), in cast — not the canonical dup
     assert any("rout" in c.statement for c in await store.claims_about(branch, "a:strexact"))
     assert not any("rout" in c.statement for c in await store.claims_about(branch, "a:strdup"))
+
+
+async def test_loot_to_a_fallen_recipient_is_dropped(store: PostgresEventStore) -> None:
+    # gap Ironwake: a recipient reported as a casualty can't carry loot off the field. grull's sword
+    # would transfer to the raider, but the raider is ALSO a casualty this bundle → dropped.
+    branch = await _world(store)
+    bundle = OutcomeBundle(
+        encounter_id="e:loot-dead",
+        participants=["a:grull", "a:raider"],
+        casualties=["a:grull", "a:raider"],  # both fell; the raider can't receive loot
+        loot=[LootTransfer(item_id="i:sword", from_ref="a:grull", to_ref="a:raider")],
+    )
+    await store.append_beat(branch, await distill_outcome(store, branch, bundle))
+    item = await store.get_item(branch, "i:sword")
+    assert item["owner_ref"] == "a:grull"  # never moved to the dead raider
