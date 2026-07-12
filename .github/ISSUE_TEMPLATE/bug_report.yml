@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in the engine, server, or CLI behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For anything **security-sensitive**, please use a
+        [private advisory](https://github.com/cupskeee/uro/security/advisories/new) instead
+        (see [SECURITY.md](https://github.com/cupskeee/uro/blob/main/SECURITY.md)).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what actually happened.
+      placeholder: I ran `uro play …` and the beat committed a claim that should have been fenced…
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that triggers it. A failing test or `hello_uro`-style snippet is ideal.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      description: Which provider path? (CI/deterministic issues are highest-priority.)
+      options:
+        - stub (deterministic — no key)
+        - local / Ollama (OpenAI-compatible)
+        - openai
+        - anthropic
+        - not applicable
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, and whether Postgres (pgvector, host port 5433) was up.
+      placeholder: "macOS 15 · Python 3.12.4 · Postgres up (docker compose)"
+    validations:
+      required: true
+  - type: textarea
+    id: gate
+    attributes:
+      label: "`just test` output (if relevant)"
+      description: Paste the failing gate / traceback. Redact any secrets.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: This is reproducible on `main`.

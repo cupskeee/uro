@@ -1,0 +1,38 @@
+name: Feature request / idea
+description: Propose a capability, or a change to the engine's design.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Uro is a **proof-of-concept engine** with a deliberately scoped design. Before proposing,
+        it's worth skimming [docs/11-open-questions.md](https://github.com/cupskeee/uro/blob/main/docs/11-open-questions.md)
+        (the deliberately-unresolved areas), [docs/18-gap-findings.md](https://github.com/cupskeee/uro/blob/main/docs/18-gap-findings.md)
+        (the evidence-backed backlog), and [docs/decisions.md](https://github.com/cupskeee/uro/blob/main/docs/decisions.md)
+        (many "why not X" answers already live here).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem / use case
+      description: What are you trying to build on the engine that it doesn't support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed direction
+      description: How might the engine address it? Note if it touches an invariant (hexagonal boundary, event-sourcing, forward-only migrations).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing primitives (export packs, the reaction layer, Chronicler mode, rulesets) you tried or ruled out.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked docs/11, docs/18, and docs/decisions.md, and this isn't already answered or tracked.
+          required: true
