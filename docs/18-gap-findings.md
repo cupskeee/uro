@@ -32,6 +32,20 @@ Confirmed against the code, in-scope, small — fixed immediately:
 
 ## The backlog (ranked by cross-game corroboration)
 
+> **Triage (2026-07-12) — autonomous vs needs-owner-decision.** Working the backlog under a directive
+> to clear everything that doesn't need an owner decision. Each item is tagged **[AUTO]** (shape is
+> evidence-specified; build + review) or **[DECIDE]** (a genuine fork the owner should pick — flagged,
+> not built). **AUTO:** B3 (endpoints enumerated), B4, B5 (API specified in Hollowloop G-5), B6
+> *ingestion-receipt half*, and the P3 pure-fixes (loot to_ref liveness, `--token NAME=PARTICIPANT`,
+> expose `campaign_pcs`, remove the dead `time_cost` field). **[DECIDE] (flagged below, not built):**
+> B2 C3–C6 + computed-delta (owner staged as evidence-gated; OQ-1 defers computed-delta); B6
+> *parked-encounter registry* (OQ-12 — waits for a real external game); B7 arbiter shapes (OQ-7 —
+> UX/semantics design); B8 cross-fork memory (a never-forked lane — reverses fork semantics); B9
+> deterministic planner path (approach choice); B10 session event-sourcing (reverses D-31 "turn state
+> is session-only"); rumor statement-distortion (distortion model); branch GC (retention policy);
+> pack thread-state vocabularies (grammar latitude); append-time emitter whitelist (repeatedly
+> deferred as structural-at-source-suffices; hot-path risk). Dispositions annotated per item below.
+
 ### P0 — hit by 3–4 games, clear win
 
 | # | Finding | Games | What Uro needs | Notes |
