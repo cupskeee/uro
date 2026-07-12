@@ -86,4 +86,4 @@ uv run python examples/hello_uro/hello_uro.py   # embed the engine as a library 
 
 ## Provenance
 
-This documentation supersedes `deep-research-report.md` (an LLM deep-research output kept for reference). The report described a consumer *platform*; these docs re-scope the project to the *engine* and fold in the owner's feedback. Where the report and these docs disagree, these docs win.
+The project began from an LLM deep-research report that described a consumer *platform*. These docs re-scope it to the *engine* and fold in the owner's feedback; they are the single source of truth (`docs/` is authoritative — when code and docs disagree, one is fixed to match the other in the same commit).
