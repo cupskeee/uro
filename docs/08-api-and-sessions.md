@@ -29,6 +29,34 @@ GET    /usage?world=&campaign=&stage=   token/latency metering
 GET    /healthz
 ```
 
+### What actually ships (docs/18 B3)
+
+The table above is the aspirational surface. Until B3 only `WS /campaigns/{c}/play` and the
+Chronicler `POST …/outcome` were wired — every other management op forced embedding `uro-core`
+(the "*Uro has a server* vs *Uro is a server*" gap four games hit). B3 lands a real, authed
+management surface over the `EngineStore` port (`ServerDeps.store`; `501` when a deployment wires
+transport-only deps). **Built now:**
+
+```
+POST /worlds                     {name, tone?, rule_pack?}         create (JSON body, not pack-upload yet)
+GET  /worlds                                                       list
+POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id}   start_campaign
+GET  /campaigns                  [?world_id=]                      list
+GET  /campaigns/{c}                                                one campaign
+POST /campaigns/{c}/join         {participant, new_pc_name|adopt_actor_id}   bind an additional PC
+GET  /campaigns/{c}/roster                                         active PC ids
+GET  /campaigns/{c}/state        [?sections=actors,threads,…]      query_across the branch's projections (B5)
+GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats
+POST /campaigns/{c}/time-skip    {days}                            engine agenda_tick (D-33)
+```
+
+The shipped `state`/`chronicle` reads are **campaign-scoped** (they resolve the campaign's branch)
+rather than the aspirational `world`-scoped `?branch=&at=` form; a malformed body is `400`, an
+unknown campaign/world `404`. Still **CLI-only / scaffolded** (deferred, not regressed): world
+`seed`/`branches`/`probe`/`export`/`import`, the SSE `POST …/beats` (play is WS), and `GET /usage`.
+Authority is coarse — a valid token authorizes the call, but the acting `participant` is taken from
+the body (finer endpoint→campaign authority is deferred, docs/18 P3).
+
 The WebSocket channel carries: client→server `intent`, `encounter_action` *(future — encounters auto-resolve in the PoC, D-29)*, `pin_actor`; server→client `narration_chunk`, `scene_update`, `mechanics_result`, `mode_change`, `beat_started`, `beat_committed`, `beat_failed`, `not_your_turn` *(round-robin turn arbitration, D-31)*, `intent_rejected`, `suggestions`, `participant_*`. Message envelope always includes `campaign_id`, `beat_id`, and `participant_id` — that last one is the multiplayer seam (below).
 
 Beat results may carry `suggestions[]` — 2–4 affordance-grounded next-action hints emitted by the planner at no extra LLM cost (D-23). **Free-text intent is canonical**; suggestions are hints clients may ignore entirely (the CLI renders them dimmed), never a constrained choice list.

@@ -884,6 +884,31 @@ class PostgresEventStore:
             )
         return World(**dict(row)) if row else None
 
+    async def list_worlds(self) -> list[World]:
+        """All worlds (docs/18 B3 — a consumer's lobby needs discovery). Ordered by id."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT w.world_id, w.name, b.branch_id AS main_branch_id "
+                "FROM worlds w JOIN branches b "
+                "  ON b.world_id = w.world_id AND b.name = 'main' ORDER BY w.world_id"
+            )
+        return [World(**dict(r)) for r in rows]
+
+    async def list_campaigns(self, world_id: str | None = None) -> list[Campaign]:
+        """All campaigns, optionally scoped to a world (docs/18 B3). Ordered by id."""
+        async with self.pool.acquire() as conn:
+            base = (
+                "SELECT campaign_id, world_id, branch_id, ruleset_id, ruleset_version "
+                "FROM campaigns"
+            )
+            if world_id is None:
+                rows = await conn.fetch(base + " ORDER BY campaign_id")
+            else:
+                rows = await conn.fetch(
+                    base + " WHERE world_id = $1 ORDER BY campaign_id", world_id
+                )
+        return [Campaign(**dict(r)) for r in rows]
+
     async def get_branch(self, branch_id: str) -> BranchInfo | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(_BRANCH_SELECT + "WHERE b.branch_id = $1", branch_id)

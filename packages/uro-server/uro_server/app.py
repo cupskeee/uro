@@ -40,6 +40,11 @@ class ServerDeps:
     ]  # (campaign, participant, intent) → chunks
     # Chronicler mode (D-25): distill an external game's outcome bundle → committed events.
     report_outcome: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
+    # Management surface (docs/18 B3): the EngineStore port (a Protocol — the server still sees only
+    # ports) powers the CRUD/read endpoints; `advance_time` runs an engine-backed time-skip+agendas.
+    # None → those endpoints return 501 (a fake-deps test that only exercises play/outcome).
+    store: EngineStore | None = None
+    advance_time: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None
 
 
 def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> ServerDeps:
@@ -87,11 +92,21 @@ def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> S
             "receipt": [r.model_dump() for r in result.receipt],
         }
 
+    async def advance_time(campaign_id: str, days: int) -> dict[str, Any]:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        await engine.agenda_tick(campaign.branch_id, days)  # time-skip + downtime agendas (D-33)
+        world_day = await store.current_world_time(campaign.branch_id)
+        return {"branch_id": campaign.branch_id, "world_day": world_day}
+
     return ServerDeps(
         resolve_participant=lambda token: tokens.get(token),
         campaign_exists=campaign_exists,
         run_beat=run_beat,
         report_outcome=report_outcome,
+        store=store,
+        advance_time=advance_time,
     )
 
 
@@ -124,6 +139,143 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             campaign_id, {"type": "outcome_recorded", "encounter_id": encounter_id, **result}
         )
         return result
+
+    # --- management surface (docs/18 B3): the CRUD/read endpoints a non-Python or non-co-located
+    # consumer needs (before this, only WS play + outcome existed → every management op forced the
+    # library). All authed like the rest; 501 if the deps carry no store. ---
+
+    def _auth(request: Request) -> None:
+        token = request.query_params.get("token") or _bearer_token(request)
+        if deps.resolve_participant(token) is None:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    def _mgmt() -> EngineStore:
+        if deps.store is None:
+            raise HTTPException(status_code=501, detail="management surface not enabled")
+        return deps.store
+
+    def _require(body: dict[str, Any], key: str) -> Any:
+        """A required body field → 400 (not a bare KeyError→500) when a client omits it."""
+        if key not in body:
+            raise HTTPException(status_code=400, detail=f"missing required field {key!r}")
+        return body[key]
+
+    @app.post("/worlds")
+    async def create_world(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:  # noqa: B008
+        _auth(request)
+        tone = body.get("tone")
+        if isinstance(tone, str):  # allow a bare-string tone from a JSON consumer
+            tone = [tone]
+        w = await _mgmt().create_world(
+            _require(body, "name"), tone=tone, rule_pack=body.get("rule_pack") or None
+        )
+        return {"world_id": w.world_id, "main_branch_id": w.main_branch_id, "name": w.name}
+
+    @app.get("/worlds")
+    async def list_worlds(request: Request) -> list[dict[str, Any]]:
+        _auth(request)
+        return [w.model_dump() for w in await _mgmt().list_worlds()]
+
+    @app.post("/worlds/{world_id}/campaigns")
+    async def create_campaign(
+        world_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        _auth(request)
+        store = _mgmt()
+        world = await store.get_world(world_id)
+        if world is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        try:
+            c = await store.start_campaign(
+                world_id,
+                world.main_branch_id,
+                participant_id=_require(body, "participant"),
+                new_pc_name=body.get("new_pc_name"),
+                adopt_actor_id=body.get("adopt_actor_id"),
+            )
+        except ValueError as exc:  # "exactly one of adopt_actor_id / new_pc_name"
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"campaign_id": c.campaign_id, "branch_id": c.branch_id}
+
+    @app.get("/campaigns")
+    async def list_campaigns(request: Request) -> list[dict[str, Any]]:
+        _auth(request)
+        world_id = request.query_params.get("world_id")
+        return [c.model_dump() for c in await _mgmt().list_campaigns(world_id)]
+
+    @app.get("/campaigns/{campaign_id}")
+    async def get_campaign(campaign_id: str, request: Request) -> dict[str, Any]:
+        _auth(request)
+        c = await _mgmt().get_campaign(campaign_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        return c.model_dump()
+
+    @app.post("/campaigns/{campaign_id}/join")
+    async def join_campaign(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        _auth(request)
+        store = _mgmt()
+        if await store.get_campaign(campaign_id) is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        try:
+            actor_id = await store.bind_pc(
+                campaign_id,
+                _require(body, "participant"),
+                new_pc_name=body.get("new_pc_name"),
+                adopt_actor_id=body.get("adopt_actor_id"),
+            )
+        except ValueError as exc:  # "exactly one of adopt_actor_id / new_pc_name"
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"actor_id": actor_id}
+
+    @app.get("/campaigns/{campaign_id}/roster")
+    async def campaign_roster(campaign_id: str, request: Request) -> dict[str, Any]:
+        _auth(request)
+        return {"pcs": await _mgmt().campaign_pcs(campaign_id)}
+
+    @app.get("/campaigns/{campaign_id}/state")
+    async def campaign_state(campaign_id: str, request: Request) -> dict[str, Any]:
+        _auth(request)
+        store = _mgmt()
+        c = await store.get_campaign(campaign_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        raw = request.query_params.get("sections") or "actors,threads,places,factions"
+        sections = raw.split(",")
+        across = await store.query_across([c.branch_id], sections)
+        return {"branch_id": c.branch_id, "state": across.get(c.branch_id, {})}
+
+    @app.get("/campaigns/{campaign_id}/chronicle")
+    async def campaign_chronicle(campaign_id: str, request: Request) -> dict[str, Any]:
+        _auth(request)
+        store = _mgmt()
+        c = await store.get_campaign(campaign_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        limit = int(request.query_params.get("limit") or 20)
+        beats = await store.recent_beats(c.branch_id, limit)
+        return {"beats": [b.model_dump() for b in beats]}
+
+    @app.post("/campaigns/{campaign_id}/time-skip")
+    async def campaign_time_skip(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        _auth(request)
+        if deps.advance_time is None:
+            raise HTTPException(status_code=501, detail="time-skip not enabled")
+        try:
+            days = int(_require(body, "days"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="days must be an integer") from exc
+        return await deps.advance_time(campaign_id, days)
 
     @app.websocket("/campaigns/{campaign_id}/play")
     async def play(ws: WebSocket, campaign_id: str) -> None:

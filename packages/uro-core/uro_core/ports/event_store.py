@@ -29,20 +29,31 @@ class EventStore(Protocol):
         *,
         tone: list[str] | None = None,
         prompt_overrides: dict[str, str] | None = None,
+        ruleset_id: str = "",
+        ruleset_version: str = "",
+        rule_pack: dict[str, Any] | None = None,
         extra_events: list[DomainEvent] | None = None,
     ) -> World:
         """Create a world: its `main` branch and a `WorldGenesis` genesis commit (carrying the
-        pack's tone + prompt overrides, plus any `extra_events` — world-pack import passes the
-        authored seed events, docs/09)."""
+        pack's tone + prompt overrides + Reaction-Layer rule pack, plus any `extra_events` —
+        world-pack import passes the authored seed events, docs/09, 17)."""
         ...
 
     async def get_world_by_name(self, name: str) -> World | None: ...
 
     async def get_world(self, world_id: str) -> World | None: ...
 
+    async def list_worlds(self) -> list[World]:
+        """All worlds, ordered by id — the read behind `GET /worlds` (docs/18 B3)."""
+        ...
+
     async def create_campaign(self, world_id: str, branch_id: str) -> Campaign: ...
 
     async def get_campaign(self, campaign_id: str) -> Campaign | None: ...
+
+    async def list_campaigns(self, world_id: str | None = None) -> list[Campaign]:
+        """All campaigns, optionally scoped to a world (docs/18 B3). Ordered by id."""
+        ...
 
     async def start_campaign(
         self,
@@ -61,6 +72,22 @@ class EventStore(Protocol):
         """Create a campaign on a branch and bind its PC (adopt an existing actor or make
         a fresh one), optionally with a ruleset-built character sheet — CampaignStarted +
         PCBound (+ SheetUpdated) as events (docs/03, 06, 12)."""
+        ...
+
+    async def bind_pc(
+        self,
+        campaign_id: str,
+        participant_id: str,
+        *,
+        adopt_actor_id: str | None = None,
+        new_pc_name: str | None = None,
+        new_pc_id: str | None = None,
+        pc_sheet: dict[str, Any] | None = None,
+        starting_items: list[str] | None = None,
+        ruleset_id: str = "",
+    ) -> str:
+        """Seat an ADDITIONAL participant's PC on a live campaign (the party-join primitive,
+        docs/08 OQ-7); idempotent. Returns the bound PC actor_id."""
         ...
 
     async def end_campaign(
