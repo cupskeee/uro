@@ -1,5 +1,13 @@
 # Uro Engine
 
+**git, but for AI-driven RPG worlds.** · _Versioned, forkable world state as a headless engine._
+
+[![CI](https://github.com/cupskeee/uro/actions/workflows/ci.yml/badge.svg)](https://github.com/cupskeee/uro/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python 3.12](https://img.shields.io/badge/Python-3.12-blue)
+![Postgres 17 + pgvector](https://img.shields.io/badge/Postgres-17%20%2B%20pgvector-blue)
+![Status: proof of concept](https://img.shields.io/badge/status-proof--of--concept-orange)
+
 **Uro is a persistent, AI-driven RPG world *engine*.** It is not a game and not a platform. It is the headless core that games and platforms get built on top of — the way git is the engine underneath GitHub, GitLab, and Bitbucket.
 
 The engine's one unique power: **world state is versioned and forkable**. Every campaign leaves a permanent mark on its world's timeline. A finished campaign's ending — political borders, factions, religions, wars, even physical changes like a meteor crater where a city used to be — becomes a point in history that any new campaign can continue from, or branch off of, with entirely different characters and an entirely different story.
@@ -25,20 +33,24 @@ Anything a *platform* would build: user accounts and social features, world/asse
 
 ## Status
 
-**All five PoC phases plus three post-PoC phases are code-complete** (215 tests green, fully deterministic in CI), and the **core thesis was validated live once** (with caveats): in an ablation run the full engine built durable state and re-surfaced an established NPC + world facts past the recency window while the `--bare` (raw-transcript) arm built nothing and drifted. For the honest map of what is *proven* vs *proxy* vs *stub-only* vs *deferred*, see [16-honesty-ledger.md](docs/16-honesty-ledger.md).
+**All five PoC phases plus five post-PoC phases are code-complete** (282 tests green, fully deterministic in CI), and the **core thesis was validated live** (with caveats): in an ablation run the full engine built durable state and re-surfaced an established NPC + world facts past the recency window while the `--bare` (raw-transcript) arm built nothing and drifted. For the honest map of what is *proven* vs *proxy* vs *stub-only* vs *deferred*, see [docs/16-honesty-ledger.md](docs/16-honesty-ledger.md).
 
 What runs today, phase by phase (each with a passing acceptance test):
 
 - **P1 — state engine:** the beat pipeline (structured + semantic recall → narration → extraction → validation gauntlet → commit → projections) with a claim/belief epistemic layer (an NPC can lie without corrupting world truth), pgvector semantic memory, four provider adapters (stub / OpenAI-compatible / Anthropic, per-role routing).
 - **P2 — branching timelines:** markers, snapshots, copy-on-fork, materialize-at-any-commit, per-branch PC binding, time-skip — the **meteor test** (one event log; continue / new-life / what-if forks coexist, no special-casing).
-- **P3 — mechanics:** a pluggable, deterministic ruleset port + Uro Basic (d20, seeded RNG, encounter mode); a fight replays byte-identically — the **insult→combat→consequences** acceptance.
+- **P3 — mechanics:** a pluggable, deterministic ruleset port + Uro Basic (d20, seeded RNG, encounter mode); a fight replays from its seed — the **insult→combat→consequences** acceptance.
 - **P4 — worlds:** the world-pack format + sufficiency check + AI backfill, import + procedural History seeding (seed 42 ≠ 43 on identical geography), prompt-template packs, capability probes.
 - **P5 — server & federation:** a WS play server (broadcast, token auth), export/import with hash-chain verification, off-screen belief/rumor propagation, and Chronicler mode — the **war-story test** (an external battle's feat ripples to witnesses; a tavern NPC retells a traceable rumor).
 - **P6 — the alien ruleset:** a deliberately non-d20 second built-in (`uro_pbta`: 2d6, harm clock, moves) through the *same* port — proving the ruleset port is genuinely game-agnostic (OQ-13 → D-30).
 - **P7 — multiplayer:** per-participant PCs + a round-robin `PartyArbiter` behind the `TurnArbiter` port (OQ-7 → D-31).
 - **P8 — Chronicler hardening:** `distill_outcome` is now trust-scoped — an external bundle can't kill/loot/first-hand-witness a PC or a T2+ actor, loot needs real ownership, replays are idempotent (OQ-12 → D-32).
+- **P9 — the reaction layer:** pack-authored reactive behavior as *declarative data* (`rules.yaml` / `agendas.yaml`), never code — so a from-scratch pack sandbox is met structurally (a closed grammar that can't name a mechanical/lethal/canon event, D-33).
+- **P10 — the computation layer:** engine-owned, event-sourced integer counters that **fork by construction** (so pack-authored numeric state rides `fork_branch` instead of leaking into shadow game code, D-34).
 
-The live-model legs (thesis, planner, backfill/probe, and the post-PoC phases) are run separately with an API key — CI never makes live LLM calls. Reproduce: [docs/live-run.md](docs/live-run.md) / `scripts/ablation.sh` (thesis) + `scripts/postpoc_validate.sh` (P6/P8). Honest status: [16-honesty-ledger.md](docs/16-honesty-ledger.md); horizon: [10-roadmap.md](docs/10-roadmap.md).
+Then four games were built **on** the engine as forcing functions, producing an evidence-backed backlog ([docs/18-gap-findings.md](docs/18-gap-findings.md)) — which drove the last round of fixes and, just as usefully, *validated deferrals* (what **not** to build).
+
+The live-model legs (thesis, planner, backfill/probe, and the post-PoC phases) are run separately with an API key — CI never makes live LLM calls. Reproduce: [docs/live-run.md](docs/live-run.md) / `scripts/ablation.sh` (thesis) + `scripts/postpoc_validate.sh` (P6/P8). Honest status: [docs/16-honesty-ledger.md](docs/16-honesty-ledger.md); horizon: [docs/10-roadmap.md](docs/10-roadmap.md).
 
 ## Quickstart
 
@@ -46,7 +58,7 @@ Prerequisites: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Docker, and [`j
 
 ```sh
 uv sync --all-packages          # install the workspace
-docker compose up -d --wait     # Postgres + pgvector (host port 5433)
+docker compose up -d --wait     # Postgres 17 + pgvector (host port 5433)
 uv run uro db migrate           # apply migrations
 just test                       # lint + types + import-linter + tests (needs the DB up)
 
@@ -57,7 +69,29 @@ uv run uro play <campaign> --provider anthropic   # …or a real model (needs AN
 uv run python examples/hello_uro/hello_uro.py   # embed the engine as a library (no CLI, no key)
 ```
 
-**Building on the engine?** [`examples/hello_uro/hello_uro.py`](examples/hello_uro/hello_uro.py) is the smallest real consumer — it imports `uro_core` directly and drives one campaign showing recall, the Reaction Layer, and branching, deterministically (no API key). Per-role model bindings go in `uro.toml` (`[llm.roles]`, see `uro.example.toml`); secrets stay in env vars. Contributing conventions and the build rhythm live in [CLAUDE.md](CLAUDE.md); the developer guide is [14-development-guide.md](docs/14-development-guide.md).
+**Building on the engine?** [`examples/hello_uro/hello_uro.py`](examples/hello_uro/hello_uro.py) is the smallest real consumer — it imports `uro_core` directly and drives one campaign showing recall, the Reaction Layer, and branching, deterministically (no API key). Per-role model bindings go in `uro.toml` (`[llm.roles]`, see [`uro.example.toml`](uro.example.toml)); secrets stay in env vars.
+
+## Architecture
+
+Hexagonal by construction — the **core ring** (`domain`, `timeline`, `engines`, `pipeline`, `memory`, `session`, `chronicler`, `export`) imports only *ports*, never a concrete adapter. The rule isn't a convention; it's a CI failure (import-linter).
+
+```
+packages/
+  uro-core/        all engine logic, embeddable — domain events, the beat pipeline,
+                   ruleset port + two built-ins (d20 + PbtA), the Postgres adapter,
+                   provider adapters, semantic memory, export/import, the reaction layer
+  uro-server/      thin FastAPI shell — transport, sessions, auth, wiring (no engine logic)
+  uro-cli/         the `uro` reference client — play, dry-run, world/branch/campaign tools
+examples/          hello_uro (the reference embedding consumer) + four games built ON the engine
+worlds/            example world packs (ashfall, thornwood, emberfell)
+docs/              the authoritative design — when code and docs disagree, one is fixed to match
+```
+
+**Everything is an event.** State changes are typed domain events; projections are rebuildable read-models written only by the projector, in the same transaction as the commit. Migrations are forward-only. The extractor is fenced by a schema + an emitter whitelist, so an LLM cannot mint mechanical, lethal, or protected-canon events. See [docs/01-architecture.md](docs/01-architecture.md).
+
+## Tests
+
+`just test` is the gate: `ruff` + `ruff format --check` + `mypy` (strict on the core ring) + `import-linter` (the hexagonal contract) + `pytest`. **282 tests, fully deterministic** — no live LLM calls in CI (provider-dependent paths use recorded/mock transports or the deterministic stub). Postgres must be up; DB-requiring tests auto-skip if it isn't. Each phase ships a passing acceptance test (the meteor test, insult→combat→consequences, the war-story ripple, the alien-ruleset partial success, …).
 
 ## Documentation map
 
@@ -81,8 +115,26 @@ uv run python examples/hello_uro/hello_uro.py   # embed the engine as a library 
 | [13-contracts.md](docs/13-contracts.md) | BeatState, stage protocol, planner/extractor schemas, template contexts, failure semantics *(v0, living)* |
 | [14-development-guide.md](docs/14-development-guide.md) | Setup, tooling, migrations, testing strategy, conventions, definition of done |
 | [15-walkthroughs.md](docs/15-walkthroughs.md) | End-to-end traces: life of a world, life of a beat, a Chronicler-mode war story, doc responsibility map |
-| [glossary.md](docs/glossary.md) | Every term, one line, one authority |
-| [decisions.md](docs/decisions.md) | ADR-style log of every decision made so far, with rationale |
+| [16-honesty-ledger.md](docs/16-honesty-ledger.md) | The honest proven / proxy / stub-only / deferred map |
+| [17-reaction-layer.md](docs/17-reaction-layer.md) · [18-gap-findings.md](docs/18-gap-findings.md) · [19-computation-tier.md](docs/19-computation-tier.md) | Post-PoC designs: the reaction layer, the games' gap backlog, the computation tier |
+| [glossary.md](docs/glossary.md) · [decisions.md](docs/decisions.md) | Every term (one line, one authority) · the ADR-style decision log |
+
+## Contributing
+
+Contributions and questions are welcome. Start with:
+
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — how to set up, build, test, and submit changes, plus the project invariants (hexagonal boundary, everything-is-an-event, forward-only migrations).
+- **[CLAUDE.md](CLAUDE.md)** — the working conventions and the build rhythm this repo follows.
+- **[docs/14-development-guide.md](docs/14-development-guide.md)** — the full developer guide.
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** and **[SECURITY.md](SECURITY.md)**.
+
+## Roadmap
+
+Uro is a **proof of concept**: it proves the thesis (versioned, forkable AI-world state, validated end-to-end) rather than shipping a product. The horizon lives in [docs/10-roadmap.md](docs/10-roadmap.md); the evidence-backed backlog of what real consumers actually hit is [docs/18-gap-findings.md](docs/18-gap-findings.md). Named deferrals (the full Chronicler ingestion contract, additional rulesets, a graph/vector store swap, NATS distribution) are honest about *why* they're not built yet.
+
+## License
+
+Released under the [MIT License](LICENSE). © 2026 cupskeee.
 
 ## Provenance
 
