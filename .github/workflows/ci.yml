@@ -7,6 +7,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: the gate only reads the repo (OpenSSF Scorecard hardening).
+permissions:
+  contents: read
+
 jobs:
   checks:
     runs-on: ubuntu-latest

@@ -112,7 +112,7 @@ The post-PoC phases (alien ruleset, multiplayer, Chronicler hardening) are prove
 **deterministic** tests — CI never calls a live model. This exercises the LLM-in-the-loop legs
 with a real one; the owner runs it, Claude analyzes from Postgres.
 
-```
+```sh
 export OPENAI_API_KEY=...              # (or MODEL=gpt-4o for sharper prose)
 bash scripts/postpoc_validate.sh
 ```

@@ -16,7 +16,7 @@ It's **deterministic**: a scripted provider stands in for the LLM, so there's no
 output is byte-stable (which is why `test_example_hello_uro.py` asserts the whole arc in CI). Swap
 `ScriptedProvider` for `uro_cli.wiring.build_provider("openai", ...)` and the same code narrates live.
 
-```
+```sh
 docker compose up -d --wait          # Postgres + pgvector on host port 5433
 uv run uro db migrate
 uv run python examples/hello_uro/hello_uro.py

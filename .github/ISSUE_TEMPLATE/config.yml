@@ -5,4 +5,4 @@ contact_links:
     about: Please report security issues privately, not as a public issue (see SECURITY.md).
   - name: Question or discussion
     url: https://github.com/cupskeee/uro/discussions
-    about: Open-ended questions and design discussion (enable Discussions in repo settings).
+    about: Open-ended questions and design discussion.

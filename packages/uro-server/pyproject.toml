@@ -3,12 +3,18 @@ name = "uro-server"
 version = "0.1.0"
 description = "Uro Engine headless server — thin FastAPI shell over uro-core (REST + WebSocket)"
 license = "MIT"
+authors = [{ name = "cupskeee" }]
 requires-python = ">=3.12"
 dependencies = [
     "uro-core",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cupskeee/uro"
+Repository = "https://github.com/cupskeee/uro"
+Issues = "https://github.com/cupskeee/uro/issues"
 
 [tool.uv.sources]
 uro-core = { workspace = true }

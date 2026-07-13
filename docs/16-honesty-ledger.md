@@ -256,5 +256,16 @@ Pack-authored reactive behavior as DECLARATIVE data (`rules.yaml`/`agendas.yaml`
 | `rules_api_version` pin | proven | enforced on the `RulePack` model → holds at parse, runtime, and import. |
 | Inline `WorldGenesis` carry | proven | rule pack travels with the world (export/import self-contained). |
 | Structural party-race pin (materialize-at-trigger-commit) | **partial (by policy)** | `react` reads current head; safe under single-writer round-robin (D-31). The structural pin is a documented future refinement (one uncovered edge: a single participant driving two concurrent beats from two devices). |
-| Deep off-screen SIMULATION (accumulating faction state) | deferred | the declarative grammar deliberately can't express counters/armies/resources — the reserved sandbox tier's remit, not the Reaction Layer's (OQ-8 stays partly open). |
-| Sandboxed scripting tier (WASM) | deferred (reserved) | `ports/module.py` reserved; refused until a computation-shaped use-case escapes the data grammar's ceiling (the entity-mint refusal is the sharpest trigger). |
+| Off-screen accumulating counters (faction state) | **shipped in Phase 10 (D-34)** — see below | supersedes the earlier "the declarative grammar can't express counters" deferral: engine-owned event-sourced counters landed once the games surfaced the use-case. |
+| Sandboxed scripting tier (WASM) | deferred (reserved, sharper gate) | `ports/module.py` reserved now for UNBOUNDED computation / entity-minting that counters (D-34) + the closed grammar still can't express — no longer "any computation-shaped use-case" (that one arrived and shipped as counters). |
+
+## Post-PoC Phase 10 — the computation layer (2026-07-12, D-34, docs/19)
+
+Engine-owned numeric state, event-sourced so it forks by construction — the fix for shadow game-code counters that didn't ride `fork_branch` (the games' evidence, docs/18).
+
+| Capability | Status | Note |
+|---|---|---|
+| Integer counters (`CounterChanged`→`proj_counters`) | **proven (by construction)** | migration 015; in the projector `_HANDLERS`+`_SNAPSHOT_TABLES`, so counters fork / replay / snapshot / export like any projection. `CondCounter` / `CondCounterCompare` / `CondCountEdges`; `world` scope. |
+| `append_and_react` one-call authored-commit path | proven | commits + reacts in one exception-isolated call (docs/18 B1). |
+| Counter RMW concurrency | **partial (by policy)** | `adjust_counter` is the first non-idempotent read-modify-write; a per-branch in-process `_react_lock` serializes concurrent `react()` passes. Cross-process serialization (`expected_head`) is future. |
+| Computed cross-counter arithmetic · `for_each`/`roll_table`/`expire_claim` · bounded cascade | deferred | staged on evidence in docs/19 (C3–C6, OQ-1); the closed grammar stays the trust fence. |

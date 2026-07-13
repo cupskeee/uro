@@ -79,7 +79,7 @@ Re-recording fixtures is a deliberate act (`just record`), reviewed like a snaps
 
 ## Task runner
 
-```
+```sh
 just up        # docker compose up -d + migrate
 just migrate   # uro db migrate
 just test      # ruff check + mypy + import-linter + pytest (replay mode)

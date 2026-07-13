@@ -9,7 +9,21 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- `py.typed` markers on all three packages (PEP 561 — ship types to embedding consumers).
+- Public package metadata in each `pyproject.toml` (`[project.urls]`, authors; keywords on uro-core).
+- Least-privilege `permissions: contents: read` on the CI workflow.
+
+### Fixed
+- Reconciled `docs/16-honesty-ledger.md` and `docs/10-roadmap.md` to cover Phase 10 (the computation
+  layer, D-34) — they had stopped at Phase 9 and still described counters as "refused".
+- README "four provider adapters" → accurate (three adapters / four provider kinds); added a
+  `just`-less Quickstart fallback and tagged shell code fences as `sh`.
+- Regenerated `uv.lock` (was stale at 0.0.1 after the 0.1.0 bump).
+- Removed the dead GitHub-Discussions contact link's leaked TODO; enabled Discussions +
+  private-vulnerability-reporting + secret-scanning on the repo so SECURITY.md's channel works.
+- `just release` now checks all three package versions, not just uro-core.
+- Guarded a stray root `data` file (PII) in `.gitignore`.
 
 ## [0.1.0] - 2026-07-13
 

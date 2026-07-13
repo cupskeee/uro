@@ -3,6 +3,8 @@ name = "uro-core"
 version = "0.1.0"
 description = "Uro Engine core library — persistent, AI-driven RPG world engine (embeddable, headless)"
 license = "MIT"
+authors = [{ name = "cupskeee" }]
+keywords = ["ai", "llm", "rpg", "game-engine", "event-sourcing", "worldbuilding"]
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.9",
@@ -13,6 +15,11 @@ dependencies = [
     "httpx>=0.27",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cupskeee/uro"
+Repository = "https://github.com/cupskeee/uro"
+Issues = "https://github.com/cupskeee/uro/issues"
 
 [build-system]
 requires = ["hatchling"]
