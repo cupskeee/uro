@@ -1,0 +1,15 @@
+# actions/labeler (v5) config: auto-label PRs by which files they touch.
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "**/*.md"
+chore:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "justfile"
+          - "**/pyproject.toml"
+          - "uv.lock"
+          - "docker-compose.yml"
+          - ".gitignore"
