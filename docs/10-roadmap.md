@@ -50,7 +50,7 @@ The phases prove the *machine* works; nothing in them proves the *bet* — that 
 
 **Running the live experiment (needs an API key — not runnable in CI).** Bind a real model and play both arms; requires `ANTHROPIC_API_KEY` (or OpenAI/Ollama):
 
-```
+```sh
 uro world new "Ablation A"   # → campaign A (full)
 uro world new "Ablation B"   # → campaign B (bare)
 uro play <A> --provider anthropic
@@ -99,7 +99,7 @@ Multi-model per-role bindings go in `uro.toml` (`[llm.roles] narrator = "anthrop
 
 ## Post-PoC horizon (unordered, deliberately unscheduled)
 
-Multiplayer `PartyArbiter` (OQ-7, DONE — D-31) · full Chronicler-mode ingestion contract beyond the toy proof (OQ-12, hardened — D-32) · ~~module/scripting system for packs~~ (DONE as the declarative **Reaction Layer**, D-33/docs/17 — a pack ships `rules.yaml`/`agendas.yaml` data, no sandbox; a WASM scripting tier stays reserved behind `ports/module.py` until a computation-shaped use-case needs it) · graph/vector store swap-ins if scale demands · more rulesets (`srd51` — a d20 sibling; the alien-ruleset generality probe itself is DONE, Phase 6/D-30) · NATS-backed distribution · subscription-OAuth auth strategies if ever reconsidered (removed at D-16) · anything platform-shaped (which is someone else's repo).
+Multiplayer `PartyArbiter` (OQ-7, DONE — D-31) · full Chronicler-mode ingestion contract beyond the toy proof (OQ-12, hardened — D-32) · ~~module/scripting system for packs~~ (DONE as the declarative **Reaction Layer**, D-33/docs/17 — a pack ships `rules.yaml`/`agendas.yaml` data, no sandbox) · ~~computation/scripting for packs~~ (the engine-owned **computation layer** — event-sourced integer counters that fork by construction — shipped when that use-case arrived: **DONE, Phase 10 / D-34 / docs/19**; only a WASM/unbounded-computation tier stays reserved behind `ports/module.py` at a sharper gate) · graph/vector store swap-ins if scale demands · more rulesets (`srd51` — a d20 sibling; the alien-ruleset generality probe itself is DONE, Phase 6/D-30) · NATS-backed distribution · subscription-OAuth auth strategies if ever reconsidered (removed at D-16) · anything platform-shaped (which is someone else's repo).
 
 ## Standing engineering practices (all phases)
 

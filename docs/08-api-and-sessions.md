@@ -88,7 +88,7 @@ Content settings do **not** live on any identity — they live on the world mani
 
 The only first-party consumer; doubles as the dev harness. Command sketch:
 
-```
+```sh
 uro world create ./worlds/ashfall/        uro world seed ashfall --seed 42
 uro world probe ashfall                   uro world validate ./worlds/ashfall/
 uro campaign new ashfall --branch main --pc wizard.yaml

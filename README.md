@@ -37,7 +37,7 @@ Anything a *platform* would build: user accounts and social features, world/asse
 
 What runs today, phase by phase (each with a passing acceptance test):
 
-- **P1 — state engine:** the beat pipeline (structured + semantic recall → narration → extraction → validation gauntlet → commit → projections) with a claim/belief epistemic layer (an NPC can lie without corrupting world truth), pgvector semantic memory, four provider adapters (stub / OpenAI-compatible / Anthropic, per-role routing).
+- **P1 — state engine:** the beat pipeline (structured + semantic recall → narration → extraction → validation gauntlet → commit → projections) with a claim/belief epistemic layer (an NPC can lie without corrupting world truth), pgvector semantic memory, three provider adapters (stub / OpenAI-compatible / Anthropic — four provider *kinds*, since the OpenAI-compatible adapter also drives local/Ollama), per-role routing.
 - **P2 — branching timelines:** markers, snapshots, copy-on-fork, materialize-at-any-commit, per-branch PC binding, time-skip — the **meteor test** (one event log; continue / new-life / what-if forks coexist, no special-casing).
 - **P3 — mechanics:** a pluggable, deterministic ruleset port + Uro Basic (d20, seeded RNG, encounter mode); a fight replays from its seed — the **insult→combat→consequences** acceptance.
 - **P4 — worlds:** the world-pack format + sufficiency check + AI backfill, import + procedural History seeding (seed 42 ≠ 43 on identical geography), prompt-template packs, capability probes.
@@ -60,7 +60,7 @@ Prerequisites: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Docker, and [`j
 uv sync --all-packages          # install the workspace
 docker compose up -d --wait     # Postgres 17 + pgvector (host port 5433)
 uv run uro db migrate           # apply migrations
-just test                       # lint + types + import-linter + tests (needs the DB up)
+just test                       # the full gate (needs the DB up); no `just`? see below
 
 uv run uro world new "Ashfall"  # prints a campaign id
 uv run uro play <campaign>      # play offline with the deterministic stub…
@@ -68,6 +68,8 @@ uv run uro play <campaign> --provider anthropic   # …or a real model (needs AN
 
 uv run python examples/hello_uro/hello_uro.py   # embed the engine as a library (no CLI, no key)
 ```
+
+Without `just`, `just test` is just: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run lint-imports && uv run pytest`.
 
 **Building on the engine?** [`examples/hello_uro/hello_uro.py`](examples/hello_uro/hello_uro.py) is the smallest real consumer — it imports `uro_core` directly and drives one campaign showing recall, the Reaction Layer, and branching, deterministically (no API key). Per-role model bindings go in `uro.toml` (`[llm.roles]`, see [`uro.example.toml`](uro.example.toml)); secrets stay in env vars.
 

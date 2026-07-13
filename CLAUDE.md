@@ -42,7 +42,7 @@ Build each increment as one coherent, tightly-coupled slice **directly** (don't 
 
 ## Status (2026-07-07)
 
-Phase 0 + Phase 1 (state engine: recall → narrate → extract → gauntlet → commit → project; claim/belief epistemic layer; pgvector semantic memory; 4 provider adapters; thesis harness) are **code-complete**. The **thesis was validated live** via OpenAI — the ablation (`scripts/ablation.sh`, `docs/live-run.md`) showed the full engine recalling a named NPC + plot fact past the recency window while `--bare` forgot them. That run also surfaced extractor over-extraction (flavor → `truth=true`), fixed in Phase 1.5. **Live runs:** the owner's `OPENAI_API_KEY` is not visible to Claude's bash — the owner runs keyed commands, Claude analyzes results from Postgres.
+Phase 0 + Phase 1 (state engine: recall → narrate → extract → gauntlet → commit → project; claim/belief epistemic layer; pgvector semantic memory; 3 provider adapters — stub/openai_compat/anthropic, 4 provider kinds; thesis harness) are **code-complete**. The **thesis was validated live** via OpenAI — the ablation (`scripts/ablation.sh`, `docs/live-run.md`) showed the full engine recalling a named NPC + plot fact past the recency window while `--bare` forgot them. That run also surfaced extractor over-extraction (flavor → `truth=true`), fixed in Phase 1.5. **Live runs:** the owner's `OPENAI_API_KEY` is not visible to Claude's bash — the owner runs keyed commands, Claude analyzes results from Postgres.
 
 **Phase 2 (the signature phase — branching timelines) is code-complete, 91 tests green, fully deterministic (no key needed). The meteor acceptance test PASSES** (`tests/test_meteor.py::test_the_meteor_test`): one played campaign ends with a player-caused `PlaceDestroyed(Vel)`, and from the SAME event log — continue (adopt the wizard PC, face the crater), new-life (fresh farmer a year later via time-skip; NPCs retell the deed as history; the wizard is now a legend/NPC), and what-if (forked pre-strike, Vel stands) all coexist, no special-casing.
 
@@ -73,7 +73,7 @@ Each increment got a 5-dimension adversarial-review workflow (find→verify, def
 - **Deferred (honest):** the full REST management surface (docs/08 lists worlds/branches/chronicle/state/usage — the WS play channel + outcome endpoint ship, the rest are scaffolded by the CLI); `PartyArbiter` (OQ-7, the arbiter port is ready); the full Chronicler ingestion contract incl. gauntlet-on-feat-testimony (OQ-12); garbled-STATEMENT rumor distortion (PoC does confidence decay); the per-campaign in-flight/expected-head concurrency guard (single-writer by convention); persisted/timestamped probe reports.
 - **All five PoC phases are complete + a final cross-phase review** (7 confirmed phase-interaction seams: memory dropped on export→import now carried like a fork; sheet-less `ActorDied` now leaves a `proj_actors.status` death trace, migration 012; README/docs drift).
 
-## Post-PoC: LIVE-VALIDATED (2026-07-08, 170 tests green, on GitHub `cupskeee/uro` private)
+## Post-PoC: LIVE-VALIDATED (2026-07-08, 170 tests green, on GitHub `cupskeee/uro` — now PUBLIC, MIT, v0.1.0)
 
 The owner runs keyed `--provider openai` commands (their key isn't visible to Claude's bash); Claude analyzes from Postgres. Runbook: `docs/live-run.md`.
 

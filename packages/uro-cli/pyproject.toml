@@ -3,6 +3,7 @@ name = "uro-cli"
 version = "0.1.0"
 description = "Uro Engine reference client — play, dry-run, and dev tools against the engine"
 license = "MIT"
+authors = [{ name = "cupskeee" }]
 requires-python = ">=3.12"
 dependencies = [
     "uro-core",
@@ -11,6 +12,11 @@ dependencies = [
     "rich>=13.9",
     "websockets>=14",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cupskeee/uro"
+Repository = "https://github.com/cupskeee/uro"
+Issues = "https://github.com/cupskeee/uro/issues"
 
 [project.scripts]
 uro = "uro_cli.main:app"

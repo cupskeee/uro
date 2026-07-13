@@ -22,3 +22,6 @@ uro.toml
 .idea/
 .vscode/
 .DS_Store
+
+# Stray local data dumps — never commit (a PII file named `data` was found here once)
+/data

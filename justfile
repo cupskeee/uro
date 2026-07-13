@@ -24,7 +24,7 @@ fmt:
 
 # Cut a release vX.Y.Z: gate + tag (bump the 3 pyproject versions + CHANGELOG first). See docs/14.
 release version:
-    uv run python -c "import sys,tomllib; v=tomllib.load(open('packages/uro-core/pyproject.toml','rb'))['project']['version']; sys.exit(0 if v=='{{version}}' else print(f'bump package versions to {{version}} first (found {v})') or 1)"
+    uv run python -c "import sys,tomllib,glob; bad=[p for p in glob.glob('packages/*/pyproject.toml') if tomllib.load(open(p,'rb'))['project']['version']!='{{version}}']; sys.exit(0 if not bad else print('bump ALL package versions to {{version}} first; still off:', bad) or 1)"
     grep -q '^## \[{{version}}\]' CHANGELOG.md || { echo "add a CHANGELOG '## [{{version}}]' section first"; exit 1; }
     just test
     git tag -a "v{{version}}" -m "Release v{{version}}"
