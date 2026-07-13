@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 dependencies = [
     "uro-core",
     "fastapi>=0.115",
-    "uvicorn[standard]>=0.32",
+    "uvicorn[standard]>=0.51.0",
 ]
 
 [project.urls]
