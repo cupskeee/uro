@@ -10,7 +10,7 @@ dependencies = [
     "uro-server",
     "typer>=0.15",
     "rich>=13.9",
-    "websockets>=14",
+    "websockets>=16.1",
 ]
 
 [project.urls]
