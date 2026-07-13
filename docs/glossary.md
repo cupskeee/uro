@@ -27,7 +27,7 @@ One line per term; the linked doc is the authority. Terms are used *exactly* thi
 | **Extractor** | The pipeline role that parses generated prose into ProposedEvents for canonicalization | `05`, `13` |
 | **Fork** | Creating a branch from any commit; carries world state, not campaign-scoped state | `03` |
 | **GM mode** | Integration posture where Uro owns the game loop: play is the beat pipeline (D-25) | `00` |
-| **Marker** | A named commit (like a git tag): campaign endings, notable moments; a ref, not an event | `03` |
+| **Marker** | An immutable named ref to a commit (a tag): campaign endings, notable moments; a ref, not an event | `03` |
 | **Materialization** | Building full world state at an arbitrary commit (nearest snapshot + replay) | `03` |
 | **Mode** | Play cadence: `freeroam` (beat-driven, turnless) · `encounter` (turns) · `downtime` (time-skip) | `05` |
 | **Outcome bundle** | An external resolver's report on a parked encounter: participants, casualties, witnesses, notable feats; mechanical facts commit, interpretations get distilled | `06`, `12`, `13` |

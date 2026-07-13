@@ -90,7 +90,7 @@ Multi-model per-role bindings go in `uro.toml` (`[llm.roles] narrator = "anthrop
 
 ## Phase 6 — The alien ruleset ★ the game-agnosticism proof (post-PoC, first up)
 
-*The engine's core claim (D-1: game-agnostic, git:GitHub) was backed by exactly ONE d20 ruleset. This phase settles OQ-13 → D-30 by adding a deliberately non-d20 second built-in and forcing every leaked d20 assumption out of the "generic" port.*
+*The engine's core claim (D-1: game-agnostic) was backed by exactly ONE d20 ruleset. This phase settles OQ-13 → D-30 by adding a deliberately non-d20 second built-in and forcing every leaked d20 assumption out of the "generic" port.*
 
 - **inc 6.1 (port generalization):** `rulesets/base.py` made game-agnostic — opaque `dict` sheets, a ruleset-declared graded `CheckResult.outcome` (replacing binary `success`), no DC in the port, opaque `EncounterState`, open action/effect kinds, harm via the ruleset's opaque final `SheetUpdated` (projector `{hp}` hardcodes deleted). `uro_basic` refactored to own its d20 shape (meteor + encounter replay stay byte-identical); `uro_pbta` added (2d6 vs 7/10, harm clock, moves, advance-by-failing). A 7-surface leak audit found 64 assumptions; building uro_pbta in lockstep forced each out (leak report in D-30).
 - **inc 6.3 (registry & binding):** a ruleset registry resolves a pack's `ruleset = "id@version"` → a bound `Ruleset`; `WorldGenesis` records it, `CampaignStarted` pins id+version (migration 013), `play`/`dry-run` rebind from the campaign. `worlds/emberfell` is the PbtA example pack. (No 6.2 — the port generalization was one cohesive slice, not two.)
