@@ -1,6 +1,6 @@
 [project]
 name = "uro-core"
-version = "0.0.1"
+version = "0.1.0"
 description = "Uro Engine core library — persistent, AI-driven RPG world engine (embeddable, headless)"
 license = "MIT"
 requires-python = ">=3.12"

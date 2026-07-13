@@ -51,10 +51,26 @@ These are load-bearing; several are enforced mechanically:
 
 ## Submitting changes
 
-1. Fork and branch from `main`.
+`main` is the always-releasable trunk — **don't develop directly on it.**
+
+1. Branch from `main` (`feat/…`, `fix/…`, `docs/…`).
 2. Make the change; keep it a coherent slice, and reconcile any doc/code drift in the same commit.
-3. Run `just test` — green.
-4. Open a pull request describing *what* and *why*. CI runs the same gate on every push and PR.
+3. Add a note under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) if the change is user-visible.
+4. Run `just test` — green.
+5. Open a pull request describing *what* and *why*. CI runs the same gate on every push and PR;
+   merge to `main` only when it's green (self-merge is fine for a solo project).
+
+## Versioning & releases
+
+Uro uses [Semantic Versioning](https://semver.org/), single-versioned across the workspace (all
+three packages share one number; pre-1.0, a MINOR bump is a notable/breaking change and a PATCH is
+a fix). Changes accumulate under `## [Unreleased]` in the CHANGELOG.
+
+To cut a release: bump the version in the three `packages/*/pyproject.toml`, move the CHANGELOG
+`[Unreleased]` entries under a new `## [X.Y.Z]` section, then `just release X.Y.Z` (it gates + tags)
+and `git push origin main --follow-tags`. Pushing the tag triggers the release workflow, which
+creates the GitHub Release from that version's CHANGELOG notes. Never `push --force` `main`. The
+full process is in [docs/14-development-guide.md](docs/14-development-guide.md#versioning--releases).
 
 Bug reports and feature ideas are welcome via [issues](https://github.com/cupskeee/uro/issues).
 For anything security-sensitive, see [SECURITY.md](SECURITY.md) instead of opening a public issue.

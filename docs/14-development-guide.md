@@ -91,6 +91,40 @@ just play      # uro play against the demo world (live smoke)
 
 GitHub Actions (or any runner): lint → types → import-linter → unit/stage/integration with Postgres service container, replay-only. Merge = green. That's the whole gate for a solo project; don't build more ceremony than that.
 
+## Versioning & releases
+
+The engine is versioned with **Semantic Versioning**, single-versioned across the workspace (all
+three packages share one number). Pre-1.0 (`0.MINOR.PATCH`): a **MINOR** bump is a notable or
+breaking change; a **PATCH** is a fix. `1.0.0` is cut when the public API (the `uro_core` surface,
+the event catalog, the world-pack + export formats) is declared stable. `CHANGELOG.md` follows
+[Keep a Changelog](https://keepachangelog.com): every notable change lands under `## [Unreleased]`.
+
+**Branch discipline (don't develop straight on `main`).** `main` is the always-releasable trunk.
+
+- Do work on a short-lived branch (`feat/…`, `fix/…`, `docs/…`) and open a **pull request**; merge
+  to `main` only when the gate is green. Self-review + self-merge is fine for a solo project — the
+  point is that `main` only ever moves through a green, reviewable step, not that a second human signs off.
+- Keep each PR a coherent slice; reconcile any doc/code drift in the same PR.
+- Never `push --force` `main` once it's public — a history rewrite forces every clone to re-sync and
+  breaks anyone building on it. (Pre-public cleanup is the only exception, done once.)
+- A change destined for the next release adds a `CHANGELOG.md [Unreleased]` entry as part of the PR.
+
+**Cutting a release.** A release is a tag + notes; it publishes to no package registry (that's a
+deliberate deferral — consumers embed `uro-core` from git, see the README). Steps:
+
+1. On a green `main`, bump the `version` in all three `packages/*/pyproject.toml` to `X.Y.Z`.
+2. In `CHANGELOG.md`, move the `[Unreleased]` entries under a new `## [X.Y.Z] - YYYY-MM-DD` section
+   (and add its compare/tag link at the bottom).
+3. Commit (`release: vX.Y.Z`), open/merge the PR.
+4. `just release X.Y.Z` — it verifies the version + CHANGELOG section, runs the gate, and creates
+   the annotated tag `vX.Y.Z`.
+5. `git push origin main --follow-tags`. Pushing the tag triggers `.github/workflows/release.yml`,
+   which creates the GitHub Release with that version's CHANGELOG section as the notes.
+
+No PyPI / GitHub-Packages publishing yet: GitHub Packages has no Python registry, and PyPI/ghcr are
+premature for a PoC. When distribution is wanted, add an `on: release` job (PyPI trusted-publishing
+for `uro-core`, or a `uro-server` image to `ghcr.io`).
+
 ## Definition of done (any phase)
 
 The phase's acceptance test passes automated in CI (replay) **and** once live (manual smoke); docs updated; decisions/OQs updated. Then — and only then — the next phase starts.

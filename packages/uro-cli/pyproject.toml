@@ -1,6 +1,6 @@
 [project]
 name = "uro-cli"
-version = "0.0.1"
+version = "0.1.0"
 description = "Uro Engine reference client — play, dry-run, and dev tools against the engine"
 license = "MIT"
 requires-python = ">=3.12"

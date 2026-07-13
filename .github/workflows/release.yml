@@ -1,0 +1,35 @@
+# Release automation (docs/14): pushing a `vX.Y.Z` tag cuts a GitHub Release whose notes are the
+# matching section of CHANGELOG.md. No third-party actions, no publish to any package registry —
+# a release is a milestone marker (see docs/14 "Versioning & releases").
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract this version's CHANGELOG section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Pull the lines under "## [<version>]" up to the next "## " heading.
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" {f=1; next}
+            /^## / {f=0}
+            f {print}
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG section for [$version] — add one before tagging." >&2
+            exit 1
+          fi
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md

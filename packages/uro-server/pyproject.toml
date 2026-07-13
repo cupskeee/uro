@@ -1,6 +1,6 @@
 [project]
 name = "uro-server"
-version = "0.0.1"
+version = "0.1.0"
 description = "Uro Engine headless server — thin FastAPI shell over uro-core (REST + WebSocket)"
 license = "MIT"
 requires-python = ">=3.12"

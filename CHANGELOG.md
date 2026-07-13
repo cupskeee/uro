@@ -1,28 +1,36 @@
 # Changelog
 
 All notable changes to Uro Engine are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow
-[Semantic Versioning](https://semver.org/) once it cuts its first tagged release.
-
-**Uro is pre-1.0 (a proof of concept).** There are no published releases yet; the entries below
-are development milestones by date, newest first. The authoritative design history lives in
-[`docs/decisions.md`](docs/decisions.md); the honest capability map is
-[`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
+[Semantic Versioning](https://semver.org/) (pre-1.0: `0.MINOR.PATCH`, where a MINOR bump is a
+notable or breaking change and a PATCH is a fix; see [docs/14](docs/14-development-guide.md)).
+The authoritative design history lives in [`docs/decisions.md`](docs/decisions.md); the honest
+capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.1.0] - 2026-07-13
+
+First tagged release — the complete proof of concept, made public. The dated **development
+milestones** below (P1–P10) are the pre-1.0 history folded into this release.
+
 ### Added
-- MIT `LICENSE` and `license = "MIT"` in every package's metadata.
-- Community health files: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue &
-  pull-request templates.
-- README polish: status badges, an architecture/tests overview, and a refreshed status.
-- **G-3 — reproducible mechanics RNG:** `_beat_rng` now derives from the campaign's persisted
-  seed + commit depth (both deterministic) instead of random ids, so a played-through fight
-  replays given the same event log. `uro campaign new --seed`; seed persisted (migration 016).
+- The full engine: five PoC phases + five post-PoC phases (P1–P10) — see the milestones below.
+- Public-readiness: MIT `LICENSE` + `license = "MIT"` in every package's metadata; community
+  health files (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue & PR templates);
+  README badges + an architecture/tests overview; a release workflow + a documented versioning
+  and release process.
+- **G-3 — reproducible mechanics RNG:** `_beat_rng` derives from the campaign's persisted seed +
+  commit depth (both deterministic) instead of random ids, so a played-through fight replays
+  given the same event log. `uro campaign new --seed`; seed persisted (migration 016).
 
 ### Removed
 - The initial LLM deep-research report was removed from the repo (and its history) before going
   public; the `docs/` set is the single source of truth.
+
+## Development milestones (pre-1.0)
 
 ## 2026-07-12 — Post-PoC: the computation layer + the dogfood backlog
 
@@ -78,3 +86,6 @@ are development milestones by date, newest first. The authoritative design histo
 ### Added
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (git:GitHub
   analogy). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
+
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/cupskeee/uro/releases/tag/v0.1.0
