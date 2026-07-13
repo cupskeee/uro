@@ -95,7 +95,7 @@ uro campaign new ashfall --branch main --pc wizard.yaml
 uro play <campaign>                       # interactive loop (rich TUI-lite: streamed prose + status line)
 uro dry-run <campaign> "I kick the door"  # pipeline without commit; prints proposed events
 uro branch fork ashfall --at campaign-a-end --name aftermath
-uro log <world> [--branch B]              # chronicle view, git-log style (defaults to main; per-branch lineage, never a cross-branch merge — `02`)
+uro log <world> [--branch B]              # chronicle view — commit lineage (defaults to main; per-branch, never a cross-branch merge — `02`)
 uro world export ashfall -o ashfall.uwp   # hash-chain-stamped bundle;  uro world import ashfall.uwp verifies + instantiates
 uro serve --token alice --token bob       # run the server;  uro connect <campaign> --server URL --token alice  (WS client)
 uro usage <campaign>

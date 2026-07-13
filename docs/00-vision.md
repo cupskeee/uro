@@ -52,7 +52,7 @@ MVP scope: the Chronicler-mode *doors* are built now because they're retrofit-ex
 
 ## Content agnosticism
 
-Like git, the engine does not care what you commit. There are **no engine-level safety filters or content guardrails**. Content boundaries are declared **per world** (in the world manifest, not on a user profile) and enforcement is delegated to two parties who actually own the concern:
+The engine is content-neutral — it does not judge what you commit. There are **no engine-level safety filters or content guardrails**. Content boundaries are declared **per world** (in the world manifest, not on a user profile) and enforcement is delegated to two parties who actually own the concern:
 
 1. **The connected LLM** — cloud providers enforce their own policies regardless of what we allow. The engine therefore ships **capability probes** (see `04-llm-integration.md`): per-world tests of whether a bound model can actually deliver the world's declared content rating, tone, and structural requirements — turning a policy problem into a best-effort, testable compatibility signal (judge-scored with transcripts attached, D-24).
 2. **The consuming platform/game** — a kid-friendly game and an 18+ platform can both sit on the same engine and apply their own filtering at their layer.

@@ -2,7 +2,7 @@
 
 ## Shape of the deliverable
 
-Three artifacts in one monorepo, mirroring the git model (plumbing library + porcelain):
+Three artifacts in one monorepo — a low-level core library, with higher-level clients built over it:
 
 ```
 uro/

@@ -9,6 +9,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Changed
+- **Repositioned Uro as its own thing — "a world-state engine" — and retired the git→GitHub analogy**
+  from all outward-facing framing (README, `CLAUDE.md`, social preview, docs 00/01/03/08/10/glossary).
+  New tagline: *"Worlds that remember. Timelines that fork."* The analogy was a comprehension scaffold,
+  not the product's identity (D-35, refines D-1; D-1/D-30 keep their historical text).
+- Added the logo as the README header + a branded 1280×640 social-preview image
+  (`docs/images/`, regenerable from `social-preview.html`).
+
 ### Added
 - `py.typed` markers on all three packages (PEP 561 — ship types to embedding consumers).
 - Public package metadata in each `pyproject.toml` (`[project.urls]`, authors; keywords on uro-core).
@@ -98,8 +106,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 ## 2026-07-04 — Scoping
 
 ### Added
-- Initial design: re-scoped from a consumer *platform* to a headless *engine* (git:GitHub
-  analogy). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
+- Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
+  boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
 [Unreleased]: https://github.com/cupskeee/uro/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/cupskeee/uro/releases/tag/v0.1.0

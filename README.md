@@ -1,16 +1,20 @@
-# Uro Engine
+<p align="center">
+  <img src="docs/images/URO_Engine_logo.png" alt="Uro Engine" width="460">
+</p>
 
-**git, but for AI-driven RPG worlds.** · _Versioned, forkable world state as a headless engine._
+<p align="center"><b>Worlds that remember. Timelines that fork.</b> · <i>A world-state engine for AI-driven worlds.</i></p>
 
-[![CI](https://github.com/cupskeee/uro/actions/workflows/ci.yml/badge.svg)](https://github.com/cupskeee/uro/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Python 3.12](https://img.shields.io/badge/Python-3.12-blue)
-![Postgres 17 + pgvector](https://img.shields.io/badge/Postgres-17%20%2B%20pgvector-blue)
-![Status: proof of concept](https://img.shields.io/badge/status-proof--of--concept-orange)
+<p align="center">
+  <a href="https://github.com/cupskeee/uro/actions/workflows/ci.yml"><img src="https://github.com/cupskeee/uro/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Python-3.12-blue" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/Postgres-17%20%2B%20pgvector-blue" alt="Postgres 17 + pgvector">
+  <img src="https://img.shields.io/badge/status-proof--of--concept-orange" alt="Status: proof of concept">
+</p>
 
-**Uro is a persistent, AI-driven RPG world *engine*.** It is not a game and not a platform. It is the headless core that games and platforms get built on top of — the way git is the engine underneath GitHub, GitLab, and Bitbucket.
+**Uro is a world-state engine: the persistent, versioned, canonical record of a living fictional world.** A model narrates; a fenced extractor distills that narration into a queryable world model — actors, places, factions, beliefs, open threads — that stays authoritative while the story plays over it, so the fiction can't corrupt the truth. It tracks not only what is *true* but *who knows it*, so an NPC can lie or a rumor spread without poisoning canon. It's an engine, not a game and not a platform — the layer those get built on.
 
-The engine's one unique power: **world state is versioned and forkable**. Every campaign leaves a permanent mark on its world's timeline. A finished campaign's ending — political borders, factions, religions, wars, even physical changes like a meteor crater where a city used to be — becomes a point in history that any new campaign can continue from, or branch off of, with entirely different characters and an entirely different story.
+Its defining power: **world state is versioned and forkable.** Every campaign leaves a permanent mark on its world's timeline. A finished campaign's ending — political borders, factions, religions, wars, even physical changes like a meteor crater where a city used to be — becomes a point in history that any new campaign can continue from, or branch off of, with entirely different characters and an entirely different story. A city razed on one branch stays a crater there while it still stands on another, from the same event log.
 
 ## What Uro is
 
@@ -24,12 +28,12 @@ Uro integrates in two postures: **GM mode**, where Uro runs the game loop itself
 
 Anything a *platform* would build: user accounts and social features, world/asset marketplaces, ratings, forums, campaign publishing, graphical world-builder UIs, content moderation policy. The engine's job is to expose primitives (portable world/campaign formats, stable IDs, a queryable state API, exports) that make all of those buildable by consumers.
 
-| git | GitHub / GitLab | | Uro | future platforms & games |
-|---|---|---|---|---|
-| repository | hosted repos | | world + timeline | hosted worlds |
-| branch / fork | pull requests, forks UI | | campaign branches | "play this world's aftermath" |
-| `git archive` | releases, packages | | world/campaign export packs | sharing libraries, marketplaces |
-| hooks | CI/CD | | dry-run mode, event stream (outbox) | creator tooling, moderation |
+| Uro provides (the engine) | What consumers build on top |
+|---|---|
+| a world and its versioned timeline | hosted worlds, shared world libraries |
+| campaign branches — continue, fork, what-if | "play this world's aftermath" |
+| world / campaign export packs | sharing, marketplaces |
+| dry-run mode + an event stream (outbox) | creator tooling, moderation |
 
 ## Status
 

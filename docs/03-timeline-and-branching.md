@@ -2,17 +2,19 @@
 
 This is the engine's signature capability and the reason it exists as a PoC. Decision on record: **branch anywhere** (not just from campaign endings).
 
-## The model, in git terms
+## The model
 
-| git | Uro | Notes |
-|---|---|---|
-| repository | **World** | One timeline universe |
-| commit | **Beat commit** — the batch of domain events produced by one resolved beat | Append-only, hash-chained, parent-linked |
-| branch (ref) | **Branch** — a named head pointer | `main` created at world seeding; campaigns play on branches |
-| tag | **Marker** — named point (campaign start/end, "the meteor falls") | Cheap, immutable |
-| checkout | **Materialization** — building world state at any commit | Served by snapshots + replay |
-| fork | **Branch from any commit** | The meteor scenarios |
-| merge | **Not supported.** | Divergent world histories don't merge; this is a feature. Re-evaluate only if a real need appears. |
+The timeline is an append-only log of typed events; everything else is derived from it. The vocabulary:
+
+| Concept | Notes |
+|---|---|
+| **World** | One timeline universe |
+| **Beat commit** — the batch of domain events produced by one resolved beat | Append-only, hash-chained, parent-linked |
+| **Branch** — a named head pointer | `main` created at world seeding; campaigns play on branches |
+| **Marker** — a named point (campaign start/end, "the meteor falls") | Cheap, immutable |
+| **Materialization** — building world state at any commit | Served by snapshots + replay |
+| **Branch from any commit** | The meteor scenarios |
+| **No merge** | Divergent world histories don't merge; this is a feature. Re-evaluate only if a real need appears. |
 
 ## Event sourcing mechanics
 
