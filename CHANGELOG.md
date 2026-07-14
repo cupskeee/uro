@@ -15,6 +15,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   deliberately outside the branch/projection axis so `fork_branch` never resets it. Surfaces to the
   narrator as the player's private recollection (never canon / never an NPC belief, by direct
   construction); `uro codex add/list`; migration 017. The event-sourced journal is reserved (D-36).
+- **Client-supplied plan (B9, #8)** — `Engine.run_beat/run_beat_stream/preview_beat(..., plan=BeatPlan)`
+  drives the planner→mechanics gate **deterministically, with no LLM** (CI mechanics coverage + keyless
+  consumers): free-roam checks *and* full encounters resolve from an injected plan. The supplied plan is
+  fenced by the same `validate_plan` as an LLM plan (unknown affordance → `PlannerError`) and is a
+  **trusted in-process input** — no D-32 ceiling (that fences the external Chronicler POST); a future
+  network-exposed `plan=` must add it (D-37). `BeatResult` gains `check_traces` (per-check detail — incl.
+  a resolved fight's rounds). Library API only for now (not wired to `serve`/CLI).
 
 ### Changed
 - **Repositioned Uro as its own thing — "a world-state engine" — and retired the git→GitHub analogy**

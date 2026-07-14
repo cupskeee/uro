@@ -72,7 +72,7 @@ ids are your strings (convention: `a:` actor, `p:` place, `f:` faction, `t:` thr
 ### Playing beats (GM mode — Uro runs the loop)
 ```python
 result = await engine.run_beat(campaign, "player-1", "I ask Mera about the smugglers")
-# -> BeatResult(beat_id, narration, commit_id, extracted, checks, suggestions)
+# -> BeatResult(beat_id, narration, commit_id, extracted, checks, check_traces, suggestions)
 async for chunk in engine.run_beat_stream(campaign, "player-1", intent): ...   # streaming
 events = await engine.preview_beat(campaign, "player-1", intent)               # dry-run, no commit
 ```
