@@ -63,6 +63,7 @@ from uro_core.timeline.models import (
     LineageEntry,
     Marker,
     MemoryHit,
+    ParticipantNote,
     PlaceView,
     ThreadView,
     World,
@@ -1168,6 +1169,51 @@ class PostgresEventStore:
                 scope_ref,
             )
         return [(r["key"], int(r["value"])) for r in rows]
+
+    # --- participant memory (docs/18 B8): NOT branch-scoped, NOT a projection, NOT copied by a
+    # fork — a player's out-of-world notes keyed on (participant_id, world_ref). ---
+
+    async def participant_remember(
+        self,
+        participant_id: str,
+        world_ref: str,
+        text: str,
+        *,
+        key: str | None = None,
+        pinned: bool = False,
+        entity_refs: list[str] | None = None,
+    ) -> str:
+        note_key = key or hashlib.sha256(text.strip().encode()).hexdigest()[:16]
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO participant_notes (participant_id, world_ref, key, text, pinned, "
+                "entity_refs) VALUES ($1, $2, $3, $4, $5, $6) "
+                "ON CONFLICT (participant_id, world_ref, key) DO UPDATE SET "
+                "text = EXCLUDED.text, pinned = EXCLUDED.pinned, "
+                "entity_refs = EXCLUDED.entity_refs",
+                participant_id,
+                world_ref,
+                note_key,
+                text,
+                pinned,
+                entity_refs or [],
+            )
+        return note_key
+
+    async def participant_notes(self, participant_id: str, world_ref: str) -> list[ParticipantNote]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT key, text, pinned, entity_refs FROM participant_notes "
+                "WHERE participant_id = $1 AND world_ref = $2 ORDER BY key",
+                participant_id,
+                world_ref,
+            )
+        return [
+            ParticipantNote(
+                key=r["key"], text=r["text"], pinned=r["pinned"], entity_refs=list(r["entity_refs"])
+            )
+            for r in rows
+        ]
 
     async def query_across(
         self, branch_ids: list[str], sections: list[str]

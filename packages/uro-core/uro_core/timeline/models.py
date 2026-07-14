@@ -120,6 +120,17 @@ class ThreadView(BaseModel):
     provenance: str  # author | ai_backfill
 
 
+class ParticipantNote(BaseModel):
+    """A player's out-of-world meta-knowledge (docs/18 B8) — a note that belongs to the PARTICIPANT,
+    not the branch, so it survives a fork/reset (time-loop / roguelike / NG+). It is NOT canon and
+    NOT an NPC belief: it surfaces to the narrator only, as the player's private recollection."""
+
+    key: str  # caller-supplied (or content-hashed) — the dedup key within (participant, world)
+    text: str
+    pinned: bool = False  # always surfaces (vs entity-triggered)
+    entity_refs: list[str] = []  # e.g. ["name:vault"] — surfaces when the beat mentions them
+
+
 class MemoryHit(BaseModel):
     text: str
     kind: str

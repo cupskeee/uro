@@ -12,6 +12,7 @@ half that always beats semantic search when refs exist (docs/04).
 
 from __future__ import annotations
 
+import logging
 import re
 
 from pydantic import BaseModel, Field
@@ -20,7 +21,16 @@ from uro_core.domain.events import BeatResolvedPayload
 from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
-from uro_core.timeline.models import ActorView, BeliefView, ClaimView, PlaceView, ThreadView
+from uro_core.timeline.models import (
+    ActorView,
+    BeliefView,
+    ClaimView,
+    ParticipantNote,
+    PlaceView,
+    ThreadView,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class RecallBundle(BaseModel):
@@ -41,6 +51,9 @@ class RecallBundle(BaseModel):
     # current state (docs/04 gap B4: a place changing hands or being DESTROYED was invisible; the
     # meteor's crater, a holding that changed owner). Closes the last structured-recall deferral.
     places: list[PlaceView] = Field(default_factory=list)
+    # The acting player's out-of-world notes (B8) — knowledge that survives a fork (time-loop/NG+),
+    # rendered as the player's private recollection ONLY; never canon, never an NPC belief.
+    participant_notes: list[ParticipantNote] = Field(default_factory=list)
 
 
 def _name_token(name: str) -> str:
@@ -56,7 +69,13 @@ def _mentions(haystack: str, term: str) -> bool:
 
 
 async def assemble_recall(
-    store: EngineStore, branch_id: str, intent_text: str, recency: int
+    store: EngineStore,
+    branch_id: str,
+    intent_text: str,
+    recency: int,
+    *,
+    participant_id: str = "",
+    world_ref: str = "",
 ) -> RecallBundle:
     recent = await store.recent_beats(branch_id, recency)
     # Scan the intent plus the recent window's intent AND narration, so an actor active
@@ -105,6 +124,25 @@ async def assemble_recall(
     # destroyed place or a changed description it would otherwise narrate as still-standing (B4).
     places = [p for p in await store.list_places(branch_id) if _mentions(haystack, p.name)]
 
+    # The acting player's out-of-world notes (B8): pinned OR entity-triggered (surfaced this beat).
+    # Best-effort like semantic recall — a failure here must not sink the beat. Fetched only for the
+    # ACTING participant (party isolation), scoped to the world (survives a within-world fork).
+    participant_notes: list[ParticipantNote] = []
+    if participant_id and world_ref:
+        all_notes: list[ParticipantNote] = []
+        try:  # narrow: only the STORE call is best-effort — a filter bug below should surface
+            all_notes = await store.participant_notes(participant_id, world_ref)
+        except Exception:  # degrade to no notes, but LOG it (e.g. an unmigrated DB)
+            logger.warning(
+                "participant recall failed for %s in world %s", participant_id, world_ref
+            )
+        participant_notes = [
+            n
+            for n in all_notes
+            # a ref may be prefixed ("name:vault") or bare ("vault") — match the bare term
+            if n.pinned or any(_mentions(haystack, ref.split(":", 1)[-1]) for ref in n.entity_refs)
+        ]
+
     return RecallBundle(
         recent_beats=recent,
         actors=on_stage,
@@ -113,6 +151,7 @@ async def assemble_recall(
         belief_claims=belief_claims,
         active_threads=active_threads,
         places=places,
+        participant_notes=participant_notes,
     )
 
 
@@ -164,6 +203,16 @@ def build_narrator_messages(
         context_lines.append(
             "YOU RECALL (from earlier in the campaign):\n"
             + "\n".join(f"- {m}" for m in recall.memories)
+        )
+    # The player's out-of-world notes (B8): the player's PRIVATE edge across loops/lives. Addressed
+    # to the player, explicitly walled off from canon — the narrator may let it inform the player's
+    # choices but must NOT state it as public fact or put it in an NPC's mouth.
+    if recall.participant_notes:
+        context_lines.append(
+            "WHAT YOU (THE PLAYER) REMEMBER FROM A PREVIOUS LIFE/LOOP "
+            "(known ONLY to you — the world and its people do NOT know this; it is your private "
+            "edge, never state it as public fact or through another character):\n"
+            + "\n".join(f"- {n.text}" for n in recall.participant_notes)
         )
     if facts:
         context_lines.append("ESTABLISHED FACTS (true):\n" + "\n".join(f"- {f}" for f in facts))

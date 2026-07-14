@@ -9,6 +9,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **Participant memory (B8, #7)** — a player's out-of-world notes that **survive a fork** (time-loop /
+  roguelike / NG+): a caller-owned `ParticipantMemory` lane keyed on `(participant_id, world_ref)`,
+  deliberately outside the branch/projection axis so `fork_branch` never resets it. Surfaces to the
+  narrator as the player's private recollection (never canon / never an NPC belief, by direct
+  construction); `uro codex add/list`; migration 017. The event-sourced journal is reserved (D-36).
+
 ### Changed
 - **Repositioned Uro as its own thing — "a world-state engine" — and retired the git→GitHub analogy**
   from all outward-facing framing (README, `CLAUDE.md`, social preview, docs 00/01/03/08/10/glossary).
