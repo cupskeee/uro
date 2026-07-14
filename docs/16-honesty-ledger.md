@@ -269,3 +269,15 @@ Engine-owned numeric state, event-sourced so it forks by construction — the fi
 | `append_and_react` one-call authored-commit path | proven | commits + reacts in one exception-isolated call (docs/18 B1). |
 | Counter RMW concurrency | **partial (by policy)** | `adjust_counter` is the first non-idempotent read-modify-write; a per-branch in-process `_react_lock` serializes concurrent `react()` passes. Cross-process serialization (`expected_head`) is future. |
 | Computed cross-counter arithmetic · `for_each`/`roll_table`/`expire_claim` · bounded cascade | deferred | staged on evidence in docs/19 (C3–C6, OQ-1); the closed grammar stays the trust fence. |
+
+## Post-PoC — participant memory (2026-07-14, D-36, docs/18 B8 / #7)
+
+A player's out-of-world notes that survive a fork (time-loop / roguelike / NG+) — a caller-owned lane keyed on `(participant_id, world_ref)`, not the branch.
+
+| Capability | Status | Note |
+|---|---|---|
+| Fork-survival + reset-immunity | **proven (by construction)** | `participant_notes` is NOT a projection, NOT in `_SNAPSHOT_TABLES`, never in `fork_branch`/`_copy_memory`/`_materialize_into` — a fork copies only branch-keyed rows. `test_participant_memory.py` (fork-survival + not-in-snapshot). |
+| Canon-safety — DIRECT wiring | **proven (structural, by absence)** | nothing reads a note into the extractor/planner/`proj_claims`/`proj_beliefs`/belief-propagation (grep-verified; `test_note_never_becomes_canon_or_a_belief`). |
+| Canon-safety — the narration→extract echo | **partial (by policy)** | a note surfaces in the narrator prompt (labelled "the world does NOT know this"); if the narrator ECHOES it, the echo is extractable like any narrator output — the same narrator-tier-trust residual EVERY narrator input has (docs/13), not a new hole. Untestable deterministically (the stub never echoes). |
+| Dedup / idempotent (caller key + `sha256` fallback) · recall selection (pinned + entity-triggered) | proven | deterministic; `test_participant_memory.py`. |
+| Event-sourced participant journal (audit / forget / confidence-decay) · separate participant export · global cross-world scope | deferred (reserved) | behind the same port on an evidence gate — grow when a 2nd game evidences the need (D-36; validate-before-building). |

@@ -23,10 +23,14 @@ db_app = typer.Typer(no_args_is_help=True, help="Database management.")
 world_app = typer.Typer(no_args_is_help=True, help="World and campaign management.")
 branch_app = typer.Typer(no_args_is_help=True, help="Branch and timeline management (docs/03).")
 campaign_app = typer.Typer(no_args_is_help=True, help="Campaign lifecycle over branches.")
+codex_app = typer.Typer(
+    no_args_is_help=True, help="Player codex — out-of-world notes that survive a fork (docs/18 B8)."
+)
 app.add_typer(db_app, name="db")
 app.add_typer(world_app, name="world")
 app.add_typer(branch_app, name="branch")
 app.add_typer(campaign_app, name="campaign")
+app.add_typer(codex_app, name="codex")
 
 PARTICIPANT = "player-1"  # Phase 0 is single-player; participants arrive in Phase 5.
 
@@ -865,5 +869,75 @@ def consistency(campaign_id: str) -> None:
             f"T2 (proxy): {consistent}/{total} narrator claims survived the contradiction "
             f"gauntlet ({ratio:.0%}) — regression trend, not ground-truth verification"
         )
+
+    _run_async(_run)
+
+
+@codex_app.command("add")
+def codex_add(
+    campaign_id: str,
+    text: str,
+    participant: str = typer.Option(PARTICIPANT, "--participant", help="whose codex"),
+    key: str = typer.Option(
+        None, "--key", help="dedup key (re-adding overwrites); default: content hash"
+    ),
+    pinned: bool = typer.Option(False, "--pinned", help="always surface (vs only when mentioned)"),
+    ref: list[str] = typer.Option(  # noqa: B008 (typer DI-style default)
+        None,
+        "--ref",
+        help="entity trigger, repeatable: a term/name that surfaces this note (e.g. vault)",
+    ),
+) -> None:
+    """Record an out-of-world player note (docs/18 B8) that survives a fork — the player's private
+    edge across loops/lives. It never becomes canon and no NPC ever knows it."""
+
+    async def _run() -> None:
+        store = build_store()
+        await store.connect()
+        try:
+            campaign = await store.get_campaign(campaign_id)
+            if campaign is None:
+                typer.echo(f"no such campaign: {campaign_id}", err=True)
+                raise typer.Exit(1)
+            used = await store.participant_remember(
+                participant, campaign.world_id, text, key=key, pinned=pinned, entity_refs=ref or []
+            )
+        finally:
+            await store.close()
+        typer.echo(
+            f"codex: noted for {participant!r} (key {used!r}){' [pinned]' if pinned else ''}"
+        )
+
+    _run_async(_run)
+
+
+@codex_app.command("list")
+def codex_list(
+    campaign_id: str,
+    participant: str = typer.Option(PARTICIPANT, "--participant", help="whose codex"),
+) -> None:
+    """List a participant's out-of-world notes for this campaign's world."""
+
+    async def _run() -> None:
+        store = build_store()
+        await store.connect()
+        try:
+            campaign = await store.get_campaign(campaign_id)
+            if campaign is None:
+                typer.echo(f"no such campaign: {campaign_id}", err=True)
+                raise typer.Exit(1)
+            notes = await store.participant_notes(participant, campaign.world_id)
+        finally:
+            await store.close()
+        if not notes:
+            typer.echo(f"codex empty for {participant!r}")
+            return
+        for n in notes:
+            tag = (
+                " [pinned]"
+                if n.pinned
+                else (f"  (on: {', '.join(n.entity_refs)})" if n.entity_refs else "")
+            )
+            typer.echo(f"- {n.text}{tag}")
 
     _run_async(_run)

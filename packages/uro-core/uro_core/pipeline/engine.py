@@ -146,8 +146,11 @@ class Engine:
             self._style_cache[branch_id] = (style, env)
         return self._style_cache[branch_id]
 
-    async def _recall(self, branch_id: str, intent_text: str) -> RecallBundle:
-        """Structured recall + semantic recall of older beats (docs/04).
+    async def _recall(
+        self, branch_id: str, intent_text: str, participant_id: str = "", world_ref: str = ""
+    ) -> RecallBundle:
+        """Structured recall + semantic recall of older beats (docs/04) + the acting player's
+        out-of-world notes (B8).
 
         Structured recall always stands; semantic recall is best-effort aux — an embed
         or vector-search failure (provider down, a mismatched embedder dimension on the
@@ -156,7 +159,14 @@ class Engine:
         if self._bare:  # ablation: transcript only, no state
             recent = await self._store.recent_beats(branch_id, self._recency)
             return RecallBundle(recent_beats=recent, actors=[], claims=[], beliefs=[])
-        recall = await assemble_recall(self._store, branch_id, intent_text, self._recency)
+        recall = await assemble_recall(
+            self._store,
+            branch_id,
+            intent_text,
+            self._recency,
+            participant_id=participant_id,
+            world_ref=world_ref,
+        )
         recent_texts = {b.narration for b in recall.recent_beats}
         started = time.perf_counter()
         try:
@@ -258,7 +268,9 @@ class Engine:
         The acting PC is resolved from the SUBMITTING participant (OQ-7 party play): a beat by
         participant P is planned/gated as P's PC — falling back to the campaign's solo PC when P
         has no binding (single-player, or an unseated observer)."""
-        recall = await self._recall(campaign.branch_id, intent_text)
+        recall = await self._recall(
+            campaign.branch_id, intent_text, participant_id, campaign.world_id
+        )
         pc_actor_id = await self._acting_pc(campaign, participant_id)
         if self._ruleset is None or self._bare:
             return _Context(recall=recall, pc_actor_id=pc_actor_id)
@@ -415,6 +427,30 @@ class Engine:
         commit = await self._store.append_beat(campaign.branch_id, events)
         await self.react(campaign, commit.commit_id, events)
         return commit
+
+    async def remember_participant(
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        text: str,
+        *,
+        key: str | None = None,
+        pinned: bool = False,
+        entity_refs: list[str] | None = None,
+    ) -> str:
+        """Record a player's out-of-world note (docs/18 B8) — knowledge that belongs to the
+        PARTICIPANT and survives a fork (time-loop / roguelike / NG+). It is NOT an event and NOT
+        canon: it only ever surfaces to the narrator as the player's private recollection, and a
+        fork never copies or resets it (it's keyed on the world, not the branch). Deliberately
+        opt-in (the author flags a fact as carry-worthy); returns the dedup key used."""
+        return await self._store.participant_remember(
+            participant_id,
+            campaign.world_id,
+            text,
+            key=key,
+            pinned=pinned,
+            entity_refs=entity_refs,
+        )
 
     async def agenda_tick(self, branch_id: str, days: int) -> None:
         """The downtime/agenda pass (docs/17 INC-4, D-33): advance in-fiction time on `branch_id`,
