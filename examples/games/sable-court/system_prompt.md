@@ -115,7 +115,7 @@ Id conventions: `a:` actor, `p:` place, `f:` faction, `t:` thread, `i:` item.
 ### 3.3 Play court beats
 ```python
 result = await engine.run_beat(campaign, "player-1", "I sell the Marshal's letters to Lady Corvane")
-# BeatResult(beat_id, narration, commit_id, extracted, checks, suggestions)
+# BeatResult(beat_id, narration, commit_id, extracted, checks, check_traces, suggestions)
 last_commit = result.commit_id
 # preview_beat(...) is the same pipeline with NO commit — use it to look before you leap.
 ```

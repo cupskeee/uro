@@ -281,3 +281,16 @@ A player's out-of-world notes that survive a fork (time-loop / roguelike / NG+) 
 | Canon-safety — the narration→extract echo | **partial (by policy)** | a note surfaces in the narrator prompt (labelled "the world does NOT know this"); if the narrator ECHOES it, the echo is extractable like any narrator output — the same narrator-tier-trust residual EVERY narrator input has (docs/13), not a new hole. Untestable deterministically (the stub never echoes). |
 | Dedup / idempotent (caller key + `sha256` fallback) · recall selection (pinned + entity-triggered) | proven | deterministic; `test_participant_memory.py`. |
 | Event-sourced participant journal (audit / forget / confidence-decay) · separate participant export · global cross-world scope | deferred (reserved) | behind the same port on an evidence gate — grow when a 2nd game evidences the need (D-36; validate-before-building). |
+
+## Post-PoC — client-supplied plan (2026-07-14, D-37, docs/18 B9 / #8)
+
+A caller-supplied `BeatPlan` drives the planner→mechanics gate deterministically (no LLM) — for CI mechanics coverage + keyless/embedded consumers.
+
+| Capability | Status | Note |
+|---|---|---|
+| Deterministic free-roam check via `run_beat(..., plan=…)` | **proven** | `test_deterministic_plan.py`: an injected plan resolves a check (`checks==1`) with the stub planner a no-op (`checks==0`), byte-identical across seeds (G-3). |
+| Deterministic ENCOUNTER via a supplied plan, rounds surfaced in `check_traces` | **proven** | `test_deterministic_plan.py::…start_an_encounter…`: a supplied attack plan resolves a full fight; `check_traces` is non-empty and `checks==len(check_traces)` (the phase-end review's combat-empty gap, fixed). |
+| Same-fence guarantee (supplied plan ≡ LLM plan) | **proven (by construction)** | one `validate_plan` (affordance fence + D-21 trigger coverage) for both paths; an unknown affordance raises `PlannerError` (`test_invalid_supplied_plan_is_rejected`). No second validator. |
+| Trust posture — `plan=` is a TRUSTED in-process input | **by design (documented)** | the caller is inside the trust boundary (it can drive the store directly), so NO D-32 protection ceiling is applied. The ceiling fences the EXTERNAL Chronicler POST (`distill_outcome`); a future network-exposed `plan=` MUST route through it first — this is not that path (D-37). |
+| Not gated under no-ruleset / `--bare` | **by design (now loud)** | correctly runs no mechanics (nothing to gate / ablation integrity), but LOGS a warning rather than silently voiding a supplied plan (review fix). |
+| Wired to `serve`/CLI · rule-based fallback planner · `CheckResolved` event trace | deferred (reserved) | library API only for the MVP; the fallback planner + a per-check event are reserved behind #8 (D-37). |

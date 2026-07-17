@@ -77,6 +77,9 @@ class BeatResult(BaseModel):
     commit_id: str
     extracted: int = 0  # number of state events canonicalized from the prose
     checks: int = 0  # ruleset checks resolved this beat (planner→mechanics gate)
+    check_traces: list[str] = Field(
+        default_factory=list
+    )  # per-check trace, not just the count (B9)
     suggestions: list[str] = Field(default_factory=list)  # affordance-grounded hints (D-23)
 
 
@@ -191,10 +194,16 @@ class Engine:
         return recall
 
     async def run_beat(
-        self, campaign: Campaign, participant_id: str, intent_text: str
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        intent_text: str,
+        *,
+        plan: BeatPlan | None = None,
     ) -> BeatResult:
-        """Resolve one beat and commit it (narration + extracted state, or a resolved fight)."""
-        ctx = await self._context(campaign, participant_id, intent_text)
+        """Resolve one beat and commit it (narration + extracted state, or a resolved fight). Pass
+        `plan` to drive the mechanics gate deterministically without the LLM planner (B9)."""
+        ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         started = time.perf_counter()
         chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
@@ -205,15 +214,22 @@ class Engine:
         )
 
     async def run_beat_stream(
-        self, campaign: Campaign, participant_id: str, intent_text: str
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        intent_text: str,
+        *,
+        plan: BeatPlan | None = None,
     ) -> AsyncIterator[str]:
         """Stream narration to the caller, then extract + commit once the stream ends.
 
         A beat commits only after the stream completes. If the consumer stops early
         (e.g. Ctrl-C mid-stream) the commit is intentionally skipped: nothing partial
         enters the append-only log, so a resumed session simply never saw that beat.
+
+        Pass `plan` to drive the mechanics gate deterministically without the LLM planner (B9).
         """
-        ctx = await self._context(campaign, participant_id, intent_text)
+        ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         started = time.perf_counter()
         collected: list[str] = []
@@ -241,6 +257,11 @@ class Engine:
             resolved = await self._resolve_encounter(campaign, ctx, trigger)
             if resolved is not None:  # a valid fight formed; otherwise fall through to free-roam
                 events, traces = resolved
+                # Surface the fight's deterministic rounds in BeatResult.check_traces too: the
+                # encounter path resolves outside the free-roam gate, so without this a combat beat
+                # reports 0 checks despite rich mechanics (B9). Extend, don't overwrite — a mixed
+                # plan may carry both a free-roam check and the encounter-starting attack.
+                ctx.mechanics_traces = [*ctx.mechanics_traces, *traces]
                 messages = build_narrator_messages(
                     ctx.recall,
                     intent_text,
@@ -262,19 +283,41 @@ class Engine:
         )
         return messages, None
 
-    async def _context(self, campaign: Campaign, participant_id: str, intent_text: str) -> _Context:
+    async def _context(
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        intent_text: str,
+        plan: BeatPlan | None = None,
+    ) -> _Context:
         """Context assembly [1] + (when a ruleset is bound) plan [2] + mechanics gate [3].
         The plan/gate run before any prose streams, so a re-ask replan is still free (docs/13).
         The acting PC is resolved from the SUBMITTING participant (OQ-7 party play): a beat by
         participant P is planned/gated as P's PC — falling back to the campaign's solo PC when P
-        has no binding (single-player, or an unseated observer)."""
+        has no binding (single-player, or an unseated observer).
+
+        A caller may supply `plan` (docs/18 B9): the DETERMINISTIC path into the mechanics gate — it
+        is validated exactly like an LLM plan (affordance fence + D-21 trigger coverage) but the
+        model planner is skipped — CI + keyless consumers resolve checks with no LLM."""
         recall = await self._recall(
             campaign.branch_id, intent_text, participant_id, campaign.world_id
         )
         pc_actor_id = await self._acting_pc(campaign, participant_id)
         if self._ruleset is None or self._bare:
+            if plan is not None:  # can't gate it here — say so, don't silently void it (B9 review)
+                logger.warning(
+                    "supplied plan ignored: %s, so there is no mechanics gate to drive it (B9)",
+                    "no ruleset is bound" if self._ruleset is None else "the engine is --bare",
+                )
             return _Context(recall=recall, pc_actor_id=pc_actor_id)
-        plan = await self._plan(campaign, intent_text, recall, pc_actor_id)
+        if plan is None:
+            plan = await self._plan(campaign, intent_text, recall, pc_actor_id)
+        else:  # client-supplied plan: validate it (same fence as the LLM plan), skip the model
+            affordances = self._ruleset.affordances()
+            known = {a.actor_id for a in recall.actors} | ({pc_actor_id} if pc_actor_id else set())
+            errors = validate_plan(plan, affordances, known)
+            if errors:
+                raise PlannerError(f"supplied plan invalid: {'; '.join(errors)}")
         checks = await self._mechanics(campaign, plan, recall, pc_actor_id)
         return _Context(
             recall=recall,
@@ -316,12 +359,17 @@ class Engine:
         return match.actor_id if match is not None else ""
 
     async def preview_beat(
-        self, campaign: Campaign, participant_id: str, intent_text: str
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        intent_text: str,
+        *,
+        plan: BeatPlan | None = None,
     ) -> list[DomainEvent]:
         """Dry-run a beat (docs/09 creator loop): run the full pipeline — plan, narrate, extract —
         but DO NOT commit. Returns the would-be events for inspection (the event diff). Nothing
-        enters the append-only log, so the campaign state is untouched."""
-        ctx = await self._context(campaign, participant_id, intent_text)
+        enters the append-only log, so the campaign state is untouched. Pass `plan` for B9."""
+        ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         started = time.perf_counter()
         chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
@@ -363,6 +411,7 @@ class Engine:
             commit_id=commit.commit_id,
             extracted=extracted_n,
             checks=len(ctx.mechanics_traces),
+            check_traces=ctx.mechanics_traces,
             suggestions=ctx.suggestions,
         )
 
