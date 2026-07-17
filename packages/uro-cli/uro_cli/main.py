@@ -477,6 +477,12 @@ def serve(
     ruleset: str = typer.Option(
         "", help="ruleset id for this server process (default: uro-basic via the registry)"
     ),
+    arbiter_kind: str = typer.Option(
+        "party",
+        "--arbiter",
+        help="multi-token turn shape (D-38): party (round-robin) | proposal (propose-then-act, "
+        "QUEUED) | vote (consensus). Ignored with a single token (solo).",
+    ),
 ) -> None:
     """Run the Uro server (docs/08): a thin FastAPI shell over the engine. Each --token maps to
     a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop).
@@ -486,7 +492,7 @@ def serve(
     do from campaign.ruleset_id) needs the Engine to resolve the ruleset per beat — deferred."""
     import uvicorn
     from uro_core.pipeline.engine import Engine
-    from uro_core.session import PartyArbiter
+    from uro_core.session import PartyArbiter, ProposalWindowArbiter, TurnArbiter, VoteArbiter
     from uro_server.app import create_app, engine_deps
 
     toks = token or ["local"]
@@ -498,9 +504,18 @@ def serve(
         tokens[tok] = name if sep else f"player-{i + 1}"
     store = build_store()
     engine = Engine(store, build_router(provider, model), ruleset=build_ruleset(ruleset))
-    # More than one token → a party: round-robin free-roam turns (OQ-7, D-31). One token → solo
+    # More than one token → a party; pick the turn shape (OQ-7, D-31/D-38). One token → solo
     # (create_app defaults to SoloArbiter). Seat each participant's PC via `uro campaign join`.
-    arbiter = PartyArbiter() if len(tokens) > 1 else None
+    shapes: dict[str, type[TurnArbiter]] = {
+        "party": PartyArbiter,
+        "proposal": ProposalWindowArbiter,
+        "vote": VoteArbiter,
+    }
+    if arbiter_kind not in shapes:
+        raise typer.BadParameter(
+            f"--arbiter must be one of {', '.join(shapes)} (got {arbiter_kind!r})"
+        )
+    arbiter = shapes[arbiter_kind]() if len(tokens) > 1 else None
     fastapi_app = create_app(engine_deps(store, engine, tokens), arbiter=arbiter)
 
     @fastapi_app.on_event("startup")
@@ -511,7 +526,11 @@ def serve(
     async def _shutdown() -> None:
         await store.close()
 
-    typer.echo(f"uro server on ws://{host}:{port}  ({len(tokens)} token(s), provider={provider})")
+    shape = arbiter_kind if len(tokens) > 1 else "solo"
+    typer.echo(
+        f"uro server on ws://{host}:{port}  "
+        f"({len(tokens)} token(s), provider={provider}, arbiter={shape})"
+    )
     for t, p in tokens.items():
         typer.echo(f"  token {t!r} → {p}")
     uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
@@ -524,7 +543,9 @@ def connect(
     token: str = typer.Option("local", help="bearer token (maps to a participant server-side)"),
 ) -> None:
     """HTTP-client play mode (docs/08): connect to a running `uro serve` over WebSocket. Type an
-    action; '/quit' to leave. Beats from every participant on the campaign stream in live."""
+    action to take a beat; '/say <text>' for out-of-world table-talk and '/vote <choice>' to vote
+    (D-38, both non-canon — they never commit); '/quit' to leave. Beats from every participant on
+    the campaign stream in live."""
     import asyncio
     import json
 
@@ -548,6 +569,26 @@ def connect(
                             typer.echo(f"\n  ✓ [{msg['participant_id']}] {msg['intent']!r}\n")
                         elif kind == "not_your_turn":
                             typer.echo("  · not your turn — another player holds it (round-robin)")
+                        elif kind == "proposal_opened":
+                            typer.echo(
+                                f"  · [{msg['participant_id']}] proposes: {msg['text']!r} "
+                                "— the turn-holder can enact it"
+                            )
+                        elif kind == "table_talk":
+                            typer.echo(f"  · [{msg['participant_id']}] says: {msg['text']}")
+                        elif kind == "vote_tally":
+                            typer.echo(
+                                f"  · [{msg['participant_id']}] voted {msg['choice']!r} "
+                                f"— tally {msg['tally']}"
+                            )
+                        elif kind == "vote_decided":
+                            typer.echo(
+                                f"  ✓ vote decided: {msg['choice']!r} — enact it on your turn"
+                            )
+                        elif kind == "vote_unsupported":
+                            typer.echo(
+                                "  · voting isn't enabled here (server needs --arbiter vote)"
+                            )
                         elif kind == "beat_failed":
                             typer.echo(f"\n  ✗ beat failed: {msg['error']}")
                         elif kind in ("participant_joined", "participant_left"):
@@ -559,7 +600,11 @@ def connect(
                     intent = (await loop.run_in_executor(None, input, "> ")).strip()
                     if intent in ("/quit", "/exit"):
                         break
-                    if intent:
+                    if intent.startswith("/say "):  # non-canon table-talk (D-38)
+                        await ws.send(json.dumps({"type": "table_talk", "text": intent[5:]}))
+                    elif intent.startswith("/vote "):  # non-canon consensus vote (D-38)
+                        await ws.send(json.dumps({"type": "vote", "choice": intent[6:]}))
+                    elif intent:
                         await ws.send(json.dumps({"type": "intent", "text": intent}))
                 receiver.cancel()
         except OSError as exc:

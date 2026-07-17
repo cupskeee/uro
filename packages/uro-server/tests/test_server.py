@@ -236,6 +236,131 @@ def test_party_arbiter_round_robin_over_the_ws_channel() -> None:
         assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"
 
 
+# --- D-38 (#9): arbiter shapes beyond round-robin — non-canon lane + proposal-window + vote ---
+
+
+def test_table_talk_fans_out_without_ever_committing_a_beat() -> None:
+    # INC-1: the non-canon coordination lane broadcasts to the whole session and NEVER calls
+    # run_beat — the SOLE path to append_beat. That run_beat is untouched IS the structural
+    # non-canon guarantee (no branch-head move, no event, no commit can happen).
+    calls: list[str] = []
+
+    async def run_beat(campaign_id: str, participant: str, text: str):  # type: ignore[no-untyped-def]
+        calls.append(text)
+        yield "narr"
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return campaign_id == "camp-1"
+
+    deps = ServerDeps(
+        resolve_participant=lambda t: _TOKENS.get(t),
+        campaign_exists=campaign_exists,
+        run_beat=run_beat,
+    )
+    client = TestClient(create_app(deps))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+    ):
+        _recv_until(a, "participant_joined")
+        a.send_json({"type": "table_talk", "text": "we should split up"})
+        tt = _recv_until(b, "table_talk")[-1]  # the OTHER client received it (broadcast fan-out)
+        assert tt["participant_id"] == "player-1" and tt["text"] == "we should split up"
+    assert calls == []  # run_beat NEVER ran → no beat, no append_beat, no commit (structural)
+
+
+def test_proposal_window_surfaces_a_non_holder_intent_as_a_proposal() -> None:
+    # INC-2 (G-10): a non-holder's intent becomes a first-class PROPOSAL (not a silent
+    # not_your_turn, not a rejection, and NOT a beat); the holder enacts it as an ordinary beat.
+    from uro_core.session import ProposalWindowArbiter
+
+    client = TestClient(create_app(_fake_deps(), arbiter=ProposalWindowArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,  # player-1 holds
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,  # player-2
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")  # roster [player-1, player-2]
+        b.send_json({"type": "intent", "text": "we should bribe the guard"})
+        msgs = _recv_until(a, "proposal_opened")
+        pr = msgs[-1]
+        assert pr["participant_id"] == "player-2" and pr["text"] == "we should bribe the guard"
+        assert not any(m["type"] == "beat_started" for m in msgs)  # a proposal is NOT a beat
+        # the holder enacts → an ordinary beat commits, the token rotates
+        a.send_json({"type": "intent", "text": "I bribe the guard"})
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-1"
+        # now player-2 holds → their intent runs as a real beat (proposal-window keeps round-robin)
+        b.send_json({"type": "intent", "text": "now me"})
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"
+
+
+def test_vote_tallies_on_the_lane_and_decides_without_burning_a_beat() -> None:
+    # INC-3 (G-11): votes ride the non-canon lane; the tally is server-side (session-only); a
+    # decided vote is announced but NOT auto-enacted (take_pending deferred) — no beat is burned.
+    from uro_core.session import VoteArbiter
+
+    client = TestClient(create_app(_fake_deps(), arbiter=VoteArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")  # roster [player-1, player-2]
+        a.send_json({"type": "vote", "choice": "go loud"})
+        assert _recv_until(a, "vote_tally")[-1]["tally"] == {"go loud": 1}  # 1/2, no decision yet
+        b.send_json({"type": "vote", "choice": "go loud"})
+        msgs = _recv_until(a, "vote_decided")
+        assert msgs[-1]["choice"] == "go loud"  # 2-0 → decided
+        assert not any(m["type"] == "beat_started" for m in msgs)  # no vote burned a beat
+
+
+def test_vote_on_a_non_vote_arbiter_gets_feedback_not_silence() -> None:
+    # Review fix: the CLI advertises /vote unconditionally, but a non-VoteCoordinator arbiter (the
+    # default party) can't tally — the server must say so, not silently swallow the frame.
+    from uro_core.session import PartyArbiter
+
+    client = TestClient(create_app(_fake_deps(), arbiter=PartyArbiter()))
+    with client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a:
+        _recv_until(a, "participant_joined")
+        a.send_json({"type": "vote", "choice": "go loud"})
+        assert _recv_until(a, "vote_unsupported")[-1]["participant_id"] == "player-1"
+
+
+def test_vote_resolves_when_the_last_holdout_disconnects() -> None:
+    # Review liveness fix: two of three vote the same, the third leaves without voting → the round
+    # is now complete; the server recomputes on disconnect (resolve_pending) and broadcasts the
+    # decision, instead of the round silently never resolving.
+    from uro_core.session import VoteArbiter
+
+    _THREE = {"tok-a": "player-1", "tok-b": "player-2", "tok-c": "player-3"}
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return campaign_id == "camp-1"
+
+    async def run_beat(campaign_id: str, participant: str, text: str):  # type: ignore[no-untyped-def]
+        yield "narr"
+
+    deps = ServerDeps(
+        resolve_participant=lambda t: _THREE.get(t),
+        campaign_exists=campaign_exists,
+        run_beat=run_beat,
+    )
+    client = TestClient(create_app(deps, arbiter=VoteArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-c") as c,
+    ):
+        for _ in range(3):
+            _recv_until(a, "participant_joined")  # roster [player-1, player-2, player-3]
+        a.send_json({"type": "vote", "choice": "flee"})
+        _recv_until(a, "vote_tally")
+        b.send_json({"type": "vote", "choice": "flee"})
+        _recv_until(a, "vote_tally")  # 2/3 — undecided, waiting on player-3
+        c.close()  # the last holdout leaves without voting → the round is now 2/2 complete
+        assert _recv_until(a, "vote_decided")[-1]["choice"] == "flee"
+
+
 def test_a_failed_beat_still_rotates_the_party_token() -> None:
     # cross-phase review: a deterministically-failing turn-holder must NOT wedge the party — the
     # token still rotates on beat_failed, so the next participant can act.

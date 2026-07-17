@@ -18,7 +18,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from starlette.websockets import WebSocketState
 from uro_core.pipeline.engine import Engine
 from uro_core.ports.projections import EngineStore
-from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter
+from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
 
 from uro_server.sessions import SessionHub
 
@@ -367,16 +367,67 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         try:
             while True:
                 msg = await ws.receive_json()
-                if msg.get("type") == "intent":
+                mtype = msg.get("type")
+                if mtype == "intent":
                     await _run_and_broadcast(
                         deps, arb, hub, campaign_id, participant, str(msg.get("text", ""))
                     )
+                elif mtype == "table_talk":
+                    # The NON-CANON coordination lane (D-38): out-of-world debate/proposals. It only
+                    # calls hub.publish and returns — it NEVER reaches _run_and_broadcast → run_beat
+                    # → append_beat, so by CONSTRUCTION it cannot move the branch head or mint an
+                    # event. This structural guarantee (not a policy) lets the party propose,
+                    # debate, and vote without burning a canonical beat.
+                    talk = str(msg.get("text", ""))
+                    if talk.strip():
+                        await hub.publish(
+                            campaign_id,
+                            {"type": "table_talk", "participant_id": participant, "text": talk},
+                        )
+                elif mtype == "vote":
+                    # A consensus/vote arbiter (D-38, G-11) tallies votes in session-only state and
+                    # broadcasts the running tally on the non-canon lane; a DECIDED vote is
+                    # announced but still enacted as an ordinary beat by the turn-holder
+                    # (take_pending deferred). If THIS server's arbiter has no vote shape, say so
+                    # rather than silently swallow it (D-38 review) — the CLI advertises /vote
+                    # unconditionally and can't know the server's arbiter.
+                    choice = str(msg.get("choice", ""))
+                    if not isinstance(arb, VoteCoordinator):
+                        await hub.publish(
+                            campaign_id,
+                            {"type": "vote_unsupported", "participant_id": participant},
+                        )
+                    elif choice.strip():
+                        outcome = await arb.cast_vote(campaign_id, participant, choice)
+                        await hub.publish(
+                            campaign_id,
+                            {
+                                "type": "vote_tally",
+                                "participant_id": participant,
+                                "choice": choice,
+                                "tally": outcome.tally,
+                            },
+                        )
+                        if outcome.decided is not None:
+                            await hub.publish(
+                                campaign_id,
+                                {"type": "vote_decided", "choice": outcome.decided},
+                            )
         except WebSocketDisconnect:
             pass
         finally:
             forward.cancel()
             hub.unsubscribe(campaign_id, queue)
             await arb.note_left(campaign_id, participant)  # drop from the turn roster (OQ-7)
+            # A departure can COMPLETE a pending vote round — the last holdout LEFT instead of
+            # voting — which cast_vote never re-checks (D-38 review). Recompute and announce it,
+            # else the round would silently never resolve.
+            if isinstance(arb, VoteCoordinator):
+                pending = await arb.resolve_pending(campaign_id)
+                if pending is not None and pending.decided is not None:
+                    await hub.publish(
+                        campaign_id, {"type": "vote_decided", "choice": pending.decided}
+                    )
             await hub.publish(
                 campaign_id, {"type": "participant_left", "participant_id": participant}
             )
@@ -413,7 +464,16 @@ async def _run_and_broadcast(
             campaign_id, {"type": "not_your_turn", "participant_id": participant, "text": text}
         )
         return
-    if decision != AdmitDecision.ADMITTED:  # REJECTED (or a reserved QUEUED) → no beat now
+    if decision == AdmitDecision.QUEUED:
+        # A proposal-window arbiter HELD this non-holder intent as a PROPOSAL (D-38, G-10): surface
+        # it to the whole table — no beat, no rotation — so the party can debate it on the
+        # lane and the holder can enact it on their turn. NOT a rejection (the client may see it
+        # acted on next); NOT a silent not_your_turn (a proposal is a first-class, visible event).
+        await hub.publish(
+            campaign_id, {"type": "proposal_opened", "participant_id": participant, "text": text}
+        )
+        return
+    if decision != AdmitDecision.ADMITTED:  # REJECTED → no beat now
         await hub.publish(
             campaign_id, {"type": "intent_rejected", "participant_id": participant, "text": text}
         )
