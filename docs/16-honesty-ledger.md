@@ -76,6 +76,7 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 | Server WS play + token auth · broadcast fan-out (two clients, same beat) | proven | via a fake `ServerDeps` (transport tested without a live DB/model). |
 | Full server + real Engine over WS, end-to-end | **stub-only** | never exercised live; `scripts/postpoc_validate.sh` §Phase-7 is the manual path. |
 | PartyArbiter round-robin (D-31); turn state session-only | proven | `test_party.py`; the round-robin itself is deterministic (no LLM). |
+| Proposal-window (`QUEUED` live) + consensus/vote arbiters + the non-canon table-talk lane (D-38) | proven | `test_arbiter_shapes.py` + `test_server.py`; deterministic (session-only, no LLM). The non-canon guarantee is **structural** (a `table_talk`/`vote` frame calls `hub.publish` only, never `run_beat`/`append_beat` — asserted by a "run_beat untouched" test). Consensual-PvP / simultaneous / reactive-interrupt / `take_pending` stay DEFERRED behind the same port (D-38). |
 | Export/import + hash-chain verify | proven | `test_export.py`. |
 | Bundle integrity | proxy | **keyless tamper-evidence**, NOT cryptographic authenticity (a re-derived internal chain). |
 | Belief/rumor propagation (confidence decay, traceable) | **stub-only** | deterministic BFS tested; **never run with a live narrator**. Distortion = confidence decay only (statement garbling deferred). |
@@ -99,7 +100,7 @@ Event types with plumbing (factory + payload + projector handler) but **no produ
 part of the forward event-catalog contract, marked reserved in docs/12: `ClaimTruthChanged`,
 `ActorPromoted`, `TerrainChanged`, `PlaceStateChanged`, `EdgeUpdated`/`EdgeRemoved`. `ActorDamaged`
 is **legacy** (replay-compat handler retained; the current harm path is opaque `SheetUpdated`, D-30).
-Other reserved: `AdmitDecision.QUEUED` (proposal-window arbiter), `TEMPLATE_API_VERSION` (pack pin),
+Other reserved: `TEMPLATE_API_VERSION` (pack pin),
 the transactional outbox + async event bus (docs/07 — the shipped model is inline-projector-in-txn),
 `uro world delete` (privacy wipe), persisted probe reports, the full REST management surface, the
 per-campaign expected-head concurrency guard, consequence-gating (D-21), the `entity_index` (OQ-3).

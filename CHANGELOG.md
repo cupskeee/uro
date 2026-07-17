@@ -22,6 +22,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   **trusted in-process input** — no D-32 ceiling (that fences the external Chronicler POST); a future
   network-exposed `plan=` must add it (D-37). `BeatResult` gains `check_traces` (per-check detail — incl.
   a resolved fight's rounds). Library API only for now (not wired to `serve`/CLI).
+- **Arbiter shapes beyond round-robin (B7, #9)** — two new multiplayer turn shapes behind the same
+  `TurnArbiter` port, plus a **non-canon coordination lane**: `uro serve --arbiter proposal` (a
+  non-holder's intent is surfaced to the table as a proposal via the now-live `AdmitDecision.QUEUED`,
+  not a silent refusal) and `--arbiter vote` (a session-only consensus tally). `uro connect` gains
+  `/say <text>` (table-talk) and `/vote <choice>` — both **non-canon by construction** (broadcast via
+  the session hub, never reaching a commit), so no proposal/debate/vote burns a canonical beat. New WS
+  frames: `table_talk`, `proposal_opened`, `vote_tally`, `vote_decided`, `vote_unsupported`. All
+  session-only (D-31), zero events/migrations. Consensual-PvP / simultaneous / reactive-interrupt stay
+  reserved behind the same port (D-38).
 
 ### Changed
 - **Repositioned Uro as its own thing — "a world-state engine" — and retired the git→GitHub analogy**
