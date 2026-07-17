@@ -31,6 +31,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   frames: `table_talk`, `proposal_opened`, `vote_tally`, `vote_decided`, `vote_unsupported`. All
   session-only (D-31), zero events/migrations. Consensual-PvP / simultaneous / reactive-interrupt stay
   reserved behind the same port (D-38).
+- **Session lifecycle: durable turn order + runtime tokens (B10, #10)** — refines D-31 (does not
+  reverse it). Multiplayer **turn order is now reconnect/restart-stable**: the arbiter ring is seeded
+  from durable PC-binding order (`store.pc_seats`, recovered from the `PCBound`/`PCReleased` log) — the
+  turn cursor stays session-only (a durable cursor would ride `fork_branch`). **Runtime auth**: a
+  durable, hashed (`sha256`), revocable, **campaign-scoped** `session_tokens` registry (migration 018,
+  off the branch axis) lets a player added to a *running* server authenticate without a restart —
+  minted via the authed `POST /join` (now returns `{actor_id, token}`), `POST /campaigns/{c}/tokens`,
+  or `uro token mint`; revoked via `/tokens/revoke` or `uro token revoke`. `uro serve` gains
+  `--admin-token` (an operator tier, distinct from ordinary `--token` players — only operators may act
+  for others) and decouples `--arbiter` from the launch token count (so a runtime-added player still
+  gets turns). New WS reject code `4403` (a minted token used on the wrong campaign). (D-39)
 
 ### Changed
 - **Repositioned Uro as its own thing — "a world-state engine" — and retired the git→GitHub analogy**

@@ -4,12 +4,51 @@ departure fix are inherited); the coordination is session-only and non-canon —
 Deterministic — no server, no DB, no LLM. (The WS wiring is covered in uro-server's test_server.py.)
 """
 
-from uro_core.session import AdmitDecision, ProposalWindowArbiter, VoteArbiter
+from uro_core.session import AdmitDecision, PartyArbiter, ProposalWindowArbiter, VoteArbiter
 
 
 async def _seat(arb: object, campaign: str, *participants: str) -> None:
     for p in participants:
         await arb.note_joined(campaign, p)  # type: ignore[attr-defined]
+
+
+# --- note_joined(seats): durable ring order + holder-preservation across a re-seat (D-39, G-18) ---
+
+
+async def test_note_joined_orders_the_ring_by_durable_seats_not_connect_order() -> None:
+    # Participants CONNECT in reverse of their durable seat order; rotation must follow the SEATS.
+    arb = PartyArbiter()
+    seats = ["p1", "p2", "p3"]
+    await arb.note_joined("c", "p3", seats)  # p3 connects first → holds
+    await arb.note_joined("c", "p2", seats)
+    await arb.note_joined("c", "p1", seats)
+    assert await arb.admit("c", "p3", "x") == AdmitDecision.ADMITTED  # first connector holds
+    await arb.beat_committed("c", "p3", "")  # p3 is seat index 2 → wraps to seat 0 (p1), not p2
+    assert await arb.admit("c", "p1", "x") == AdmitDecision.ADMITTED
+    await arb.beat_committed("c", "p1", "")
+    assert await arb.admit("c", "p2", "x") == AdmitDecision.ADMITTED  # …then p2 — pure seat order
+
+
+async def test_note_joined_preserves_the_live_holder_across_a_reseat() -> None:
+    # The G-17 bug class on the JOIN side: p2 connects first and HOLDS; when p1 connects the ring
+    # re-sorts to [p1, p2] (p1 is seat 0). WITHOUT holder-preservation the raw cursor 0 would now
+    # point at p1 — silently stealing the turn. The holder must STAY p2.
+    arb = PartyArbiter()
+    seats = ["p1", "p2", "p3"]
+    await arb.note_joined("c", "p2", seats)
+    assert await arb.admit("c", "p2", "x") == AdmitDecision.ADMITTED
+    await arb.note_joined("c", "p1", seats)  # re-sorts the ring; must not move the live turn
+    assert await arb.admit("c", "p2", "x") == AdmitDecision.ADMITTED  # still p2
+    assert await arb.admit("c", "p1", "x") == AdmitDecision.NOT_YOUR_TURN
+
+
+async def test_note_joined_without_seats_appends_as_before() -> None:
+    # Fallback (fake-deps / no store): seats=None keeps the pre-D-39 append behavior.
+    arb = PartyArbiter()
+    await arb.note_joined("c", "p1")
+    await arb.note_joined("c", "p2")
+    assert await arb.admit("c", "p1", "x") == AdmitDecision.ADMITTED
+    assert await arb.admit("c", "p2", "x") == AdmitDecision.NOT_YOUR_TURN
 
 
 # --- ProposalWindowArbiter (G-10): a non-holder is QUEUED (surfaced), not silently refused ---

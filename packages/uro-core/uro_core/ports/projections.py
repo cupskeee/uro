@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from uro_core.ports.event_store import EventStore
 from uro_core.ports.participant import ParticipantMemory
+from uro_core.ports.tokens import SessionTokenStore
 from uro_core.ports.vector import VectorIndex
 from uro_core.timeline.models import (
     ActorView,
@@ -107,6 +108,14 @@ class ProjectionQueries(Protocol):
         participant's fallback: 0 → no-PC campaign; 1 → solo fallback; ≥2 → party (refuse)."""
         ...
 
+    async def pc_seats(self, campaign_id: str) -> list[str]:
+        """Participant ids seated as active PCs, in DURABLE BIND ORDER (docs/18 B10, D-39) — the
+        arbiter ring order, recovered from the PCBound/PCReleased log so it is stable across
+        reconnect/restart (unlike live WS-connect race order) WITHOUT event-sourcing any turn state
+        (D-31 kept). First-ever-PCBound-per-participant order; a released participant is dropped, a
+        re-bound one returns to its ORIGINAL seat; branch-scoped to the campaign's own branch."""
+        ...
+
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]: ...
 
     async def get_item(self, branch_id: str, item_id: str) -> dict[str, Any] | None: ...
@@ -139,7 +148,10 @@ class ProjectionQueries(Protocol):
         ...
 
 
-class EngineStore(EventStore, ProjectionQueries, VectorIndex, ParticipantMemory, Protocol):
+class EngineStore(
+    EventStore, ProjectionQueries, VectorIndex, ParticipantMemory, SessionTokenStore, Protocol
+):
     """The read+write surface the engine needs: timeline (EventStore) + projection
-    queries + semantic memory (VectorIndex) + participant memory (docs/18 B8). The
-    Postgres store satisfies it structurally; Phase 1 has one store."""
+    queries + semantic memory (VectorIndex) + participant memory (docs/18 B8) +
+    session tokens (docs/18 B10). The Postgres store satisfies it structurally;
+    Phase 1 has one store."""

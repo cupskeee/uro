@@ -49,8 +49,13 @@ class TurnArbiter(Protocol):
 
     async def admit(self, campaign_id: str, participant_id: str, intent: str) -> AdmitDecision: ...
 
-    async def note_joined(self, campaign_id: str, participant_id: str) -> None:
-        """A participant connected — add to the turn roster (for arbiters that track one)."""
+    async def note_joined(
+        self, campaign_id: str, participant_id: str, seats: list[str] | None = None
+    ) -> None:
+        """A participant connected — add to the turn roster (for arbiters that track one). `seats`
+        (docs/18 B10, D-39) is the campaign's DURABLE bind order (from `store.pc_seats`): a stateful
+        arbiter orders its ring by it so reconnect/restart re-forms the SAME order regardless of
+        connect race. None → the arbiter falls back to append (fake-deps transport / no store)."""
         ...
 
     async def note_left(self, campaign_id: str, participant_id: str) -> None:
@@ -71,7 +76,9 @@ class SoloArbiter:
     async def admit(self, campaign_id: str, participant_id: str, intent: str) -> AdmitDecision:
         return AdmitDecision.ADMITTED
 
-    async def note_joined(self, campaign_id: str, participant_id: str) -> None:
+    async def note_joined(
+        self, campaign_id: str, participant_id: str, seats: list[str] | None = None
+    ) -> None:
         return None
 
     async def note_left(self, campaign_id: str, participant_id: str) -> None:
@@ -109,11 +116,27 @@ class PartyArbiter:
             return AdmitDecision.ADMITTED
         return AdmitDecision.NOT_YOUR_TURN
 
-    async def note_joined(self, campaign_id: str, participant_id: str) -> None:
+    async def note_joined(
+        self, campaign_id: str, participant_id: str, seats: list[str] | None = None
+    ) -> None:
         conns = self._conns.setdefault(campaign_id, {})
         conns[participant_id] = conns.get(participant_id, 0) + 1
-        if conns[participant_id] == 1:  # first connection → enter the ring
-            self._ring.setdefault(campaign_id, []).append(participant_id)
+        if conns[participant_id] != 1:
+            return  # already in the ring on another connection (a 2nd device / overlap reconnect)
+        ring = self._ring.setdefault(campaign_id, [])
+        holder = self._holder(campaign_id)  # capture BEFORE mutating the ring (may be None)
+        ring.append(participant_id)
+        if seats is not None:
+            # Order the ring by DURABLE bind order (D-39, G-18) so a reconnect/restart re-forms the
+            # SAME order regardless of connect race. Members in `seats` sort by their seat; any not
+            # listed (an observer with no PC binding) sort stably to the end.
+            rank = {p: i for i, p in enumerate(seats)}
+            ring.sort(key=lambda p: rank.get(p, len(seats)))
+        # Preserve the LIVE turn across the re-seat: `_turn` is a raw index, so re-ordering (or even
+        # a plain append that shifts nothing) must not silently hand the turn to another player —
+        # the same G-17 bug class the LEAVE path fixes, here on the JOIN path. Re-point `_turn` at
+        # the SAME holder identity captured above (0 if there was none / it is gone).
+        self._turn[campaign_id] = ring.index(holder) if holder in ring else 0
 
     async def note_left(self, campaign_id: str, participant_id: str) -> None:
         conns = self._conns.get(campaign_id, {})

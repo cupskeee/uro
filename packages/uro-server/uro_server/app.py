@@ -20,7 +20,7 @@ from uro_core.pipeline.engine import Engine
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
 
-from uro_server.sessions import SessionHub
+from uro_server.sessions import SessionHub, TokenRegistry
 
 
 def _bearer_token(request: Request) -> str:
@@ -67,11 +67,26 @@ class ServerDeps:
     # None → those endpoints return 501 (a fake-deps test that only exercises play/outcome).
     store: EngineStore | None = None
     advance_time: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None
+    # Runtime token management (docs/18 B10, D-39): mint/revoke durable session tokens + the admin
+    # check, behind the same resolve_participant choke point. None → the token endpoints return 501.
+    mint_token: Callable[[str, str], Awaitable[str]] | None = None  # (participant, campaign)→token
+    revoke_token: Callable[[str], Awaitable[bool]] | None = None  # (plaintext token) → revoked?
+    is_admin: Callable[[str], bool] | None = None  # (token) → operator tier (may act for others)?
+    token_campaign: Callable[[str], str | None] | None = None  # minted token → its campaign (scope)
+    hydrate_tokens: Callable[[], Awaitable[None]] | None = None  # load durable tokens at startup
 
 
-def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> ServerDeps:
+def engine_deps(
+    store: EngineStore,
+    engine: Engine,
+    tokens: dict[str, str],
+    admin_tokens: set[str] | None = None,
+) -> ServerDeps:
     """Production wiring: a connected store + Engine behind the transport port. `tokens` maps a
-    bearer token to a participant_id (docs/08 token mode)."""
+    bearer token to a participant_id (docs/08 token mode) — ordinary PLAYER credentials; the
+    `admin_tokens` subset is the OPERATOR tier (may act for others, D-39 review). Runtime player
+    tokens live in a durable, campaign-scoped `TokenRegistry` over the same resolve choke point."""
+    registry = TokenRegistry(store, tokens, admin_tokens)
 
     async def campaign_exists(campaign_id: str) -> bool:
         return (await store.get_campaign(campaign_id)) is not None
@@ -124,12 +139,17 @@ def engine_deps(store: EngineStore, engine: Engine, tokens: dict[str, str]) -> S
         return {"branch_id": campaign.branch_id, "world_day": world_day}
 
     return ServerDeps(
-        resolve_participant=lambda token: tokens.get(token),
+        resolve_participant=registry.resolve,
         campaign_exists=campaign_exists,
         run_beat=run_beat,
         report_outcome=report_outcome,
         store=store,
         advance_time=advance_time,
+        mint_token=registry.mint,
+        revoke_token=registry.revoke,
+        is_admin=registry.is_admin,
+        token_campaign=registry.campaign_of,
+        hydrate_tokens=registry.hydrate,
     )
 
 
@@ -171,6 +191,16 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         token = request.query_params.get("token") or _bearer_token(request)
         if deps.resolve_participant(token) is None:
             raise HTTPException(status_code=401, detail="unauthorized")
+
+    def _scope(request: Request) -> tuple[str, str | None, bool]:
+        """The caller's (raw token, resolved participant, is-admin) — for self-or-admin token
+        scoping (D-39). A caller may mint/join/revoke for THEMSELVES; only an operator (bootstrap
+        --token) credential may act for another participant. Never 'any valid token → any identity'
+        (which, with durable minting, would be a PC takeover via pc_for_participant)."""
+        token = request.query_params.get("token") or _bearer_token(request)
+        caller = deps.resolve_participant(token)
+        admin = deps.is_admin(token) if deps.is_admin is not None else False
+        return token, caller, admin
 
     def _mgmt() -> EngineStore:
         if deps.store is None:
@@ -271,6 +301,14 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
         participant = _require(body, "participant")
+        # Scoped mint (D-39): a caller may seat/mint for THEMSELVES; only an operator credential may
+        # seat another — else a durable token for an arbitrary identity would be a PC takeover.
+        _, caller, admin = _scope(request)
+        if participant != caller and not admin:
+            raise HTTPException(
+                status_code=403,
+                detail="can only join as yourself; seating another needs an operator --token",
+            )
         new_pc_name = body.get("new_pc_name")
         adopt_actor_id = body.get("adopt_actor_id")
         try:
@@ -291,7 +329,58 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             )
         except (ValueError, KeyError) as exc:  # bad PC choice, or an absent pinned ruleset
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"actor_id": actor_id}
+        result: dict[str, Any] = {"actor_id": actor_id}
+        # Mint-on-join (D-39): the blessed path to a LIVE credential — a runtime-added player gets a
+        # durable token naming EXACTLY the participant just bound on THIS campaign (no restart, no
+        # arbitrary-identity mint). Only when the deps carry a token registry (a store-backed one).
+        if deps.mint_token is not None:
+            result["token"] = await deps.mint_token(participant, campaign_id)
+        return result
+
+    @app.post("/campaigns/{campaign_id}/tokens")
+    async def mint_token_endpoint(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Standalone scoped mint (D-39) — the fallback to mint-on-join: issue a durable token for
+        an ALREADY-SEATED participant (self-or-admin scope; requires an existing PC binding, so a
+        token can't be minted for an unbound identity)."""
+        _auth(request)
+        if deps.mint_token is None:
+            raise HTTPException(status_code=501, detail="runtime token management not enabled")
+        participant = _require(body, "participant")
+        _, caller, admin = _scope(request)
+        if participant != caller and not admin:
+            raise HTTPException(
+                status_code=403, detail="can only mint for yourself (or as operator)"
+            )
+        store = _mgmt()
+        if await store.pc_for_participant(campaign_id, participant) is None:
+            raise HTTPException(
+                status_code=400, detail="participant has no PC on this campaign — join first"
+            )
+        return {"token": await deps.mint_token(participant, campaign_id)}
+
+    @app.post("/campaigns/{campaign_id}/tokens/revoke")
+    async def revoke_token_endpoint(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Revoke a token (D-39), self-or-admin scoped. Blocks a NEW connect immediately; a live
+        socket survives until it disconnects (auth is checked once before accept — a residual)."""
+        _auth(request)
+        if deps.revoke_token is None:
+            raise HTTPException(status_code=501, detail="runtime token management not enabled")
+        target = _require(body, "token")
+        _, caller, admin = _scope(request)
+        owner = deps.resolve_participant(target)  # whose token is it?
+        if owner is not None and owner != caller and not admin:
+            raise HTTPException(
+                status_code=403, detail="can only revoke your own token (or as operator)"
+            )
+        return {"revoked": await deps.revoke_token(target)}
 
     @app.get("/campaigns/{campaign_id}/roster")
     async def campaign_roster(campaign_id: str, request: Request) -> dict[str, Any]:
@@ -349,22 +438,40 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
     @app.websocket("/campaigns/{campaign_id}/play")
     async def play(ws: WebSocket, campaign_id: str) -> None:
         # Auth (docs/08 token mode): ?token=… → participant_id. Reject before accept.
-        participant = deps.resolve_participant(ws.query_params.get("token", ""))
+        token = ws.query_params.get("token", "")
+        participant = deps.resolve_participant(token)
         if participant is None:
             await ws.close(code=4401)  # unauthorized
             return
         if not await deps.campaign_exists(campaign_id):
             await ws.close(code=4404)  # no such campaign
             return
+        # A MINTED token is scoped to the campaign it was minted for (D-39 review): reject it on a
+        # DIFFERENT campaign's play channel — else a token authenticates its participant server-wide
+        # and could drive another campaign's PC (cross-campaign hijack). Static operator/legacy
+        # --token creds are intentionally server-wide (token_campaign → None) and unaffected.
+        tok_campaign = deps.token_campaign(token) if deps.token_campaign is not None else None
+        if tok_campaign is not None and tok_campaign != campaign_id:
+            await ws.close(code=4403)  # token not valid for this campaign
+            return
         await ws.accept()
-        queue = hub.subscribe(campaign_id)
-        await arb.note_joined(campaign_id, participant)  # add to the arbiter's turn roster (OQ-7)
-        await hub.publish(
-            campaign_id, {"type": "participant_joined", "participant_id": participant}
-        )
-        # Fan hub messages out to THIS connection while we read intents from it.
-        forward = asyncio.create_task(_forward(ws, queue))
+        # Everything fallible (a DB round-trip in pc_seats) runs INSIDE the try, so a transient
+        # failure can't orphan the hub subscription / turn-roster entry (D-39 review: an unguarded
+        # pre-try failure leaked the queue forever). The finally cleans up whatever was set up.
+        queue: asyncio.Queue[dict[str, Any]] | None = None
+        forward: asyncio.Task[None] | None = None
+        joined = False
         try:
+            queue = hub.subscribe(campaign_id)
+            # Seed the arbiter's ring in DURABLE bind order (D-39, G-18) so reconnect/restart re-
+            # forms the SAME order regardless of connect race; None (fake-deps/no store) → append.
+            seats = await deps.store.pc_seats(campaign_id) if deps.store is not None else None
+            await arb.note_joined(campaign_id, participant, seats)  # add to the turn roster (OQ-7)
+            joined = True
+            await hub.publish(
+                campaign_id, {"type": "participant_joined", "participant_id": participant}
+            )
+            forward = asyncio.create_task(_forward(ws, queue))  # fan hub → this socket
             while True:
                 msg = await ws.receive_json()
                 mtype = msg.get("type")
@@ -416,21 +523,24 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         except WebSocketDisconnect:
             pass
         finally:
-            forward.cancel()
-            hub.unsubscribe(campaign_id, queue)
-            await arb.note_left(campaign_id, participant)  # drop from the turn roster (OQ-7)
-            # A departure can COMPLETE a pending vote round — the last holdout LEFT instead of
-            # voting — which cast_vote never re-checks (D-38 review). Recompute and announce it,
-            # else the round would silently never resolve.
-            if isinstance(arb, VoteCoordinator):
-                pending = await arb.resolve_pending(campaign_id)
-                if pending is not None and pending.decided is not None:
-                    await hub.publish(
-                        campaign_id, {"type": "vote_decided", "choice": pending.decided}
-                    )
-            await hub.publish(
-                campaign_id, {"type": "participant_left", "participant_id": participant}
-            )
+            if forward is not None:
+                forward.cancel()
+            if queue is not None:
+                hub.unsubscribe(campaign_id, queue)
+            if joined:  # only tear down a roster entry we created (guards a pre-join failure)
+                await arb.note_left(campaign_id, participant)  # drop from the turn roster (OQ-7)
+                # A departure can COMPLETE a pending vote round — the last holdout LEFT instead of
+                # voting — which cast_vote never re-checks (D-38 review). Recompute and announce it,
+                # else the round would silently never resolve.
+                if isinstance(arb, VoteCoordinator):
+                    pending = await arb.resolve_pending(campaign_id)
+                    if pending is not None and pending.decided is not None:
+                        await hub.publish(
+                            campaign_id, {"type": "vote_decided", "choice": pending.decided}
+                        )
+                await hub.publish(
+                    campaign_id, {"type": "participant_left", "participant_id": participant}
+                )
 
     return app
 

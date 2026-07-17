@@ -32,7 +32,8 @@ def _client(store: PostgresEventStore) -> httpx.AsyncClient:
     """An ASGI-transport client over the real engine-backed app (usable inside an async test —
     TestClient would deadlock against the already-running event loop)."""
     engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
-    app = create_app(engine_deps(store, engine, {_TOK: "alice"}))
+    # _TOK is the OPERATOR credential (may seat/mint for others, D-39); ordinary players are minted.
+    app = create_app(engine_deps(store, engine, {_TOK: "alice"}, admin_tokens={_TOK}))
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
 
 
@@ -201,3 +202,94 @@ async def test_management_surface_501_without_store() -> None:
         transport=httpx.ASGITransport(app=app), base_url="http://t"
     ) as client:
         assert (await client.get(_q("/worlds"))).status_code == 501
+
+
+# --- D-39 (#10): runtime session tokens over the real store (mint-on-join, scope, revoke) ---
+
+
+async def _world_campaign(client: httpx.AsyncClient, name: str) -> str:
+    world_id = (await client.post(_q("/worlds"), json={"name": name})).json()["world_id"]
+    return (
+        await client.post(
+            _q(f"/worlds/{world_id}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "Ash"},
+        )
+    ).json()["campaign_id"]
+
+
+async def test_rest_mint_on_join_returns_a_working_token(store: PostgresEventStore) -> None:
+    async with _client(store) as client:
+        cid = await _world_campaign(client, "Tok")
+        # alice (the bootstrap/operator token) seats bob → mint-on-join issues bob a durable token
+        r = await client.post(
+            _q(f"/campaigns/{cid}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+        )
+        assert r.status_code == 200, r.text
+        bob_token = r.json()["token"]
+        assert bob_token
+        # bob's minted token authenticates an authed call (it resolves to bob) — no server restart
+        got = await client.get(f"/campaigns/{cid}/roster?token={bob_token}")
+        assert got.status_code == 200
+
+
+async def test_rest_join_scope_blocks_seating_another_without_operator(
+    store: PostgresEventStore,
+) -> None:
+    async with _client(store) as client:
+        cid = await _world_campaign(client, "Scope")
+        bob_token = (
+            await client.post(
+                _q(f"/campaigns/{cid}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+            )
+        ).json()["token"]
+        # bob (a non-operator token) may NOT seat carol → 403 (no arbitrary-identity mint)
+        r = await client.post(
+            f"/campaigns/{cid}/join?token={bob_token}",
+            json={"participant": "carol", "new_pc_name": "Cy"},
+        )
+        assert r.status_code == 403
+        # but bob acting as HIMSELF is fine (idempotent re-join)
+        r2 = await client.post(
+            f"/campaigns/{cid}/join?token={bob_token}", json={"participant": "bob"}
+        )
+        assert r2.status_code == 200
+
+
+async def test_rest_revoke_denies_further_use(store: PostgresEventStore) -> None:
+    async with _client(store) as client:
+        cid = await _world_campaign(client, "Rev")
+        bob_token = (
+            await client.post(
+                _q(f"/campaigns/{cid}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+            )
+        ).json()["token"]
+        assert (await client.get(f"/campaigns/{cid}/roster?token={bob_token}")).status_code == 200
+        # alice (operator) revokes bob's token
+        rv = await client.post(_q(f"/campaigns/{cid}/tokens/revoke"), json={"token": bob_token})
+        assert rv.status_code == 200 and rv.json()["revoked"] is True
+        # now bob's token is denied (blocks a NEW connect/call)
+        assert (await client.get(f"/campaigns/{cid}/roster?token={bob_token}")).status_code == 401
+
+
+async def test_rest_non_operator_static_token_cannot_seat_another(
+    store: PostgresEventStore,
+) -> None:
+    # D-39 review: the bug was that EVERY --token peer was treated as admin. A plain PLAYER token
+    # (a static token NOT in admin_tokens) must NOT be able to seat/mint for another participant.
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    app = create_app(engine_deps(store, engine, {"op": "gm", "pleb": "carol"}, admin_tokens={"op"}))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as client:
+        wid = (await client.post("/worlds?token=op", json={"name": "W"})).json()["world_id"]
+        cid = (
+            await client.post(
+                f"/worlds/{wid}/campaigns?token=op",
+                json={"participant": "gm", "new_pc_name": "G"},
+            )
+        ).json()["campaign_id"]
+        # carol (a plain --token peer, NOT an operator) tries to seat "dave" → 403
+        r = await client.post(
+            f"/campaigns/{cid}/join?token=pleb", json={"participant": "dave", "new_pc_name": "D"}
+        )
+        assert r.status_code == 403

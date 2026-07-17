@@ -719,6 +719,55 @@ class PostgresEventStore:
             )
         return [str(r["actor_id"]) for r in rows]
 
+    async def pc_seats(self, campaign_id: str) -> list[str]:
+        """Participant ids seated as active PCs, in DURABLE BIND ORDER (docs/18 B10, D-39) — the
+        arbiter ring order, recovered from the PCBound/PCReleased log so it is stable across
+        reconnect/restart (unlike live WS-connect race order) WITHOUT event-sourcing any turn
+        state (D-31 kept). Why the log and not `campaign_pcs`: that (and `active_pcs`) uses
+        `ORDER BY actor_id`, which mis-sorts ADOPTED PCs (an adopted actor's ULID reflects its
+        original creation, not its binding), and snapshots serialize proj_pcs by all columns —
+        both destroy insertion order. So we walk the events on the campaign's own branch ancestry
+        (branch-scoped like `pc_for_participant`), ordered by (depth, seq): first-ever PCBound per
+        participant fixes the seat; PCReleased drops them; a re-bind returns them to that seat."""
+        async with self.pool.acquire() as conn:
+            camp = await conn.fetchrow(
+                "SELECT branch_id FROM campaigns WHERE campaign_id = $1", campaign_id
+            )
+            if camp is None:
+                return []
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE chain AS (
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+                    WHERE b.branch_id = $1
+                    UNION ALL
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+                )
+                SELECT e.event_type, e.payload->>'participant_id' AS participant_id
+                FROM chain JOIN events e ON e.commit_id = chain.commit_id
+                WHERE e.event_type IN ('PCBound', 'PCReleased')
+                  AND e.payload->>'campaign_id' = $2
+                ORDER BY chain.depth ASC, e.seq ASC
+                """,
+                camp["branch_id"],
+                campaign_id,
+            )
+        order: list[str] = []  # first-ever PCBound order (the seat, never forgotten)
+        active: set[str] = set()  # currently bound (a released participant leaves this set)
+        for r in rows:
+            pid = r["participant_id"]
+            if pid is None:
+                continue
+            if r["event_type"] == "PCBound":
+                if pid not in order:
+                    order.append(pid)
+                active.add(pid)
+            else:  # PCReleased
+                active.discard(pid)
+        return [p for p in order if p in active]
+
     async def bind_pc(
         self,
         campaign_id: str,
@@ -1214,6 +1263,41 @@ class PostgresEventStore:
             )
             for r in rows
         ]
+
+    # --- Session tokens (docs/18 B10, D-39): a durable, hashed, revocable registry, OFF the branch
+    # axis (like participant_notes) — never a proj_*, never event-sourced, never forked. Only
+    # sha256(token) reaches the store; the plaintext is minted server-side and never persisted. ---
+
+    async def mint_token(self, token_hash: str, participant_id: str, campaign_id: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO session_tokens (token_hash, participant_id, campaign_id) "
+                "VALUES ($1, $2, $3) ON CONFLICT (token_hash) DO UPDATE SET "
+                "participant_id = EXCLUDED.participant_id, campaign_id = EXCLUDED.campaign_id, "
+                "revoked = false",
+                token_hash,
+                participant_id,
+                campaign_id,
+            )
+
+    async def revoke_token(self, token_hash: str) -> bool:
+        async with self.pool.acquire() as conn:
+            # Only report True when a LIVE token was actually revoked (not an unknown/already-
+            # revoked hash) — the endpoint uses this to distinguish a real revoke from a no-op.
+            row = await conn.fetchrow(
+                "UPDATE session_tokens SET revoked = true "
+                "WHERE token_hash = $1 AND revoked = false RETURNING token_hash",
+                token_hash,
+            )
+        return row is not None
+
+    async def list_session_tokens(self) -> list[tuple[str, str, str]]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT token_hash, participant_id, campaign_id "
+                "FROM session_tokens WHERE NOT revoked"
+            )
+        return [(r["token_hash"], r["participant_id"], r["campaign_id"]) for r in rows]
 
     async def query_across(
         self, branch_ids: list[str], sections: list[str]
