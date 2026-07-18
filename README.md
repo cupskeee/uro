@@ -37,7 +37,7 @@ Anything a *platform* would build: user accounts and social features, world/asse
 
 ## Status
 
-**All five PoC phases plus five post-PoC phases are code-complete** (282 tests green, fully deterministic in CI), and the **core thesis was validated live** (with caveats): in an ablation run the full engine built durable state and re-surfaced an established NPC + world facts past the recency window while the `--bare` (raw-transcript) arm built nothing and drifted. For the honest map of what is *proven* vs *proxy* vs *stub-only* vs *deferred*, see [docs/16-honesty-ledger.md](docs/16-honesty-ledger.md).
+**All five PoC phases, five post-PoC phases, and the games-driven backlog are code-complete** (359 tests green, fully deterministic in CI), and the **core thesis was validated live** (with caveats): in an ablation run the full engine built durable state and re-surfaced an established NPC + world facts past the recency window while the `--bare` (raw-transcript) arm built nothing and drifted. For the honest map of what is *proven* vs *proxy* vs *stub-only* vs *deferred*, see [docs/16-honesty-ledger.md](docs/16-honesty-ledger.md).
 
 What runs today, phase by phase (each with a passing acceptance test):
 
@@ -51,6 +51,7 @@ What runs today, phase by phase (each with a passing acceptance test):
 - **P8 — Chronicler hardening:** `distill_outcome` is now trust-scoped — an external bundle can't kill/loot/first-hand-witness a PC or a T2+ actor, loot needs real ownership, replays are idempotent (OQ-12 → D-32).
 - **P9 — the reaction layer:** pack-authored reactive behavior as *declarative data* (`rules.yaml` / `agendas.yaml`), never code — so a from-scratch pack sandbox is met structurally (a closed grammar that can't name a mechanical/lethal/canon event, D-33).
 - **P10 — the computation layer:** engine-owned, event-sourced integer counters that **fork by construction** (so pack-authored numeric state rides `fork_branch` instead of leaking into shadow game code, D-34).
+- **The backlog-issues epoch (D-36–D-42):** the games-driven backlog, worked issue-by-issue — participant memory that survives a fork, a deterministic client-supplied-plan path, proposal/vote arbiter shapes + durable session tokens, multi-ref reaction scopes + a dropped-action audit, a trusted-embedder Chronicler tier for authored canon deaths, richer reaction grammar (`for_each` / `roll_table` / `expire_claims`), place/faction claim recall + cross-branch reads, and **quantified/relational reaction triggers** (`$trigger`-aware `when` + `per_event`, RL-6).
 
 Then four games were built **on** the engine as forcing functions, producing an evidence-backed backlog ([docs/18-gap-findings.md](docs/18-gap-findings.md)) — which drove the last round of fixes and, just as usefully, *validated deferrals* (what **not** to build).
 
@@ -79,7 +80,7 @@ Without `just`, `just test` is just: `uv run ruff check . && uv run ruff format 
 
 ## Architecture
 
-Hexagonal by construction — the **core ring** (`domain`, `timeline`, `engines`, `pipeline`, `memory`, `session`, `chronicler`, `export`) imports only *ports*, never a concrete adapter. The rule isn't a convention; it's a CI failure (import-linter).
+Hexagonal by construction — the **core ring** (`domain`, `timeline`, `engines`, `pipeline`, `memory`, `session`, `chronicler`, `export`, `authored`, `_distill_core`) imports only *ports*, never a concrete adapter. The rule isn't a convention; it's a CI failure (import-linter) — which also *forbids* `uro_server` from importing the trusted `authored`/`_distill_core` distillation path (D-41: trust is which module you import).
 
 ```
 packages/
@@ -97,7 +98,7 @@ docs/              the authoritative design — when code and docs disagree, one
 
 ## Tests
 
-`just test` is the gate: `ruff` + `ruff format --check` + `mypy` (strict on the core ring) + `import-linter` (the hexagonal contract) + `pytest`. **282 tests, fully deterministic** — no live LLM calls in CI (provider-dependent paths use recorded/mock transports or the deterministic stub). Postgres must be up; DB-requiring tests auto-skip if it isn't. Each phase ships a passing acceptance test (the meteor test, insult→combat→consequences, the war-story ripple, the alien-ruleset partial success, …).
+`just test` is the gate: `ruff` + `ruff format --check` + `mypy` (strict on the core ring) + `import-linter` (the hexagonal contract) + `pytest`. **359 tests, fully deterministic** — no live LLM calls in CI (provider-dependent paths use recorded/mock transports or the deterministic stub). Postgres must be up; DB-requiring tests auto-skip if it isn't. Each phase ships a passing acceptance test (the meteor test, insult→combat→consequences, the war-story ripple, the alien-ruleset partial success, …).
 
 ## Documentation map
 

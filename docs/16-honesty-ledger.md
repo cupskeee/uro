@@ -100,13 +100,24 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 ## Reserved / not built (the honest deferred list)
 
 Event types with plumbing (factory + payload + projector handler) but **no production emitter** —
-part of the forward event-catalog contract, marked reserved in docs/12: `ClaimTruthChanged`,
-`ActorPromoted`, `TerrainChanged`, `PlaceStateChanged`, `EdgeUpdated`/`EdgeRemoved`. `ActorDamaged`
-is **legacy** (replay-compat handler retained; the current harm path is opaque `SheetUpdated`, D-30).
+part of the forward event-catalog contract, marked reserved in docs/12: `ActorPromoted`,
+`TerrainChanged`, `PlaceStateChanged`, `EdgeUpdated`. (`ClaimTruthChanged` and `EdgeRemoved` are no
+longer reserved — the reaction layer emits them, module-caused: `expire_claims` retracts a stale
+rumor via `claim_truth_changed` (C5, D-34/#13), and the `remove_edge` action emits `edge_removed`.)
+`ActorDamaged` is **legacy** (replay-compat handler retained; the current harm path is opaque
+`SheetUpdated`, D-30).
 Other reserved: `TEMPLATE_API_VERSION` (pack pin),
 the transactional outbox + async event bus (docs/07 — the shipped model is inline-projector-in-txn),
-`uro world delete` (privacy wipe), persisted probe reports, the full REST management surface, the
-per-campaign expected-head concurrency guard, consequence-gating (D-21), the `entity_index` (OQ-3).
+`uro world delete` (privacy wipe), persisted probe reports, the per-campaign expected-head
+concurrency guard, consequence-gating (D-21), the `entity_index` (OQ-3). (The **REST management
+surface** is no longer fully reserved — B3/#12 shipped the authed CRUD/read core over the
+`EngineStore` port; some endpoints — seed/branches/probe/export/import, SSE beats, `/usage` — stay
+CLI-only.)
+
+**Cross-branch reads (B5/#14):** `store.query_across(branch_ids, sections)` (one query per section
+via `branch_id = ANY(...)`, not N round-trips) + `diff_branches(a, b)` (added/removed/changed by PK)
++ `current_world_time_batch(branch_ids)` (each branch's in-fiction day in one recursive CTE) —
+proven, read-only over `proj_*`; `test_branching.py`.
 
 ## Live validation results (2026-07-09, `scripts/postpoc_validate.sh`, default gpt-4o-mini)
 
@@ -254,9 +265,11 @@ Pack-authored reactive behavior as DECLARATIVE data (`rules.yaml`/`agendas.yaml`
 |---|---|---|
 | Declarative rule interpreter + gauntlet | proven | `engines/rules.py` + `rules_gauntlet.py`, pure in-ring; `test_reaction_layer.py`. |
 | Multi-ref scopes + dropped-action audit (B11, D-40) | proven | `Scope` plural forms (`factions:[a,b]`) union members (least-privilege vs `world`); a validator enforces one jurisdiction; `RULES_API_VERSION` 2→3. `run_rules_gauntlet` returns `GauntletResult(events, drops)` — every refused/partially-filtered/over-cap action records a `DroppedAction` (no more silent vanish). Action fence untouched (jurisdiction widened only). `test_reaction_layer.py`. The audit is a diagnostic (logged per pass; returned for tests) — NOT surfaced in `uro dry-run` (react doesn't run there) and NOT a committed event. |
+| `for_each` / `roll_table` / `expire_claims` (C3/C4/C5, D-34/#13) | proven | bounded edge-neighbor loop with `$trigger`/`as` binding; seeded deterministic weighted pick; rumor-decay retraction (`claim_truth_changed`, migration 019 `created_day`). `RULES_API_VERSION` 3→4; recursion capped at parse + a shared node budget. `test_reaction_layer.py`. |
+| Quantified/relational triggers — `$trigger`-aware `when` + `per_event` (RL-6, D-42/#25) | proven | a condition's entity-ref slots bind `$trigger.<field>` from the trigger payload, evaluated PER matching event (a true existential: "ANY member died"); `per_event` fires once per match (count-each, rides forks). Trust untouched (conditions are reads). Parse fences the ref (ref slot only + string-scalar field); an unbound/null ref fails the whole `when` closed. `RULES_API_VERSION` 4→5; v1–v4 byte-identical. `test_reaction_layer.py`. |
 | Trust fence (no canon/mechanics/mint from a pack) | **proven (by construction)** | the closed `Action` Pydantic union cannot NAME a mechanical/lethal/canon event; gauntlet forces `truth=unknown`/`origin=module`, scope-fences, never mints an actor. No author code runs → the sandbox is structural. |
 | Thread lifecycle (dormant→active→resolved…) | proven | `ThreadStateChanged` (emitter M) advances `proj_threads.state`; the OQ-8 FSM that had no engine. |
-| Thread state reaches the narrator | proven | recall surfaces active/offered threads into the prompt ("ACTIVE THREADS"), so a module thread-activation influences the story, not just the projection — closes the gap the review implied. Place-state recall still deferred. |
+| Thread state reaches the narrator | proven | recall surfaces active/offered threads into the prompt ("ACTIVE THREADS"), so a module thread-activation influences the story, not just the projection — closes the gap the review implied. Place-state recall shipped (B4/#14 — a PLACES block + on-stage place/faction claim matching). |
 | Post-commit reaction + downtime agenda hooks | proven | `Engine.react` (from `_finish` AND the Chronicler path) + `Engine.agenda_tick` (at time-skip). Deterministic, replay-safe (never re-run), exception-isolated. |
 | `rules_api_version` pin | proven | enforced on the `RulePack` model → holds at parse, runtime, and import. |
 | Inline `WorldGenesis` carry | proven | rule pack travels with the world (export/import self-contained). |
