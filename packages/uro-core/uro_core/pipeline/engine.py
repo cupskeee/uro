@@ -452,11 +452,17 @@ class Engine:
                 )
                 if not fired:
                     return
-                module_events = await run_rules_gauntlet(
+                result = await run_rules_gauntlet(
                     self._store, campaign.branch_id, fired, trigger_commit=trigger_commit_id
                 )
-                if module_events:
-                    await self._store.append_beat(campaign.branch_id, module_events)
+                if result.drops:  # dropped-action audit (B11, D-40) — a rule did nothing; say why
+                    logger.warning(
+                        "reaction pass dropped %d action(s): %s",
+                        len(result.drops),
+                        "; ".join(f"{d.rule_id}/{d.do}→{d.ref}: {d.reason}" for d in result.drops),
+                    )
+                if result.events:
+                    await self._store.append_beat(campaign.branch_id, result.events)
             except Exception as exc:  # the beat is durable — a reaction fault must not fail it
                 logger.warning("reaction pass failed; the beat stands, no reactions: %s", exc)
 
@@ -527,11 +533,17 @@ class Engine:
                 )
                 if not fired:
                     return
-                module_events = await run_rules_gauntlet(
+                result = await run_rules_gauntlet(
                     self._store, branch_id, fired, trigger_commit=skip_commit.commit_id
                 )
-                if module_events:
-                    await self._store.append_beat(branch_id, module_events)
+                if result.drops:  # dropped-action audit (B11, D-40)
+                    logger.warning(
+                        "agenda tick dropped %d action(s): %s",
+                        len(result.drops),
+                        "; ".join(f"{d.rule_id}/{d.do}→{d.ref}: {d.reason}" for d in result.drops),
+                    )
+                if result.events:
+                    await self._store.append_beat(branch_id, result.events)
             except Exception as exc:  # the time-skip is durable — an agenda fault must not fail it
                 logger.warning("agenda tick failed; the time-skip stands, no agendas: %s", exc)
 

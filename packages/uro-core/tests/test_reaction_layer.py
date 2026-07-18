@@ -295,8 +295,155 @@ async def test_gauntlet_is_deterministic_and_idempotent(store: PostgresEventStor
     ]
     a = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c9")
     b = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c9")
-    assert [e.payload for e in a] == [e.payload for e in b]  # deterministic
-    assert a[0].payload["claim_id"] == "m:c9:r1:0"  # keyed on trigger commit → idempotent upsert
+    assert [e.payload for e in a.events] == [e.payload for e in b.events]  # deterministic
+    assert a.events[0].payload["claim_id"] == "m:c9:r1:0"  # keyed on trigger → idempotent upsert
+
+
+# --- B11 / D-40: multi-ref scopes + the dropped-action audit trail ---
+
+
+def test_scope_validator_enforces_exactly_one_jurisdiction() -> None:
+    import pytest
+    from uro_core.worldpack.rules import Scope
+
+    Scope(world=True)  # ok
+    Scope(faction="f:a")  # ok (singular)
+    Scope(factions=["f:a", "f:b"])  # ok (multi-ref, D-40)
+    Scope(faction="f:a", factions=["f:b"])  # ok — same category merges
+    with pytest.raises(ValueError):
+        Scope()  # empty → would drop every action
+    with pytest.raises(ValueError):
+        Scope(faction="f:a", place="p:x")  # two categories
+    with pytest.raises(ValueError):
+        Scope(world=True, faction="f:a")  # `world` is exclusive
+
+
+async def test_multi_ref_faction_scope_unions_members(store: PostgresEventStore) -> None:
+    # A rule scoped to TWO factions may touch members of EITHER (a pact between them) without the
+    # blunt `world` scope; a ref in neither is dropped with an audit record (D-40).
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActAddEdge, Scope
+
+    world = await store.create_world(f"multi-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id,
+        [
+            faction_created(faction_id="f:a", name="A"),
+            faction_created(faction_id="f:b", name="B"),
+            actor_created(actor_id="a:ma", name="Ma", tier=1),
+            actor_created(actor_id="a:mb", name="Mb", tier=1),
+            actor_created(actor_id="a:x", name="X", tier=1),  # member of neither
+            edge_added(src="a:ma", rel_type="member_of", dst="f:a"),
+            edge_added(src="a:mb", rel_type="member_of", dst="f:b"),
+        ],
+    )
+    scope = Scope(factions=["f:a", "f:b"])
+    fired = [
+        FiredAction(  # both ends in the UNIONED jurisdiction → committed
+            rule_id="r1",
+            scope=scope,
+            index=0,
+            action=ActAddEdge(do="add_edge", src="a:ma", rel="allied_with", dst="a:mb"),
+        ),
+        FiredAction(  # a:x is in neither faction → dropped, audited
+            rule_id="r2",
+            scope=scope,
+            index=0,
+            action=ActAddEdge(do="add_edge", src="a:ma", rel="allied_with", dst="a:x"),
+        ),
+    ]
+    result = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c1")
+    assert len(result.events) == 1  # only the in-scope edge
+    assert [(d.rule_id, d.ref, d.reason) for d in result.drops] == [
+        ("r2", "a:x", "edge endpoint out of scope")
+    ]
+
+
+async def test_dropped_action_audit_names_the_reason(store: PostgresEventStore) -> None:
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActCreateThread, ActSetThreadState, Scope
+
+    world = await store.create_world(f"drop-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(campaign.branch_id, [faction_created(faction_id="f:g", name="G")])
+    fired = [
+        FiredAction(  # create_thread whose ref is OUTSIDE the faction jurisdiction
+            rule_id="r1",
+            scope=Scope(faction="f:g"),
+            index=0,
+            action=ActCreateThread(do="create_thread", thread="t:outside", stakes="x"),
+        ),
+        FiredAction(  # set_thread_state on a NONEXISTENT thread (in scope, but not there)
+            rule_id="r2",
+            scope=Scope(thread="t:ghost"),
+            index=0,
+            action=ActSetThreadState(do="set_thread_state", thread="t:ghost", to="active"),
+        ),
+    ]
+    result = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c1")
+    assert result.events == []  # both refused
+    assert {(d.rule_id, d.reason) for d in result.drops} == {
+        ("r1", "out of scope"),
+        ("r2", "thread does not exist"),
+    }
+
+
+async def test_over_cap_actions_are_audited_not_silently_truncated(
+    store: PostgresEventStore,
+) -> None:
+    # Review fix: the _MAX_ACTIONS DoS cap truncates the tail; that tail must be AUDITED (a drop
+    # record), not vanish silently — B11's whole point (an author can't otherwise tell why).
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import _MAX_ACTIONS, run_rules_gauntlet
+    from uro_core.worldpack.rules import ActRecordRumor, Scope
+
+    world = await store.create_world(f"cap-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    fired = [
+        FiredAction(
+            rule_id=f"r{i}",
+            scope=Scope(world=True),
+            index=i,
+            action=ActRecordRumor(do="record_rumor", text=f"rumor {i}", subjects=[]),
+        )
+        for i in range(_MAX_ACTIONS + 3)
+    ]
+    result = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c1")
+    assert len(result.events) == _MAX_ACTIONS  # only the cap's worth committed
+    assert any(d.rule_id == "*" and "cap" in d.reason for d in result.drops)  # …the tail is audited
+
+
+async def test_partial_out_of_scope_subjects_are_audited(store: PostgresEventStore) -> None:
+    # Review fix: a rumor with SOME out-of-scope subjects still commits (with the in-scope ones);
+    # the filtered subject is recorded — a partial filter is no longer silent.
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActRecordRumor, Scope
+
+    world = await store.create_world(f"partial-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id,
+        [
+            faction_created(faction_id="f:g", name="G"),
+            actor_created(actor_id="a:in", name="In", tier=1),
+            edge_added(src="a:in", rel_type="member_of", dst="f:g"),
+        ],
+    )
+    fired = [
+        FiredAction(
+            rule_id="r1",
+            scope=Scope(faction="f:g"),
+            index=0,
+            action=ActRecordRumor(do="record_rumor", text="word", subjects=["a:in", "a:out"]),
+        )
+    ]
+    result = await run_rules_gauntlet(store, campaign.branch_id, fired, trigger_commit="c1")
+    assert len(result.events) == 1  # the rumor still commits (with the in-scope subject)
+    assert any(d.ref == "a:out" and "partial" in d.reason for d in result.drops)
 
 
 # --- INC-4: the downtime/agenda tick (docs/17) ---
