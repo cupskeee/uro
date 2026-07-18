@@ -361,6 +361,87 @@ def test_vote_resolves_when_the_last_holdout_disconnects() -> None:
         assert _recv_until(a, "vote_decided")[-1]["choice"] == "flee"
 
 
+# --- D-39 (#10): the runtime token registry (durable, hashed, revocable, off the branch axis) ---
+
+
+class _FakeTokenStore:
+    """In-memory SessionTokenStore for the registry unit test — mirrors the durable 018 table."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, tuple[str, str, bool]] = {}  # hash → (participant, campaign, revoked)
+
+    async def mint_token(self, token_hash: str, participant_id: str, campaign_id: str) -> None:
+        self.rows[token_hash] = (participant_id, campaign_id, False)
+
+    async def revoke_token(self, token_hash: str) -> bool:
+        row = self.rows.get(token_hash)
+        if row is not None and not row[2]:
+            self.rows[token_hash] = (row[0], row[1], True)
+            return True
+        return False
+
+    async def list_session_tokens(self) -> list[tuple[str, str, str]]:
+        return [(h, p, c) for h, (p, c, revoked) in self.rows.items() if not revoked]
+
+
+async def test_token_registry_mint_resolve_revoke_and_scope() -> None:
+    from uro_server.sessions import TokenRegistry
+
+    # "op" is the operator (admin) tier; "pleb" is a plain player token — NOT admin (D-39 review)
+    reg = TokenRegistry(_FakeTokenStore(), {"op": "gm", "pleb": "carol"}, admin_tokens={"op"})
+    assert reg.resolve("op") == "gm" and reg.is_admin("op")
+    assert reg.resolve("pleb") == "carol" and not reg.is_admin("pleb")  # a plain peer is not admin
+    tok = await reg.mint("bob", "camp-1")
+    assert reg.resolve(tok) == "bob" and not reg.is_admin(tok)  # minted → resolves, NOT admin
+    assert reg.campaign_of(tok) == "camp-1"  # minted tokens are campaign-scoped
+    assert reg.campaign_of("op") is None  # a static/operator token is server-wide (unscoped)
+    assert await reg.revoke(tok) is True
+    assert reg.resolve(tok) is None  # revoked → denied
+
+
+async def test_token_registry_stores_only_the_hash_and_survives_a_restart() -> None:
+    import hashlib
+
+    from uro_server.sessions import TokenRegistry
+
+    store = _FakeTokenStore()
+    tok = await TokenRegistry(store, {}).mint("bob", "camp-1")
+    # only sha256(token) is persisted — never the plaintext
+    assert list(store.rows.keys()) == [hashlib.sha256(tok.encode()).hexdigest()]
+    # a FRESH registry (a server restart) with a cold cache hydrates from the store and resolves it
+    reg2 = TokenRegistry(store, {})
+    assert reg2.resolve(tok) is None  # cold before hydrate
+    await reg2.hydrate()
+    assert reg2.resolve(tok) == "bob"  # durable across a restart
+
+
+def test_ws_rejects_a_token_scoped_to_another_campaign() -> None:
+    # D-39 review: a MINTED token is campaign-scoped; using it on ANOTHER campaign's play channel is
+    # rejected before accept (cross-campaign PC hijack). A static/operator token (token_campaign
+    # None) is intentionally server-wide and unaffected.
+    async def campaign_exists(campaign_id: str) -> bool:
+        return campaign_id in ("camp-1", "camp-2")
+
+    async def run_beat(campaign_id: str, participant: str, text: str):  # type: ignore[no-untyped-def]
+        yield "x"
+
+    deps = ServerDeps(
+        resolve_participant=lambda t: "bob" if t == "bob-tok" else None,
+        campaign_exists=campaign_exists,
+        run_beat=run_beat,
+        token_campaign=lambda t: "camp-1" if t == "bob-tok" else None,  # bob-tok minted for camp-1
+    )
+    client = TestClient(create_app(deps))
+    with client.websocket_connect("/campaigns/camp-1/play?token=bob-tok") as ws:
+        _recv_until(ws, "participant_joined")  # works on its OWN campaign
+    with (
+        pytest.raises(WebSocketDisconnect) as exc,
+        client.websocket_connect("/campaigns/camp-2/play?token=bob-tok"),
+    ):
+        pass
+    assert exc.value.code == 4403  # rejected on a DIFFERENT campaign, before accept
+
+
 def test_a_failed_beat_still_rotates_the_party_token() -> None:
     # cross-phase review: a deterministically-failing turn-holder must NOT wedge the party — the
     # token still rotates on beat_failed, so the next participant can act.

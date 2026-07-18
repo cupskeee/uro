@@ -26,11 +26,15 @@ campaign_app = typer.Typer(no_args_is_help=True, help="Campaign lifecycle over b
 codex_app = typer.Typer(
     no_args_is_help=True, help="Player codex — out-of-world notes that survive a fork (docs/18 B8)."
 )
+token_app = typer.Typer(
+    no_args_is_help=True, help="Runtime session tokens against a running server (docs/18 B10)."
+)
 app.add_typer(db_app, name="db")
 app.add_typer(world_app, name="world")
 app.add_typer(branch_app, name="branch")
 app.add_typer(campaign_app, name="campaign")
 app.add_typer(codex_app, name="codex")
+app.add_typer(token_app, name="token")
 
 PARTICIPANT = "player-1"  # Phase 0 is single-player; participants arrive in Phase 5.
 
@@ -472,16 +476,23 @@ def serve(
         help="bearer token → participant (repeatable). `TOK=participant` names it explicitly (e.g. "
         "--token tok-a=alice); a bare `TOK` maps positionally to player-1..N (docs/08, gap G-16)",
     ),
+    admin_token: list[str] = typer.Option(  # noqa: B008
+        None,
+        "--admin-token",
+        help="OPERATOR token TOK[=name] (repeatable, D-39): may seat/mint/revoke for ANOTHER "
+        "participant (e.g. a GM seating a party). A plain --token peer may act only for itself.",
+    ),
     provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
     model: str = typer.Option(None, help="model id for the provider"),
     ruleset: str = typer.Option(
         "", help="ruleset id for this server process (default: uro-basic via the registry)"
     ),
     arbiter_kind: str = typer.Option(
-        "party",
+        None,
         "--arbiter",
-        help="multi-token turn shape (D-38): party (round-robin) | proposal (propose-then-act, "
-        "QUEUED) | vote (consensus). Ignored with a single token (solo).",
+        help="turn shape (D-38): party (round-robin) | proposal (propose-then-act) | vote "
+        "(consensus). UNSET = auto (solo for 1 token, party for >1). Setting it EXPLICITLY binds "
+        "that shape even for a 1-token launch, so a runtime-added player still gets turns (D-39).",
     ),
 ) -> None:
     """Run the Uro server (docs/08): a thin FastAPI shell over the engine. Each --token maps to
@@ -502,31 +513,48 @@ def serve(
     for i, t in enumerate(toks):
         tok, sep, name = t.partition("=")
         tokens[tok] = name if sep else f"player-{i + 1}"
+    # Operator tokens (D-39): resolvable participants like any --token, PLUS flagged admin so they
+    # may act for others. A plain --token peer is NOT admin (else any launch peer could impersonate
+    # any other — D-39 review). None given → no operator; a new runtime player is seated by an
+    # operator or via the direct-DB `uro campaign join`.
+    admin_tokens: set[str] = set()
+    for j, t in enumerate(admin_token or []):
+        tok, sep, name = t.partition("=")
+        tokens[tok] = name if sep else f"operator-{j + 1}"
+        admin_tokens.add(tok)
     store = build_store()
     engine = Engine(store, build_router(provider, model), ruleset=build_ruleset(ruleset))
-    # More than one token → a party; pick the turn shape (OQ-7, D-31/D-38). One token → solo
-    # (create_app defaults to SoloArbiter). Seat each participant's PC via `uro campaign join`.
+    # Pick the turn shape (OQ-7, D-31/D-38/D-39). UNSET (--arbiter not given) is AUTO: solo for one
+    # token (the dev loop → SoloArbiter), party for >1. Set EXPLICITLY, the shape binds regardless
+    # of launch token count, so a player minted+joined at RUNTIME still gets real turns (D-39)
+    # instead of SoloArbiter's always-ADMITTED. Seat each participant's PC via `uro campaign join`.
     shapes: dict[str, type[TurnArbiter]] = {
         "party": PartyArbiter,
         "proposal": ProposalWindowArbiter,
         "vote": VoteArbiter,
     }
-    if arbiter_kind not in shapes:
+    if arbiter_kind is None:
+        arbiter: TurnArbiter | None = PartyArbiter() if len(tokens) > 1 else None
+    elif arbiter_kind not in shapes:
         raise typer.BadParameter(
             f"--arbiter must be one of {', '.join(shapes)} (got {arbiter_kind!r})"
         )
-    arbiter = shapes[arbiter_kind]() if len(tokens) > 1 else None
-    fastapi_app = create_app(engine_deps(store, engine, tokens), arbiter=arbiter)
+    else:
+        arbiter = shapes[arbiter_kind]()
+    deps = engine_deps(store, engine, tokens, admin_tokens)
+    fastapi_app = create_app(deps, arbiter=arbiter)
 
     @fastapi_app.on_event("startup")
     async def _startup() -> None:
         await store.connect()
+        if deps.hydrate_tokens is not None:  # load durable runtime tokens (D-39) — AFTER connect
+            await deps.hydrate_tokens()
 
     @fastapi_app.on_event("shutdown")
     async def _shutdown() -> None:
         await store.close()
 
-    shape = arbiter_kind if len(tokens) > 1 else "solo"
+    shape = type(arbiter).__name__ if arbiter is not None else "solo"
     typer.echo(
         f"uro server on ws://{host}:{port}  "
         f"({len(tokens)} token(s), provider={provider}, arbiter={shape})"
@@ -612,6 +640,57 @@ def connect(
             raise typer.Exit(1) from exc
 
     asyncio.run(_client())
+
+
+def _server_post(server: str, path: str, token: str, body: dict[str, Any]) -> dict[str, Any]:
+    """POST JSON to a running `uro serve` (stdlib urllib — no extra dep), authed by ?token."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = f"{server.rstrip('/')}{path}?token={token}"
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(), headers={"content-type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return dict(json.loads(resp.read()))
+    except urllib.error.HTTPError as exc:
+        typer.echo(f"server said {exc.code}: {exc.read().decode()[:200]}", err=True)
+        raise typer.Exit(1) from exc
+    except OSError as exc:
+        typer.echo(f"could not reach {server}: {exc} (is `uro serve` running?)", err=True)
+        raise typer.Exit(1) from exc
+
+
+@token_app.command("mint")
+def token_mint(
+    campaign_id: str,
+    participant: str = typer.Option(
+        ..., help="participant to mint for (yourself, or anyone with an operator token)"
+    ),
+    server: str = typer.Option("http://127.0.0.1:8000", help="server base URL"),
+    token: str = typer.Option(..., help="your bearer token (self-service) or an operator --token"),
+) -> None:
+    """Mint a durable session token for an already-seated participant (docs/18 B10, D-39). Self-or-
+    operator scoped; the participant must have a PC on the campaign (`uro campaign join` first)."""
+    out = _server_post(
+        server, f"/campaigns/{campaign_id}/tokens", token, {"participant": participant}
+    )
+    typer.echo(out.get("token", out))
+
+
+@token_app.command("revoke")
+def token_revoke(
+    campaign_id: str,
+    target: str = typer.Option(..., "--target", help="the token to revoke"),
+    server: str = typer.Option("http://127.0.0.1:8000", help="server base URL"),
+    token: str = typer.Option(..., help="your bearer token (own token) or an operator --token"),
+) -> None:
+    """Revoke a session token (docs/18 B10, D-39). Self-or-operator scoped. Blocks a new connect;
+    a live socket survives until it disconnects (a named residual)."""
+    out = _server_post(server, f"/campaigns/{campaign_id}/tokens/revoke", token, {"token": target})
+    typer.echo("revoked" if out.get("revoked") else "no live token matched (already revoked?)")
 
 
 @branch_app.command("list")
