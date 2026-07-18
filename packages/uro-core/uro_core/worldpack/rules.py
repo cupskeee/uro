@@ -28,8 +28,9 @@ from uro_core.domain.events import ThreadState
 # D-34). The additions are purely additive, so v1 packs (no counters) remain valid — the engine
 # accepts the whole SUPPORTED set; a pack outside it fails loud at parse. A counter-using pack
 # should declare 2 so an old (v1) engine rejects it with a clear version error.
-RULES_API_VERSION = 3
-_SUPPORTED_VERSIONS = frozenset({1, 2, 3})  # v3 (D-40) adds multi-ref scopes; v1/v2 stay valid
+RULES_API_VERSION = 4
+# v4 (C3-C5): for_each / roll_table / expire_claims. v3 multi-ref, v2 counters; all valid.
+_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4})
 
 
 def _event_payload_fields() -> dict[str, frozenset[str]]:
@@ -58,6 +59,8 @@ ModuleRel = Literal["knows", "at_war_with", "allied_with"]
 CmpOp = Literal["==", "!=", ">=", "<=", ">", "<"]
 
 _STRICT = ConfigDict(extra="forbid")  # an unknown key is an author error, not silently ignored
+_MAX_NESTED = 16  # C3/C4 (D-34 review): cap a for_each/roll_table's nested action list at PARSE, so
+# recursion cost is bounded before the gauntlet ever runs (an unbounded list is a CPU/OOM DoS).
 
 
 # --- Conditions: a closed, total predicate tree over the projection view + the trigger events ---
@@ -253,6 +256,73 @@ class ActRemoveEdge(BaseModel):
     dst: str
 
 
+class ActExpireClaims(BaseModel):
+    """C5 (D-34, RL-8): retract stale MODULE rumors. STRUCTURALLY only ever affects `origin=module`,
+    non-canon (`truth != true`) claims IN SCOPE older than `older_than_days` — a module rule can
+    never retract narrator canon. Emits `ClaimTruthChanged(truth=false)`, bounded + baked ids. (No
+    `where` filter: module-only is already structural, so any filter would be redundant or a
+    silently-inert footgun — D-34 review.)"""
+
+    model_config = _STRICT
+    do: Literal["expire_claims"]
+    older_than_days: int = Field(ge=1)
+
+
+class ActRollTable(BaseModel):
+    """C4 (D-34, RL-4 / Seventh RL-6): a seeded, deterministic WEIGHTED choice over named outcomes.
+    Picks one outcome via an integer hash of (trigger commit, rule, action index) weighted by
+    `weights`, then applies that outcome's nested LEAF actions (node-budget capped). The pick is
+    BAKED into events (replay re-applies the same events, never re-rolls)."""
+
+    model_config = _STRICT
+    do: Literal["roll_table"]
+    weights: dict[str, int]  # outcome name → positive integer weight
+    outcomes: dict[str, list[Action]]  # outcome name → nested actions
+
+    @model_validator(mode="after")
+    def _weights_and_leaf(self) -> ActRollTable:
+        if not self.weights:  # an empty table has no outcome to pick — a ZeroDivision at runtime
+            raise ValueError("roll_table: at least one weighted outcome is required")
+        if set(self.weights) != set(self.outcomes):
+            raise ValueError("roll_table: `weights` and `outcomes` must name the same outcomes")
+        if any(w <= 0 for w in self.weights.values()):
+            raise ValueError("roll_table: weights must be positive integers")
+        if len(self.outcomes) > _MAX_NESTED or any(
+            len(acts) > _MAX_NESTED for acts in self.outcomes.values()
+        ):
+            raise ValueError(f"roll_table: at most {_MAX_NESTED} outcomes, each that many acts")
+        _reject_nested(a for acts in self.outcomes.values() for a in acts)
+        return self
+
+
+class ActForEach(BaseModel):
+    """C3 (D-34, RL-11): ONE bounded loop over a ref's edge-neighbors (single-hop). Traverse
+    `traverse` edges from `from` (a literal ref or `$trigger.<field>`), bind each neighbor as `as`,
+    and apply the nested `apply` LEAF actions with the bind var + `$trigger.<field>` substituted —
+    each neighbor scope-fenced, fan-out + node-budget capped. (The wished `do:[...]` inner key is
+    `apply` here: `do` is the action discriminator.)"""
+
+    model_config = _STRICT
+    do: Literal["for_each"]
+    traverse: ModuleRel
+    source: str = Field(alias="from")  # a literal ref, or `$trigger.<field>`
+    bind: str = Field(alias="as")  # the loop-variable token substituted into `apply`
+    apply: list[Action] = Field(min_length=1, max_length=_MAX_NESTED)  # bounded (DoS, D-34 review)
+
+    @model_validator(mode="after")
+    def _leaf_only(self) -> ActForEach:
+        _reject_nested(self.apply)
+        return self
+
+
+def _reject_nested(actions) -> None:  # type: ignore[no-untyped-def]
+    """A recursive action (for_each/roll_table) may nest only LEAF actions — no loop-in-a-loop:
+    keeps 'the ONE bounded loop' true and cost O(fan-out), not O(fan-out^n) (D-34)."""
+    nested = [a.do for a in actions if a.do in ("for_each", "roll_table")]
+    if nested:
+        raise ValueError(f"for_each/roll_table may not nest another loop/table (got {nested})")
+
+
 Action = Annotated[
     ActSetThreadState
     | ActCreateThread
@@ -262,9 +332,16 @@ Action = Annotated[
     | ActRemoveEdge
     | ActSetCounter
     | ActAdjustCounter
-    | ActResetCounter,
+    | ActResetCounter
+    | ActExpireClaims
+    | ActRollTable
+    | ActForEach,
     Field(discriminator="do"),
 ]
+
+# Resolve the forward references: roll_table/for_each nest `Action`, defined just above.
+ActRollTable.model_rebuild()
+ActForEach.model_rebuild()
 
 
 # --- Scope (jurisdiction) + Rule + RulePack ---

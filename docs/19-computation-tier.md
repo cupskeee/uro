@@ -131,12 +131,24 @@ games flagged) — ship it *with* the numbers.
    mechanism than per-member counters; `count_set` deferred, unneeded). Tests: predator-war
    cross-entity compare under `world` scope; fall-of-house `count owns == 0`; a narrow-scoped rule
    still fenced from another faction (no regression). Covers RL-3, RL-5.
-3. **INC-C3 (M):** `for_each` (one bounded loop, capped) + `$trigger.<field>` binding (validated like
-   `_trigger_can_fire`) + edge traversal, each neighbor scope-fenced. Covers RL-11 (single-hop).
-4. **INC-C4 (S):** `roll_table` (seeded integer-hash, baked). Covers RL-4, Seventh RL-6.
-5. **INC-C5 (S):** `expire_claim` (+ its `created_day`-on-claims migration). Covers RL-8.
+3. **INC-C3 ✅ DONE (#13):** `for_each` (ONE bounded loop; `apply` capped at `_MAX_NESTED=16`, fan-out
+   at `_MAX_FANOUT=32`, shared node budget `_MAX_TRANSLATE=256` with a per-iteration break) +
+   `$trigger.<field>` binding + edge traversal, each neighbor scope-fenced. Recursion nests LEAF
+   actions only (`_reject_nested`). Covers RL-11 (single-hop).
+4. **INC-C4 ✅ DONE (#13):** `roll_table` — seeded weighted pick via sha256 integer-hash (baked;
+   replay re-picks identically), nested outcome actions (leaf-only, capped). Covers RL-4, Seventh RL-6.
+5. **INC-C5 ✅ DONE (#13):** `expire_claims` (+ migration 019 `created_day` on `proj_claims`, in
+   `_SNAPSHOT_TABLES` so it forks). STRUCTURALLY retracts only `origin=module`, non-canon, in-scope
+   rumors older than N days → `ClaimTruthChanged(false)`; a subject-less rumor needs `world` scope.
+   Covers RL-8. **`RULES_API_VERSION` 3→4** (v1–v3 packs stay valid).
+   > Phase-end SYSTEM-WIDE review (24 agents): 2 HIGH → fixed — the node budget bounded *events* but
+   > not *iterations* (an unbounded nested list = a CPU/OOM DoS → parse-cap + budget-break); and
+   > `created_day` was missing from `_SNAPSHOT_TABLES["claims"]` (a snapshot-fork zeroed rumor age).
+   > Plus: empty-`roll_table` ZeroDivision, a subject-less-rumor scope hole, `_substitute` `do`-corruption,
+   > and the dead `where` filter (removed). No wire/canon-retraction leak found.
 6. **INC-C6 (M, HIGHEST-RISK, LAST, dedicated cross-phase review):** bounded fail-closed cascade
-   re-entry + make `CounterChanged` triggerable. Covers RL-12.
+   re-entry + make `CounterChanged` triggerable. Covers RL-12. **Still deferred** (touches `react()`'s
+   single-hop invariant; its own review).
 7. **(Undecided) computed-delta arithmetic** — the economy-formula half. Either a bounded expression
    in `adjust_counter`, or defer to the sharper reserved-tier gate. **Owner decision (OQ below).**
 

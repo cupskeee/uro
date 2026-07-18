@@ -21,12 +21,15 @@ enforces the Phase-8/D-32 bar on untrusted pack rules:
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import Any
 
 from uro_core.domain.events import (
     DomainEvent,
     claim_recorded,
+    claim_truth_changed,
     counter_changed,
     edge_added,
     edge_removed,
@@ -37,7 +40,7 @@ from uro_core.domain.events import (
 from uro_core.engines.actor import propagate_belief
 from uro_core.engines.rules import FiredAction
 from uro_core.ports.projections import ProjectionQueries
-from uro_core.worldpack.rules import Scope
+from uro_core.worldpack.rules import Action, Scope
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +67,14 @@ class GauntletResult:
     drops: list[DroppedAction] = field(default_factory=list)
 
 
-_MAX_ACTIONS = 32  # per pass — a bundle cap (multi-campaign DoS guard)
+_MAX_ACTIONS = 32  # top-level fired actions per pass — a bundle cap (multi-campaign DoS guard)
 _MAX_WITNESSES = 64  # per spread_belief
 _MAX_COUNTER = (
     1_000_000_000  # magnitude cap (docs/19 D-34): unbounded accumulation is the DoS vector
 )
+_MAX_TRANSLATE = 256  # C3/C4: TOTAL actions translated per pass incl. recursion
+_MAX_FANOUT = 32  # C3: neighbors a single for_each may iterate (fan-out cap)
+_MAX_EXPIRE = 64  # C5: claims a single expire_claims may retract
 
 
 async def _scope_refs(store: ProjectionQueries, branch_id: str, scope: Scope) -> set[str] | None:
@@ -112,6 +118,53 @@ def _clamp(v: int) -> int:
     return max(-_MAX_COUNTER, min(_MAX_COUNTER, v))
 
 
+def _weighted_pick(weights: dict[str, int], seed: str) -> str:
+    """C4: pick one outcome deterministically, weighted, via an integer hash of `seed` — NOT
+    random.choice (beats the CPython-version caveat; the pick is baked into events, replay re-picks
+    identically). `weights` are validated positive at parse."""
+    items = sorted(weights.items())  # deterministic order regardless of dict insertion
+    total = sum(w for _, w in items)
+    roll = int(hashlib.sha256(seed.encode()).hexdigest()[:12], 16) % total
+    acc = 0
+    for name, w in items:
+        acc += w
+        if roll < acc:
+            return name
+    return items[-1][0]  # unreachable (roll < total)
+
+
+def _resolve_trigger(ref: str, payload: dict[str, Any]) -> str | None:
+    """Resolve a `$trigger.<field>` reference against the triggering event's payload (C3), or return
+    a literal ref unchanged. None if the field is absent (an agenda rule, or a typo → the caller
+    drops it)."""
+    if ref.startswith("$trigger."):
+        field_name = ref[len("$trigger.") :]
+        return str(payload[field_name]) if field_name in payload else None
+    return ref
+
+
+def _substitute(action: Action, bindings: dict[str, str]) -> Action | None:
+    """Replace bound tokens (the for_each `as` var, `$trigger.<field>`) in a LEAF inner action's
+    string / string-list fields (C3). Exact-match only — a ref field equal to a binding key becomes
+    its bound value; everything else is untouched. NEVER the `do` discriminator (a bind var named
+    after an action verb must not corrupt it). Returns None (a fail-soft DROP, not an exception that
+    would sink the whole pass) if the substituted result is not a valid action (D-34 review)."""
+    data = action.model_dump()
+
+    def sub(value: Any) -> Any:
+        if isinstance(value, str):
+            return bindings.get(value, value)
+        if isinstance(value, list):
+            return [bindings.get(x, x) if isinstance(x, str) else x for x in value]
+        return value
+
+    subbed = {k: (v if k == "do" else sub(v)) for k, v in data.items()}  # never touch `do`
+    try:
+        return type(action).model_validate(subbed)
+    except ValueError:
+        return None
+
+
 async def _translate(
     store: ProjectionQueries,
     branch_id: str,
@@ -121,9 +174,31 @@ async def _translate(
     pending: dict[tuple[str, str], int],
     world_day: int,
     drops: list[DroppedAction],
+    budget: list[int],
+    id_path: str,
 ) -> list[DomainEvent]:
     a = fired.action
     cause = module_cause(fired.rule_id)
+    budget[0] -= 1  # C3/C4: a shared per-pass node budget bounds recursion (fail-closed)
+    if budget[0] < 0:
+        return _drop(drops, fired, "", "per-pass node budget exhausted")
+
+    async def _inner(action: Action, sub_path: str) -> list[DomainEvent]:
+        """Translate a nested action (roll_table outcome / for_each body), threading the shared
+        budget + a unique id_path so nested rumor claim-ids stay distinct + deterministic."""
+        return await _translate(
+            store,
+            branch_id,
+            replace(fired, action=action),
+            allowed,
+            trigger_commit,
+            pending,
+            world_day,
+            drops,
+            budget,
+            sub_path,
+        )
+
     if a.do in ("set_counter", "adjust_counter", "reset_counter"):
         # Computation Layer (docs/19, D-34): scope-fence the write, accumulate within the pass
         # (read-your-writes so two adjusts to one key both count), clamp fail-closed, emit ABSOLUTE.
@@ -194,7 +269,7 @@ async def _translate(
                     reason="subject out of scope (partial)",
                 )
             )
-        claim_id = f"m:{trigger_commit}:{fired.rule_id}:{fired.index}"  # deterministic → idempotent
+        claim_id = f"m:{trigger_commit}:{fired.rule_id}:{id_path}"  # deterministic → idempotent
         return [
             claim_recorded(
                 claim_id=claim_id,
@@ -202,6 +277,7 @@ async def _translate(
                 subject_refs=subjects,
                 truth="unknown",
                 origin="module",
+                created_day=world_day,  # C5: rumor age, so expire_claims can retract it later
                 caused_by=cause,  # never canon
             )
         ]
@@ -225,6 +301,87 @@ async def _translate(
         return await propagate_belief(
             store, branch_id, claim_id=a.claim, witnesses=witnesses, caused_by=cause
         )
+    if a.do == "expire_claims":
+        # C5 (RL-8): retract stale MODULE rumors. STRUCTURAL fence — only origin=module, non-canon
+        # (truth != true), in-scope claims older than the cutoff; a module rule can NEVER retract
+        # narrator/protected canon. Deterministic (list order + baked ids) + idempotent (already-
+        # false skipped; re-UPSERT is a no-op). Emits ClaimTruthChanged(false), bounded.
+        cutoff = world_day - a.older_than_days
+        expired: list[DomainEvent] = []
+        for c in await store.list_claims(branch_id):
+            if c.origin != "module" or c.truth == "true":
+                continue  # never touch canon / non-module claims — the structural fence
+            if c.truth == "false" or c.created_day > cutoff:
+                continue  # already retracted, or not old enough
+            # scope: a non-world rule may retract only claims whose subjects are ALL in its
+            # jurisdiction; a SUBJECT-LESS module rumor has no scope anchor, so only a `world`
+            # rule (allowed is None) may reach it (D-34 review — closes the subject-less hole).
+            if allowed is not None and not (
+                c.subject_refs and all(_in_scope(allowed, s) for s in c.subject_refs)
+            ):
+                continue
+            expired.append(
+                claim_truth_changed(
+                    claim_id=c.claim_id, truth="false", cause="expired", caused_by=cause
+                )
+            )
+            if len(expired) >= _MAX_EXPIRE:
+                break
+        return expired
+    if a.do == "roll_table":
+        # C4 (RL-4): a seeded, deterministic weighted pick → apply that outcome's nested actions.
+        seed = f"{trigger_commit}:{fired.rule_id}:{id_path}"
+        choice = _weighted_pick(a.weights, seed)
+        events: list[DomainEvent] = []
+        for j, inner in enumerate(a.outcomes[choice]):
+            if budget[0] < 0:  # budget spent — stop iterating (don't do wasted _substitute work)
+                break
+            events.extend(await _inner(inner, f"{id_path}.{choice}.{j}"))
+        return events
+    if a.do == "for_each":
+        # C3 (RL-11): ONE bounded loop over a ref's edge-neighbors. Resolve the source (a literal or
+        # $trigger.<field>), scope-fence it, traverse `traverse` edges (fan-out capped), then each
+        # in-scope neighbor apply the body with the `as` var + $trigger.<field> substituted.
+        source = _resolve_trigger(a.source, fired.trigger_payload)
+        if source is None:
+            return _drop(drops, fired, a.source, "unbound $trigger source")
+        if not _in_scope(allowed, source):
+            return _drop(drops, fired, source, "for_each source out of scope")
+        trigger_binds = {f"$trigger.{k}": str(v) for k, v in fired.trigger_payload.items()}
+        neighbors = [
+            e.dst for e in await store.edges_from(branch_id, source) if e.rel_type == a.traverse
+        ][:_MAX_FANOUT]
+        loop_events: list[DomainEvent] = []
+        for n_i, neighbor in enumerate(neighbors):
+            if budget[0] < 0:  # budget spent — stop the loop (bounds cost, avoids wasted work)
+                break
+            if not _in_scope(allowed, neighbor):
+                drops.append(
+                    DroppedAction(
+                        rule_id=fired.rule_id,
+                        do="for_each",
+                        ref=neighbor,
+                        reason="neighbor out of scope",
+                    )
+                )
+                continue
+            bindings = {a.bind: neighbor, **trigger_binds}
+            for j, inner in enumerate(a.apply):
+                if budget[0] < 0:
+                    break
+                subbed = _substitute(inner, bindings)
+                if subbed is None:  # substitution made an invalid action → drop it, not the pass
+                    drops.append(
+                        DroppedAction(
+                            rule_id=fired.rule_id,
+                            do="for_each",
+                            ref=inner.do,
+                            reason="substitution produced an invalid action",
+                        )
+                    )
+                    continue
+                loop_events.extend(await _inner(subbed, f"{id_path}.{n_i}.{j}"))
+        return loop_events
     return []  # unreachable — the union is closed
 
 
@@ -240,6 +397,7 @@ async def run_rules_gauntlet(
     Deterministic: preserves the interpreter's total order; ids key on trigger_commit."""
     result = GauntletResult()
     pending: dict[tuple[str, str], int] = {}  # in-pass counter accumulation (read-your-writes)
+    budget = [_MAX_TRANSLATE]  # shared node budget across recursion, fail-closed
     world_day = await store.current_world_time(branch_id)
     if len(fired) > _MAX_ACTIONS:  # the DoS cap truncates the tail — record it, don't drop silently
         result.drops.append(
@@ -254,7 +412,16 @@ async def run_rules_gauntlet(
         allowed = await _scope_refs(store, branch_id, f.scope)
         result.events.extend(
             await _translate(
-                store, branch_id, f, allowed, trigger_commit, pending, world_day, result.drops
+                store,
+                branch_id,
+                f,
+                allowed,
+                trigger_commit,
+                pending,
+                world_day,
+                result.drops,
+                budget,
+                str(f.index),  # top-level id_path = the action index (existing claim-ids stable)
             )
         )
     return result

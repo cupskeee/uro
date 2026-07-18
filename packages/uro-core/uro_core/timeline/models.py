@@ -82,6 +82,7 @@ class ClaimView(BaseModel):
     subject_refs: list[str]
     truth: str  # true | false | unknown
     origin: str
+    created_day: int = 0  # in-fiction birth day (C5, D-34) — for rumor-age / expire_claims
 
 
 class BeliefView(BaseModel):

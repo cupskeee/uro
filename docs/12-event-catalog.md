@@ -2,7 +2,7 @@
 
 The canonical registry of domain event types. Everything the engine "knows" is a projection of these (`03-timeline-and-branching.md`, `07-persistence-and-events.md`); this file is the vocabulary. **Version 0 — living**, but with process: an event type does not exist until it has (1) an entry here, (2) a Pydantic payload model in `uro_core/domain/events.py`, (3) projector handling, and (4) an emitter whitelist entry. No inline invention of event types in code.
 
-> **Reserved rows (honest status, 2026-07-09; updated 2026-07-10 for D-33):** several catalogued types have full plumbing (payload + projector handler) but **no live emitter yet** — they are the forward contract, not shipped behavior: `ClaimTruthChanged`, `ActorPromoted`, `TerrainChanged`, `PlaceStateChanged`, `EdgeUpdated`. `ActorDamaged` is **legacy** (no live emitter; a replay-compat handler is retained for pre-D-30 logs — harm now flows via `SheetUpdated`). **NOW LIVE (D-33, Reaction Layer, emitter M=module):** `ThreadStateChanged`, `ClaimRecorded` (module rumors, `origin=module`), `BeliefChanged`/`EdgeAdded`/`EdgeRemoved` (module agendas) — a pack's declarative rules advance thread lifecycle + off-screen agendas, `caused_by=module`. `PlaceDestroyed` + History's own adaptation ripple stay author/test-driven (OQ-8). See [16-honesty-ledger.md](16-honesty-ledger.md) for the proven/reserved map.
+> **Reserved rows (honest status, 2026-07-09; updated 2026-07-10 for D-33):** several catalogued types have full plumbing (payload + projector handler) but **no live emitter yet** — they are the forward contract, not shipped behavior: `ActorPromoted`, `TerrainChanged`, `PlaceStateChanged`, `EdgeUpdated`. (`ClaimTruthChanged` became live in C5/D-34 — `expire_claims` retracts a stale module rumor to `truth=false`.) `ActorDamaged` is **legacy** (no live emitter; a replay-compat handler is retained for pre-D-30 logs — harm now flows via `SheetUpdated`). **NOW LIVE (D-33, Reaction Layer, emitter M=module):** `ThreadStateChanged`, `ClaimRecorded` (module rumors, `origin=module`), `BeliefChanged`/`EdgeAdded`/`EdgeRemoved` (module agendas) — a pack's declarative rules advance thread lifecycle + off-screen agendas, `caused_by=module`. `PlaceDestroyed` + History's own adaptation ripple stay author/test-driven (OQ-8). See [16-honesty-ledger.md](16-honesty-ledger.md) for the proven/reserved map.
 
 ## Envelope (every event)
 
@@ -68,8 +68,8 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Claims & beliefs (epistemic layer)
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `ClaimRecorded` | claim_id, statement, subject_refs, truth, origin | X H P S E | narration-asserted → `truth=true`; character-asserted → `truth=unknown` (see `05`); `S` covers authored pack claims at import (`09`); `E` covers a Chronicler feat, committed as `truth=unknown` **testimony** (never protected canon), `origin=external` (`chronicler.py`, D-25) |
-| `ClaimTruthChanged` | claim_id, truth, cause | P H | investigation resolves `unknown`; contradiction repair |
+| `ClaimRecorded` | claim_id, statement, subject_refs, truth, origin, created_day | X H P S E M | narration-asserted → `truth=true`; character-asserted → `truth=unknown` (see `05`); `S` covers authored pack claims at import (`09`); `E` covers a Chronicler feat, committed as `truth=unknown` **testimony** (never protected canon), `origin=external` (`chronicler.py`, D-25); `M` covers module rumors (`origin=module`); `created_day` is the in-fiction birth day for `expire_claims` (C5, D-34) |
+| `ClaimTruthChanged` | claim_id, truth, cause | P H M | investigation resolves `unknown`; contradiction repair; `M` covers `expire_claims` retracting a stale MODULE rumor to `truth=false` (C5, D-34 — structurally never a `truth=true`/canon claim) |
 | `BeliefChanged` | actor_id, claim_id, confidence, learned_from | X A P | rumor spread = BeliefChanged fan-out |
 
 ### Items

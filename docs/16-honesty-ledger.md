@@ -273,7 +273,8 @@ Engine-owned numeric state, event-sourced so it forks by construction — the fi
 | Integer counters (`CounterChanged`→`proj_counters`) | **proven (by construction)** | migration 015; in the projector `_HANDLERS`+`_SNAPSHOT_TABLES`, so counters fork / replay / snapshot / export like any projection. `CondCounter` / `CondCounterCompare` / `CondCountEdges`; `world` scope. |
 | `append_and_react` one-call authored-commit path | proven | commits + reacts in one exception-isolated call (docs/18 B1). |
 | Counter RMW concurrency | **partial (by policy)** | `adjust_counter` is the first non-idempotent read-modify-write; a per-branch in-process `_react_lock` serializes concurrent `react()` passes. Cross-process serialization (`expected_head`) is future. |
-| Computed cross-counter arithmetic · `for_each`/`roll_table`/`expire_claim` · bounded cascade | deferred | staged on evidence in docs/19 (C3–C6, OQ-1); the closed grammar stays the trust fence. |
+| `for_each` (one bounded loop + `$trigger` binding) · `roll_table` (seeded weighted pick) · `expire_claims` (rumor decay) | proven | C3/C4/C5 (D-34, #13): recursive grammar (leaf-only, capped `_MAX_NESTED`/`_MAX_FANOUT`/`_MAX_TRANSLATE`), deterministic/baked pick, migration 019 `created_day`. `test_reaction_layer.py`. Trust fences: neighbor/subject scope-fenced through binding; `expire_claims` structurally never retracts canon; `_substitute` never touches `do`. |
+| Bounded cascade (C6) · computed cross-counter arithmetic (OQ-1) | deferred | C6 touches `react()`'s single-hop invariant (its own review); OQ-1 economy-formula arithmetic still staged (docs/19). The closed grammar stays the trust fence. |
 
 ## Post-PoC — participant memory (2026-07-14, D-36, docs/18 B8 / #7)
 
