@@ -703,6 +703,7 @@ def branch_list(world: str) -> None:
         try:
             w = await _world_or_exit(store, world)
             branches = await store.list_branches(w.world_id)
+            days = await store.current_world_time_batch([b.branch_id for b in branches])
             markers = await store.list_markers(w.world_id)
         finally:
             await store.close()
@@ -711,7 +712,8 @@ def branch_list(world: str) -> None:
         for b in branches:
             forked = f"  forked@{b.forked_from[:8]}" if b.forked_from else ""
             head = b.head_commit[:8] if b.head_commit else "-"
-            typer.echo(f"  {b.name:<16} head={head} depth={b.head_depth}{forked}")
+            day = days.get(b.branch_id, 0)
+            typer.echo(f"  {b.name:<16} head={head} depth={b.head_depth} day={day}{forked}")
         if markers:
             typer.echo("markers:")
             for m in markers:

@@ -1,7 +1,13 @@
 """Structured recall: word-boundary matching, the recency window, belief injection."""
 
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.domain.events import actor_created, beat_resolved, claim_recorded
+from uro_core.domain.events import (
+    actor_created,
+    beat_resolved,
+    claim_recorded,
+    faction_created,
+    place_created,
+)
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.recall import RecallBundle, assemble_recall, build_narrator_messages
 from uro_core.timeline.models import ActorView, BeliefView, ClaimView, ThreadView
@@ -49,6 +55,53 @@ async def test_recall_keeps_recently_mentioned_actor_on_stage(store: PostgresEve
     # Current intent uses a pronoun; Flora is still on stage from the last beat's window.
     recall = await assemble_recall(store, branch, "I ask her about the ale", 8)
     assert any(a.actor_id == "a:flora" for a in recall.actors)
+
+
+async def test_recall_surfaces_a_claim_about_a_mentioned_faction(
+    store: PostgresEventStore,
+) -> None:
+    """A module rumor carries a pack ref like "f:redband"/"p:vault" in subject_refs (never a name:
+    token - the extractor only mints those for unresolved actors). So a claim ABOUT a faction OR a
+    place must surface when that entity is on stage by name (docs/04 B4), like an actor's claims do,
+    and stay hidden otherwise. Covers BOTH the faction and the place id-match arms of the union."""
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            faction_created(
+                faction_id="f:redband",
+                name="Red Band",
+                kind="faction",
+                description="a mercenary company",
+            ),
+            place_created(
+                place_id="p:vault",
+                name="the Vault",
+                kind="site",
+                description="a sealed treasury",
+            ),
+            claim_recorded(
+                claim_id="c:rb",
+                statement="The Red Band broke the truce.",
+                subject_refs=["f:redband"],
+                truth="unknown",
+                origin="module",
+            ),
+            claim_recorded(
+                claim_id="c:vault",
+                statement="The Vault was already looted.",
+                subject_refs=["p:vault"],
+                truth="unknown",
+                origin="module",
+            ),
+        ],
+    )
+    hidden = await assemble_recall(store, branch, "I count my coins", 8)
+    assert hidden.claims == []  # neither entity mentioned -> both claims stay off-stage
+    faction = await assemble_recall(store, branch, "What of the Red Band?", 8)
+    assert [c.claim_id for c in faction.claims] == ["c:rb"]  # faction arm
+    place = await assemble_recall(store, branch, "I search the Vault", 8)
+    assert [c.claim_id for c in place.claims] == ["c:vault"]  # place arm
 
 
 def test_narrator_prompt_surfaces_present_beliefs() -> None:
