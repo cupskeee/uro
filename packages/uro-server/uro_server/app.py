@@ -175,9 +175,23 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         token = request.query_params.get("token") or _bearer_token(request)
         if deps.resolve_participant(token) is None:
             raise HTTPException(status_code=401, detail="unauthorized")
+        # A minted token is campaign-scoped (D-39) — an outcome mutates the timeline, so enforce the
+        # scope HERE too, not just the WS play channel (D-41 review: this endpoint left it open).
+        # Static operator/legacy tokens (token_campaign → None) are server-wide and pass, intended.
+        tok_campaign = deps.token_campaign(token) if deps.token_campaign is not None else None
+        if tok_campaign is not None and tok_campaign != campaign_id:
+            raise HTTPException(status_code=403, detail="token not valid for this campaign")
         if deps.report_outcome is None:
             raise HTTPException(status_code=501, detail="Chronicler mode not enabled")
-        result = await deps.report_outcome(campaign_id, {**bundle, "encounter_id": encounter_id})
+        try:
+            # A malformed/forged bundle (an unknown field under extra='forbid', a bad `v`) raises a
+            # pydantic ValidationError (a ValueError) in report_outcome's model_validate — turn it
+            # into a loud 400 like every other mutating endpoint (D-41 review: it was a raw 500).
+            result = await deps.report_outcome(
+                campaign_id, {**bundle, "encounter_id": encounter_id}
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid outcome bundle: {exc}") from exc
         await hub.publish(
             campaign_id, {"type": "outcome_recorded", "encounter_id": encounter_id, **result}
         )

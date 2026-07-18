@@ -47,18 +47,20 @@ async def _dead(store: PostgresEventStore, branch: str, actor: str) -> bool:
 # --- domain scope: a bundle can't kill outside its declared cast, or protected canon ---
 
 
-async def test_out_of_domain_casualty_downgrades_to_testimony(store: PostgresEventStore) -> None:
+async def test_out_of_cast_casualty_is_dropped(store: PostgresEventStore) -> None:
+    # D-41 review (Ironwake row-7 leak): an OUT-OF-CAST casualty — the KING, never a declared
+    # participant — is now DROPPED like an out-of-cast feat/loot, NOT minted as a public rumor.
+    # (A protected IN-CAST casualty still downgrades to testimony — see the PC test below.)
     branch = await _world(store)
-    # a malicious bundle lists the KING (never in the fight) as a casualty
     bundle = OutcomeBundle(
         encounter_id="e:1", participants=["a:grull"], casualties=["a:king", "a:grull"]
     )
     await store.append_beat(branch, await distill_outcome(store, branch, bundle))
     assert not await _dead(store, branch, "a:king")  # the king is NOT killed by an external POST
     assert await _dead(store, branch, "a:grull")  # an in-cast T1 combatant does die
-    # the king's "death" survives only as a hedged rumor, never committed canon
+    # …and no rumor is minted about the out-of-cast king (scope drop, not a downgrade)
     king_claims = await store.claims_about(branch, "a:king")
-    assert any(c.truth == "unknown" and "fallen" in c.statement for c in king_claims)
+    assert not any("fallen" in c.statement for c in king_claims)
 
 
 async def test_pc_casualty_downgrades_to_testimony(store: PostgresEventStore) -> None:
@@ -69,6 +71,67 @@ async def test_pc_casualty_downgrades_to_testimony(store: PostgresEventStore) ->
     assert not await _dead(
         store, branch, "a:hero"
     )  # a PC's fate is not the external game's to take
+
+
+# --- D-41: the TRUSTED authored tier (no ceiling) vs the untrusted path; schema pin; loot ---
+
+
+async def test_trusted_authored_path_kills_a_protected_actor_and_moves_its_loot(
+    store: PostgresEventStore,
+) -> None:
+    # distill_authored_outcome (a Posture-A embedder holding root) reuses distillation with the D-32
+    # ceiling OFF: the KING (T3, in-cast) dies for real and his crown transfers — where an untrusted
+    # bundle would only downgrade to a rumor and drop the loot. Unblocks Sable G-7 succession.
+    from uro_core.authored import distill_authored_outcome
+
+    branch = await _world(store)
+    bundle = OutcomeBundle(
+        encounter_id="e:reg",
+        participants=["a:king", "a:grull"],
+        casualties=["a:king"],
+        loot=[LootTransfer(item_id="i:crown", from_ref="a:king", to_ref="a:grull")],
+    )
+    # the untrusted path refuses the protected death (no ActorDied — a rumor instead)
+    untrusted = await distill_outcome(store, branch, bundle)
+    assert not any(e.event_type == "ActorDied" for e in untrusted)
+    # the trusted authored path commits it
+    result = await distill_authored_outcome(store, branch, bundle)
+    await store.append_beat(branch, result.events)
+    assert await _dead(store, branch, "a:king")  # protected canon dies via the trusted tier
+    crown = await store.get_item(branch, "i:crown")
+    assert crown is not None and crown["owner_ref"] == "a:grull"  # protected owner's loot moved
+
+
+async def test_untrusted_loot_to_a_protected_recipient_is_dropped(
+    store: PostgresEventStore,
+) -> None:
+    # D-41: a bundle can't mint a PC / named actor as a loot RECIPIENT (the to_ref protection —
+    # previously only from_ref was checked). Both refs are in-cast, so scope passes; the ceiling
+    # catches the recipient.
+    from uro_core.chronicler import distill_outcome_with_receipt
+
+    branch = await _world(store)
+    bundle = OutcomeBundle(
+        encounter_id="e:x",
+        participants=["a:grull", "a:king"],
+        loot=[LootTransfer(item_id="i:sword", from_ref="a:grull", to_ref="a:king")],
+    )
+    result = await distill_outcome_with_receipt(store, branch, bundle)
+    assert not any(e.event_type == "ItemTransferred" for e in result.events)
+    assert any(
+        r.kind == "loot" and r.disposition == "dropped" and "recipient is protected" in r.reason
+        for r in result.receipt
+    )
+
+
+def test_outcome_bundle_rejects_unknown_version_and_extra_fields() -> None:
+    # D-41 schema-v1 pin: a forged {trust:...} field or an unknown v is a LOUD rejection (422 at the
+    # endpoint), never a silently-dropped extra — this is what makes the trust-flag-on-the-wire
+    # attack structurally impossible (nowhere to land) and the v2 deferral safe.
+    with pytest.raises(ValidationError):
+        OutcomeBundle(encounter_id="e", v=2)  # unsupported version
+    with pytest.raises(ValidationError):
+        OutcomeBundle.model_validate({"encounter_id": "e", "trusted": True})  # forged extra field
 
 
 async def test_protected_t2plus_participant_casualty_downgrades(store: PostgresEventStore) -> None:

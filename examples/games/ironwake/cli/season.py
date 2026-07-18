@@ -623,30 +623,29 @@ class SeasonRun:
         self.check("out-of-cast feat was DROPPED entirely", not lie)
         self.check("protected loot was REFUSED (blade stays with Vorlund)", VORLUNDS_BLADE in blade)
         self.check(
-            "BUT the out-of-cast casualty still minted a public rumor about Mira", len(fell) > 0
+            "out-of-cast casualty is now DROPPED, not rumored (D-41 fixed Ironwake row-7)",
+            len(fell) == 0,
         )
         self.say(
-            "      nuance: feats/loot/witnesses out of scope are DROPPED, but an "
-            'out-of-cast casualty is DOWNGRADED to a "said to have fallen" claim — a bundle '
-            "can make the world gossip about ANY existing actor it never fought beside."
+            "      D-41: feats/loot/witnesses AND casualties out of scope are all now DROPPED — a "
+            "bundle can no longer make the world gossip about an actor it never fought beside."
         )
         frictionlog.gap(
             gap="participant scope that fully fences a self-attested bundle",
             happened=(
-                "out-of-cast feats/loot/witness refs are dropped, but an out-of-cast CASUALTY "
-                "of any existing actor mints a truth=unknown 'X is said to have fallen' claim "
-                "(chronicler.py casualty else-branch) — scope-violating gossip, unbounded "
-                "across encounter_ids; and the scope root itself is whatever participants list "
-                "the game asserts (no parked-encounter registry to check it against)"
+                "RESOLVED (D-41): an out-of-cast casualty is now DROPPED like every other ref "
+                "class (was: it minted a truth=unknown 'X is said to have fallen' rumor about any "
+                "existing actor — scope-violating gossip). The remaining soft edge is only that "
+                "the scope ROOT is still the self-attested participants list (no parked-encounter "
+                "registry yet — reserved, awaiting a real external network game)"
             ),
-            workaround="none needed for an honest game; noted as the trust boundary's soft edge",
-            severity="major",
+            workaround="none — the leak is fixed; the parked-registry is a reserved refinement",
+            severity="minor",
             needs=(
-                "a parked-encounter registry (pre-declared authorized cast, bundle validated "
-                "against it) + drop (or at least scope-check) out-of-cast casualties like every "
-                "other ref class"
+                "a parked-encounter registry (pre-declared authorized cast) to make the scope ROOT "
+                "non-self-attested for a genuinely UNTRUSTED external game (D-41 deferred)"
             ),
-            evidence="cli/season.py adversarial_probe on fork 'scope-probe'; chronicler.py:148",
+            evidence="cli/season.py adversarial_probe on fork 'scope-probe'; D-41 _distill_core.py",
         )
 
     async def idempotency_probe(self, bundle: OutcomeBundle) -> None:

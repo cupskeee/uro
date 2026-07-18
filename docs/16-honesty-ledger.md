@@ -82,8 +82,9 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 | Export/import + hash-chain verify | proven | `test_export.py`. |
 | Bundle integrity | proxy | **keyless tamper-evidence**, NOT cryptographic authenticity (a re-derived internal chain). |
 | Belief/rumor propagation (confidence decay, traceable) | **stub-only** | deterministic BFS tested; **never run with a live narrator**. Distortion = confidence decay only (statement garbling deferred). |
-| Chronicler ingestion trust-scoping (D-32) | proven | protection ceiling / participant scope / ownership / testimony downgrade / caps / idempotent replay; `test_chronicler_hardening.py`. |
-| Chronicler parked-encounter registry + per-campaign endpoint authority | deferred | "the full contract waits for a real external game"; the protection ceiling contains the damage without it. |
+| Chronicler ingestion trust-scoping (D-32) | proven | protection ceiling / participant scope / ownership / testimony downgrade / caps / idempotent replay; `test_chronicler_hardening.py`. Out-of-cast casualties now DROP (D-41; was a rumor); loot `to_ref` protected. |
+| Trusted-embedder distillation tier (D-41) | proven | `uro_core.authored.distill_authored_outcome` (`protect=_never_protected`) reuses distillation with the ceiling OFF — a Posture-A embedder's authored protected death/loot becomes real canon. Trust = module boundary: an **import-linter fence** forbids `uro_server`→`authored`/`_distill_core` (VERIFIED to bite); `OutcomeBundle` `extra='forbid'`+v-pin. `test_chronicler_hardening.py`. Structural vs the wire; the in-core-edit residual is by-policy (D-37 posture). Named residual: the trusted tier can kill a PC-bound actor (release it yourself — reachable via `append_beat` anyway). |
+| Chronicler parked-encounter registry (untrusted external network game) + per-campaign endpoint authority beyond `/outcome` | deferred | RESERVED (D-41) — no untrusted network consumer exists; a corrected design is recorded (branch-scoped event-sourced, non-`cast` column, campaign-agnostic admin auth). The outcome endpoint now enforces the token→campaign scope (D-39/D-41); the wider REST authority stays deferred. |
 
 ## Invariants — by construction vs by policy
 

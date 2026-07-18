@@ -293,3 +293,20 @@ async def test_rest_non_operator_static_token_cannot_seat_another(
             f"/campaigns/{cid}/join?token=pleb", json={"participant": "dave", "new_pc_name": "D"}
         )
         assert r.status_code == 403
+
+
+async def test_outcome_endpoint_rejects_a_malformed_bundle(store: PostgresEventStore) -> None:
+    # D-41 review: a forged extra field (extra='forbid') or an unsupported `v` must be a LOUD 400 at
+    # the wire (the endpoint validates the bundle inside report_outcome), not an uncaught 500.
+    async with _client(store) as client:
+        cid = await _world_campaign(client, "Bad-bundle")
+        forged = await client.post(
+            _q(f"/campaigns/{cid}/encounters/e1/outcome"),
+            json={"participants": [], "trusted": True},  # a forged trust field
+        )
+        assert forged.status_code == 400
+        badv = await client.post(
+            _q(f"/campaigns/{cid}/encounters/e1/outcome"),
+            json={"participants": [], "v": 2},  # unsupported schema version
+        )
+        assert badv.status_code == 400

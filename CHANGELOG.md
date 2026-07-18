@@ -31,6 +31,16 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   frames: `table_talk`, `proposal_opened`, `vote_tally`, `vote_decided`, `vote_unsupported`. All
   session-only (D-31), zero events/migrations. Consensual-PvP / simultaneous / reactive-interrupt stay
   reserved behind the same port (D-38).
+- **Chronicler trusted-embedder ingestion tier + untrusted-path hardening (B6, #12)** — a Posture-A
+  library embedder (which already holds root via `append_beat`) can now reuse outcome distillation
+  *without* the D-32 protection ceiling via `uro_core.authored.distill_authored_outcome`, so an
+  authored protected (T2+/PC) death commits as **real canon** and fires succession rules — unblocking
+  assassination/succession games. **Trust is which module you import, never a wire flag**: an
+  import-linter fence forbids the server from importing the ceiling-off path, and `OutcomeBundle` is
+  now `extra='forbid'` + version-pinned (a forged `{trust:…}` field or unknown `v` → a loud 400).
+  Untrusted-path hardening: an out-of-cast casualty now **drops** (was a public rumor); loot `to_ref`
+  is protected (a bundle can't make a PC/named actor the recipient); the outcome endpoint enforces
+  the D-39 campaign-scoped token. The untrusted parked-encounter registry stays reserved. (D-41)
 - **Reaction-layer multi-ref scopes + dropped-action audit (B11, #11)** — a rule `scope` may now name
   several entities of one category (`factions: [a, b]` unions their members), the least-privilege
   middle ground between a single faction and the whole-`world` scope; a validator enforces exactly one
