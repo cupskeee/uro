@@ -535,16 +535,45 @@ class SeasonRun:
             first = str(exc).splitlines()[1].strip() if len(str(exc).splitlines()) > 1 else ""
             self.say(f"      REFUSED by the closed grammar: {first}")
             self.check("the grammar REFUSED the counter rule", True)
-        # The subtler wall (RL-6): a quantified trigger — "on ANY Red Band member's death" —
-        # is NOT refused. Trigger.where is a free-form dict matched verbatim against payload
-        # fields, so the rule VALIDATES and then silently never fires (no ActorDied payload has
-        # an 'actor.member_of' key). Accepted-but-inert beats a loud refusal as a footgun.
-        quantified = {
+        # The subtler wall (RL-6) — RESOLVED. "On ANY Red Band member's death" used to be an
+        # accepted-but-inert footgun: a quantified `where` key ('actor.member_of') validated and
+        # then silently never fired. Now the grammar REFUSES that key loudly AND offers the real
+        # way to say it — a `$trigger.<field>`-aware `when` (RULES_API_VERSION 5).
+        inert_footgun = {
             "rules_api_version": 1,
             "rules": [
                 {
                     "id": "red-band-death-stirs-the-band",
                     "trigger": {"event": "ActorDied", "where": {"actor.member_of": "f:red-band"}},
+                    "then": [{"do": "record_rumor", "text": "…", "subjects": ["a:vorlund"]}],
+                    "scope": {"faction": "f:red-band"},
+                }
+            ],
+        }
+        footgun_refused = False
+        try:
+            RulePack(**inert_footgun)
+        except ValidationError:
+            footgun_refused = True
+        self.say(
+            "      the old quantified where-trigger (where actor.member_of=f:red-band)? "
+            f"{'REFUSED loudly (no longer accepted-but-inert)' if footgun_refused else 'ACCEPTED'}"
+        )
+        self.check("the inert quantified where-trigger is now REFUSED (RL-6)", footgun_refused)
+        # The correct expression: a plain ActorDied trigger + a $trigger-bound `when` that reads the
+        # dead actor's member_of edge. Evaluated per matching death, so it is a real existential.
+        quantified = {
+            "rules_api_version": 5,
+            "rules": [
+                {
+                    "id": "red-band-death-stirs-the-band",
+                    "trigger": {"event": "ActorDied"},
+                    "when": {
+                        "kind": "edge_exists",
+                        "src": "$trigger.actor_id",
+                        "rel": "member_of",
+                        "dst": "f:red-band",
+                    },
                     "then": [
                         {
                             "do": "record_rumor",
@@ -556,32 +585,31 @@ class SeasonRun:
                 }
             ],
         }
-        accepted = True
+        expressible = True
         try:
             RulePack(**quantified)
         except ValidationError:
-            accepted = False
+            expressible = False
         self.say(
-            "      and the quantified trigger (where actor.member_of=f:red-band)? "
-            f"{'ACCEPTED by the grammar — yet it can never fire' if accepted else 'refused'}"
+            "      and 'on ANY Red Band member death' via $trigger.actor_id in when? "
+            f"{'EXPRESSIBLE (RL-6 shipped)' if expressible else 'still no way to say it'}"
         )
-        self.check("the quantified where-trigger VALIDATES but is silently inert (RL-6)", accepted)
+        self.check("the quantified member-of death trigger is now EXPRESSIBLE (RL-6)", expressible)
         frictionlog.gap(
-            gap="authoring-time validation of trigger where-filters against the event catalog",
+            gap="a quantified/relational reaction trigger ('on ANY member of faction X dying')",
             happened=(
-                "Trigger.where is a free dict[str,str] compared verbatim to payload fields "
-                "(engines/rules.py:65); a filter naming a nonexistent key — the quantified "
-                "'actor.member_of' join RL-6 wants — VALIDATES cleanly and the rule silently "
-                "never fires; nothing warns the author at parse, import, or runtime"
+                "RESOLVED (RL-6): the inert 'actor.member_of' where-key is now refused, and the "
+                "intent is expressible as a plain ActorDied trigger + a $trigger.<field>-aware "
+                "`when` (edge_exists src=$trigger.actor_id) evaluated per matching death — with "
+                "trigger.per_event for the count-each shape. Was: validated-but-silently-inert"
             ),
-            workaround="the war ratchet triggers on ANY ActorDied instead (over-broad)",
-            severity="major",
+            workaround="none — RL-6 ships the primitive; the war ratchet can now be member-scoped",
+            severity="minor",
             needs=(
-                "validate where-keys against the trigger event's payload schema at RulePack "
-                "parse (the catalog is typed — the check is mechanical), plus a real join/"
-                "quantifier primitive for member-of triggers"
+                "multi-hop/transitive relational triggers (a member of an ALLY of X) still need "
+                "for_each traversal in conditions — reserved, not blocking"
             ),
-            evidence="cli/season.py counter_wall (live probe); uro_core/engines/rules.py:59-67",
+            evidence="cli/season.py counter_wall (live probe); uro_core/engines/rules.py (RL-6)",
         )
         log_refusals()
         self.say(

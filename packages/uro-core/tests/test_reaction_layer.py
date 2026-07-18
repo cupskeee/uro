@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import (
     actor_created,
@@ -29,6 +30,7 @@ from uro_core.providers.adapters.stub import hashing_embedding
 from uro_core.providers.base import CompletionRequest
 from uro_core.providers.router import ProviderRouter
 from uro_core.worldpack.parse import parse_pack
+from uro_core.worldpack.rules import RulePack
 
 WORLDS = Path(__file__).resolve().parents[3] / "worlds"
 
@@ -1258,3 +1260,254 @@ async def test_for_each_bind_var_named_like_a_verb_does_not_corrupt_do(
     )
     assert len(result.events) == 1  # neighbor (f:n) → knows → f:a; `do` was never corrupted
     assert result.events[0].payload["src"] == "f:n"
+
+
+# --- RL-6 (#25): $trigger.<field>-aware `when` + trigger.per_event -------------------------------
+
+
+def _rl6_pack(when: dict, then: list[dict], *, per_event: bool = False) -> dict:  # type: ignore[type-arg]
+    """A v5 pack: an ActorDied trigger whose `when` binds the dead actor via $trigger.actor_id."""
+    trigger: dict = {"event": "ActorDied"}  # type: ignore[type-arg]
+    if per_event:
+        trigger["per_event"] = True
+    return {
+        "rules_api_version": 5,
+        "rules": [
+            {
+                "id": "red-band-vendetta",
+                "trigger": trigger,
+                "when": when,
+                "then": then,
+                "scope": {"faction": "f:red-band"},
+            }
+        ],
+    }
+
+
+async def _rl6_campaign(store: PostgresEventStore, pack: dict):  # type: ignore[no-untyped-def, type-arg]
+    """A world with a Red Band faction, one MEMBER, one OUTSIDER, and a dormant war thread."""
+    world = await store.create_world(f"rl6-{new_id()}", rule_pack=pack)
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id,
+        [
+            faction_created(faction_id="f:red-band", name="Red Band", kind="faction"),
+            actor_created(actor_id="a:member", name="Vorlund"),
+            actor_created(actor_id="a:member2", name="Sela"),
+            actor_created(actor_id="a:outsider", name="A Stranger"),
+            edge_added(src="a:member", rel_type="member_of", dst="f:red-band"),
+            edge_added(src="a:member2", rel_type="member_of", dst="f:red-band"),
+            thread_created(thread_id="t:war", stakes="the Red Band war", state="dormant"),
+        ],
+    )
+    return world, campaign
+
+
+async def _module_claims(store: PostgresEventStore, branch: str) -> list[str]:
+    return [c.statement for c in await store.list_claims(branch) if c.origin == "module"]
+
+
+_MEMBER_WHEN = {
+    "kind": "edge_exists",
+    "src": "$trigger.actor_id",
+    "rel": "member_of",
+    "dst": "f:red-band",
+}
+_RUMOR = [
+    {"do": "record_rumor", "text": "The Red Band counts its dead.", "subjects": ["f:red-band"]}
+]
+
+
+async def test_rl6_existential_fires_when_a_member_dies_even_if_not_first(
+    store: PostgresEventStore,
+) -> None:
+    """The fatal case the design-check adversary found: a multi-death beat where a NON-member dies
+    FIRST. Binding only the first event would miss the member; per-event `when` evaluation makes it
+    a true existential — the rule fires because a Red Band member is among the dead."""
+    _, campaign = await _rl6_campaign(store, _rl6_pack(_MEMBER_WHEN, _RUMOR))
+    branch = campaign.branch_id
+    died = [actor_died(actor_id="a:outsider"), actor_died(actor_id="a:member")]  # outsider FIRST
+    await store.append_beat(branch, died)
+    await _engine(store).react(campaign, await _head(store, branch), died)
+    assert len(await _module_claims(store, branch)) == 1  # fired despite the outsider dying first
+
+
+async def test_rl6_existential_default_fires_once_for_many_member_deaths(
+    store: PostgresEventStore,
+) -> None:
+    """Default (per_event omitted) is an EXISTENTIAL: two members die in one beat → the rule fires
+    ONCE (one rumor), bound to the first satisfying event."""
+    _, campaign = await _rl6_campaign(store, _rl6_pack(_MEMBER_WHEN, _RUMOR))
+    branch = campaign.branch_id
+    died = [actor_died(actor_id="a:member"), actor_died(actor_id="a:member2")]
+    await store.append_beat(branch, died)
+    await _engine(store).react(campaign, await _head(store, branch), died)
+    assert len(await _module_claims(store, branch)) == 1  # fired once, not per-death
+
+
+async def test_rl6_no_fire_when_no_member_dies(store: PostgresEventStore) -> None:
+    """Only an outsider dies → the $trigger-bound edge check is false for every matching event →
+    no fire, no module commit."""
+    _, campaign = await _rl6_campaign(store, _rl6_pack(_MEMBER_WHEN, _RUMOR))
+    branch = campaign.branch_id
+    head_before = await _head(store, branch)
+    died = [actor_died(actor_id="a:outsider")]
+    await store.append_beat(branch, died)
+    await _engine(store).react(campaign, await _head(store, branch), died)
+    assert await _module_claims(store, branch) == []
+    # only the trigger beat committed; react added no module beat
+    assert (await _states(store, branch))["t:war"] == "dormant"
+    assert head_before != await _head(store, branch)  # the trigger beat did commit
+
+
+async def test_rl6_per_event_fires_once_per_matching_death_and_rides_a_fork(
+    store: PostgresEventStore,
+) -> None:
+    """per_event: true fires once PER matching death (the count-each shape). Two members + one
+    outsider die → two rumors (not one, not three). The per-event emissions are event-sourced, so
+    they REBUILD on a fork by replay (the whole point — a shadow game-code counter would not)."""
+    pack = _rl6_pack(_MEMBER_WHEN, _RUMOR, per_event=True)
+    world, campaign = await _rl6_campaign(store, pack)
+    branch = campaign.branch_id
+    died = [
+        actor_died(actor_id="a:member"),
+        actor_died(actor_id="a:outsider"),
+        actor_died(actor_id="a:member2"),
+    ]
+    await store.append_beat(branch, died)
+    await _engine(store).react(campaign, await _head(store, branch), died)
+    assert len(await _module_claims(store, branch)) == 2  # one per member death, outsider skipped
+    fork = await store.fork_branch(world.world_id, await _head(store, branch), "aftermath")
+    assert len(await _module_claims(store, fork.branch_id)) == 2  # per-event emissions ride a fork
+
+
+async def test_rl6_whole_when_fails_closed_on_an_unbound_trigger_ref(
+    store: PostgresEventStore,
+) -> None:
+    """An unbound $trigger.<field> fails the WHOLE `when` closed (a sentinel raised through the
+    tree), not just the leaf - so a `not`-wrapped unbound ref can't fail OPEN and fire."""
+    from uro_core.engines.rules import _eval, _UnboundTrigger
+    from uro_core.worldpack.rules import CondEdgeExists, CondNot
+
+    inner = CondEdgeExists(kind="edge_exists", src="$trigger.actor_id", rel="member_of", dst="f:x")
+    cond = CondNot(kind="not", cond=inner)
+    with pytest.raises(_UnboundTrigger):  # field ABSENT: not(False)=True would fail OPEN; raises
+        await _eval(store, "b", cond, 0, [100], {})
+    with pytest.raises(_UnboundTrigger):  # field PRESENT-but-null (e.g. learned_from): also unbound
+        await _eval(store, "b", cond, 0, [100], {"actor_id": None})
+
+
+def test_rl6_parse_rejects_trigger_ref_in_a_literal_slot() -> None:
+    """$trigger in a literal value slot (a counter key) is a loud parse error, not a silent
+    type-confusion misfire (resolving an actor id into a counter key)."""
+    pack = _rl6_pack(
+        {
+            "kind": "counter",
+            "scope_ref": "f:red-band",
+            "key": "$trigger.actor_id",
+            "op": ">",
+            "value": 0,
+        },
+        _RUMOR,
+    )
+    with pytest.raises(ValidationError, match="literal slot"):
+        RulePack(**pack)
+
+
+def test_rl6_parse_rejects_unknown_trigger_field() -> None:
+    """$trigger.<field> in a ref slot must name a real field of the trigger event (ActorDied has
+    actor_id/cause, not 'faction') — else it would validate but never bind."""
+    pack = _rl6_pack(
+        {"kind": "edge_exists", "src": "$trigger.faction", "rel": "member_of", "dst": "f:red-band"},
+        _RUMOR,
+    )
+    with pytest.raises(ValidationError, match="not a field of ActorDied"):
+        RulePack(**pack)
+
+
+def test_rl6_parse_rejects_trigger_ref_in_an_agenda_rule() -> None:
+    """An agenda rule has no trigger event, so a $trigger ref can never bind - parse rejects it."""
+    pack = {
+        "rules_api_version": 5,
+        "agendas": [
+            {
+                "id": "a1",
+                "every_days": 7,
+                "when": {"kind": "actor_is_pc", "actor": "$trigger.actor_id"},
+                "then": _RUMOR,
+                "scope": {"faction": "f:red-band"},
+            }
+        ],
+    }
+    with pytest.raises(ValidationError, match="agenda"):
+        RulePack(**pack)
+
+
+def test_rl6_parse_rejects_trigger_ref_on_a_non_string_field() -> None:
+    """A $trigger ref must name a STRING field. A list field (ClaimRecorded.subject_refs) would
+    str()-ify and silently never match — rejected at parse, not accepted-but-inert."""
+    pack = {
+        "rules_api_version": 5,
+        "rules": [
+            {
+                "id": "r",
+                "trigger": {"event": "ClaimRecorded"},
+                "when": {
+                    "kind": "edge_exists",
+                    "src": "$trigger.subject_refs",  # a list field, not a string ref
+                    "rel": "member_of",
+                    "dst": "f:x",
+                },
+                "then": _RUMOR,
+                "scope": {"faction": "f:red-band"},
+            }
+        ],
+    }
+    with pytest.raises(ValidationError, match="string ref field"):
+        RulePack(**pack)
+
+
+async def test_rl6_trigger_free_when_evaluated_once_not_per_event(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review fix: a $trigger-free `when` is constant across a beat's matching events, so it is
+    evaluated ONCE, not once per event - else a when-False rule burns the SHARED node budget per
+    event and starves later rules. With a tight budget + 5 deaths, the later when-True rule B still
+    fires (pre-fix, A's per-event evaluation would exhaust the budget and drop the pass)."""
+    from uro_core.engines import rules as rules_mod
+    from uro_core.engines.rules import evaluate_rules
+
+    monkeypatch.setattr(rules_mod, "_MAX_NODES", 3)
+    pack = {
+        "rules_api_version": 1,  # a legacy (no-$trigger) pack - the one the fix protects
+        "rules": [
+            {  # A: $trigger-free, when FALSE (t:x dormant, not active) - never fires, no break
+                "id": "a-hog",
+                "trigger": {"event": "ActorDied"},
+                "when": {"kind": "thread_state", "thread": "t:x", "state": "active"},
+                "then": [{"do": "set_thread_state", "thread": "t:x", "to": "active"}],
+                "scope": {"thread": "t:x"},
+            },
+            {  # B: $trigger-free, when is TRUE → should fire (unless A starved the budget first)
+                "id": "b-fires",
+                "trigger": {"event": "ActorDied"},
+                "when": {"kind": "thread_state", "thread": "t:y", "state": "dormant"},
+                "then": [{"do": "set_thread_state", "thread": "t:y", "to": "active"}],
+                "scope": {"thread": "t:y"},
+            },
+        ],
+    }
+    world = await store.create_world(f"rl6b-{new_id()}", rule_pack=pack)
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    branch = campaign.branch_id
+    await store.append_beat(
+        branch,
+        [
+            thread_created(thread_id="t:x", stakes="x", state="dormant"),
+            thread_created(thread_id="t:y", stakes="y", state="dormant"),
+        ],
+    )
+    rules = RulePack(**pack).rules
+    events = [actor_died(actor_id=f"a:{i}") for i in range(5)]
+    fired = await evaluate_rules(store, branch, rules=rules, trigger_events=events, world_day=0)
+    assert any(f.rule_id == "b-fires" for f in fired)  # not starved by a-hog's 5 events

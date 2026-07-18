@@ -38,7 +38,7 @@ from uro_core.domain.events import (
     thread_state_changed,
 )
 from uro_core.engines.actor import propagate_belief
-from uro_core.engines.rules import FiredAction
+from uro_core.engines.rules import FiredAction, _resolve_trigger
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.worldpack.rules import Action, Scope
 
@@ -131,16 +131,6 @@ def _weighted_pick(weights: dict[str, int], seed: str) -> str:
         if roll < acc:
             return name
     return items[-1][0]  # unreachable (roll < total)
-
-
-def _resolve_trigger(ref: str, payload: dict[str, Any]) -> str | None:
-    """Resolve a `$trigger.<field>` reference against the triggering event's payload (C3), or return
-    a literal ref unchanged. None if the field is absent (an agenda rule, or a typo → the caller
-    drops it)."""
-    if ref.startswith("$trigger."):
-        field_name = ref[len("$trigger.") :]
-        return str(payload[field_name]) if field_name in payload else None
-    return ref
 
 
 def _substitute(action: Action, bindings: dict[str, str]) -> Action | None:
@@ -421,7 +411,10 @@ async def run_rules_gauntlet(
                 world_day,
                 result.drops,
                 budget,
-                str(f.index),  # top-level id_path = the action index (existing claim-ids stable)
+                # top-level id_path = the action index (existing claim-ids stable); a per_event rule
+                # (event_key set) prefixes it with the event index so each matching event's
+                # emissions get distinct, idempotent ids — mirrors for_each's neighbor-index path.
+                str(f.index) if not f.event_key else f"{f.event_key}.{f.index}",
             )
         )
     return result

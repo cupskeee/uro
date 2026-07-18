@@ -17,7 +17,8 @@ and the gauntlet (`engines/rules_gauntlet.py`) come in INC-3.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+import types
+from typing import Annotated, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -28,9 +29,10 @@ from uro_core.domain.events import ThreadState
 # D-34). The additions are purely additive, so v1 packs (no counters) remain valid — the engine
 # accepts the whole SUPPORTED set; a pack outside it fails loud at parse. A counter-using pack
 # should declare 2 so an old (v1) engine rejects it with a clear version error.
-RULES_API_VERSION = 4
-# v4 (C3-C5): for_each / roll_table / expire_claims. v3 multi-ref, v2 counters; all valid.
-_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4})
+RULES_API_VERSION = 5
+# v5 (RL-6): $trigger.<field>-aware `when` + trigger.per_event. v4 (for_each/roll_table/
+# expire_claims), v3 multi-ref, v2 counters all still valid (a $trigger/per_event pack declares 5).
+_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4, 5})
 
 
 def _event_payload_fields() -> dict[str, frozenset[str]]:
@@ -52,6 +54,38 @@ def _event_payload_fields() -> dict[str, frozenset[str]]:
 
 
 _EVENT_FIELDS = _event_payload_fields()
+
+
+def _is_str_scalar(ann: object) -> bool:
+    """True if a payload field's type resolves to a single string value (str, str|None, a Literal of
+    strings, or Optional thereof) — the only kind a `$trigger.<field>` ref can meaningfully bind. A
+    list/int/dict field would `str()`-ify into something that never matches an entity ref."""
+    if ann is str:
+        return True
+    origin = get_origin(ann)
+    if origin is Literal:
+        return all(isinstance(a, str) for a in get_args(ann))
+    if origin is Union or origin is types.UnionType:  # str | None / Optional[str]
+        non_none = [a for a in get_args(ann) if a is not type(None)]
+        return len(non_none) == 1 and _is_str_scalar(non_none[0])
+    return False  # list[...]/int/dict/bool → not a bindable ref
+
+
+def _event_str_fields() -> dict[str, frozenset[str]]:
+    """Per event, the payload fields a `$trigger.<field>` ref MAY bind — the string-scalar ones. A
+    ref on a non-string field (e.g. `ClaimRecorded.subject_refs`, a list) validates its NAME but
+    would silently never match; RL-6 rejects it at parse (the anti-accepted-but-inert rule)."""
+    out: dict[str, frozenset[str]] = {}
+    for name, obj in vars(_events).items():
+        if name.endswith("Payload") and isinstance(obj, type) and issubclass(obj, BaseModel):
+            out[name[: -len("Payload")]] = frozenset(
+                f for f, info in obj.model_fields.items() if _is_str_scalar(info.annotation)
+            )
+    out.setdefault("EdgeUpdated", out.get("EdgeAdded", frozenset()))
+    return out
+
+
+_EVENT_STR_FIELDS = _event_str_fields()
 
 # Relations a module MAY touch — non-authoritative social/political edges only. Never `owns`/`rules`
 # (ownership/authority is canon, not a module's to assert). The gauntlet re-checks this (INC-3).
@@ -179,6 +213,84 @@ Condition = Annotated[
     | CondNot,
     Field(discriminator="kind"),
 ]
+
+
+# RL-6: which slots of each leaf condition are ENTITY REFS (may hold a `$trigger.<field>` bound from
+# the trigger payload) vs literal values. A `$trigger` in a literal slot (op/value/key/rel/state) is
+# a PARSE error, not a silent type-confusion misfire (e.g. an actor id resolved into a counter key).
+# counter_compare's refs are nested in left/right and are handled explicitly by the walker.
+_COND_REF_SLOTS: dict[str, frozenset[str]] = {
+    "thread_state": frozenset({"thread"}),
+    "actor_tier": frozenset({"actor"}),
+    "actor_is_pc": frozenset({"actor"}),
+    "edge_exists": frozenset({"src", "dst"}),
+    "world_day": frozenset(),
+    "counter": frozenset({"scope_ref"}),
+    "counter_compare": frozenset(),  # nested: left.scope_ref / right.scope_ref
+    "count_edges": frozenset({"src"}),
+}
+_TRIGGER_PREFIX = "$trigger."
+
+
+def _check_trigger_refs(cond: Condition, event: str | None, rule_id: str) -> None:
+    """Validate every `$trigger.<field>` in a condition tree (RL-6). A `$trigger` ref is legal ONLY
+    in an entity-ref slot (per `_COND_REF_SLOTS`) of a RULE (an event to bind from), and its
+    `<field>` must be a real payload field of that event (reusing `_EVENT_FIELDS`, the same catalog
+    that fences `trigger.where`). In a literal slot, or in an AGENDA rule (`event is None`, no
+    trigger to bind), it is a loud parse error — closing the accepted-but-inert + type-confusion
+    footguns the way `_trigger_can_fire` already closed them for `trigger.where`."""
+    kind = cond.kind
+    if kind == "all":
+        for c in cond.all:  # type: ignore[union-attr]
+            _check_trigger_refs(c, event, rule_id)
+        return
+    if kind == "any":
+        for c in cond.any:  # type: ignore[union-attr]
+            _check_trigger_refs(c, event, rule_id)
+        return
+    if kind == "not":
+        _check_trigger_refs(cond.cond, event, rule_id)  # type: ignore[union-attr]
+        return
+    ref_slots = _COND_REF_SLOTS.get(kind, frozenset())
+    if kind == "counter_compare":
+        slots = [
+            ("left.scope_ref", cond.left.scope_ref, True),  # type: ignore[union-attr]
+            ("left.key", cond.left.key, False),  # type: ignore[union-attr]
+            ("right.scope_ref", cond.right.scope_ref, True),  # type: ignore[union-attr]
+            ("right.key", cond.right.key, False),  # type: ignore[union-attr]
+        ]
+    else:
+        slots = [
+            (name, getattr(cond, name), name in ref_slots)
+            for name in type(cond).model_fields
+            if isinstance(getattr(cond, name), str)
+        ]
+    legal = ", ".join(sorted(n for n, _, isref in slots if isref)) or "none"
+    for name, value, is_ref in slots:
+        if not value.startswith(_TRIGGER_PREFIX):
+            continue
+        field_name = value[len(_TRIGGER_PREFIX) :]
+        if event is None:
+            raise ValueError(
+                f"rule {rule_id!r}: {value!r} in an agenda-rule condition, which has no trigger "
+                f"event to bind $trigger from"
+            )
+        if not is_ref:
+            raise ValueError(
+                f"rule {rule_id!r}: {value!r} in the literal slot {name!r} of a {kind!r} condition "
+                f"- $trigger is only bindable in an entity-ref slot ({legal})"
+            )
+        if field_name not in _EVENT_FIELDS.get(event, frozenset()):
+            fields = ", ".join(sorted(_EVENT_FIELDS.get(event, frozenset())))
+            raise ValueError(
+                f"rule {rule_id!r}: {value!r} is not a field of {event} (fields: {fields}) - it "
+                f"would validate but never bind"
+            )
+        if field_name not in _EVENT_STR_FIELDS.get(event, frozenset()):
+            raise ValueError(
+                f"rule {rule_id!r}: {value!r} is not a string ref field of {event} (it is "
+                f"list/int-typed) - $trigger binds one string ref, so it could never match"
+            )
 
 
 # --- Actions: the CLOSED emit union (the structural fence) ---
@@ -397,6 +509,11 @@ class Trigger(BaseModel):
     model_config = _STRICT
     event: str  # an event_type that must appear in the triggering beat (e.g. "ActorDied")
     where: dict[str, str] = Field(default_factory=dict)  # optional payload field==value matches
+    # RL-6: `when` is evaluated per matching trigger event. Default (False) fires the rule ONCE,
+    # bound to the first event satisfying trigger∧when (the existential "ANY member died"). True
+    # fires it once PER matching event (the count-each shape, e.g. adjust_counter per dead member) -
+    # each event's emissions get distinct, idempotent ids (see FiredAction.event_key).
+    per_event: bool = False
 
 
 class Rule(BaseModel):
@@ -424,6 +541,8 @@ class Rule(BaseModel):
                 f"rule {self.id!r}: trigger.where key(s) {unknown} are not fields of {ev} "
                 f"(fields: {', '.join(sorted(_EVENT_FIELDS[ev]))}) — the filter could never match"
             )
+        if self.when is not None:  # RL-6: fence $trigger.<field> refs in the `when` tree
+            _check_trigger_refs(self.when, ev, self.id)
         return self
 
 
@@ -437,6 +556,14 @@ class AgendaRule(BaseModel):
     when: Condition | None = None
     then: list[Action] = Field(min_length=1)
     scope: Scope
+
+    @model_validator(mode="after")
+    def _no_trigger_refs(self) -> AgendaRule:
+        # An agenda rule has no trigger event, so a $trigger.<field> ref could never bind - reject
+        # it loudly at parse (RL-6) rather than fail-closed-and-silent at runtime.
+        if self.when is not None:
+            _check_trigger_refs(self.when, None, self.id)
+        return self
 
 
 class RulePack(BaseModel):
