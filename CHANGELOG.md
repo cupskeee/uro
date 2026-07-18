@@ -10,6 +10,21 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Quantified/relational reaction triggers (RL-6, #25)** — a reaction rule can now react to "ANY
+  member of faction X dying" (and the whole `$trigger`-bound predicate family): a `when` condition's
+  entity-ref slots may be `$trigger.<field>`, bound from the triggering event's payload
+  (`edge_exists(src="$trigger.actor_id", rel=member_of, dst=f:red-band)`). `when` is evaluated **per
+  matching trigger event**, so it is a true existential over a multi-death beat — the naive
+  "bind the first event" shape (which a design-check adversary showed misfires when a non-member dies
+  first) is avoided. `trigger.per_event: true` fires the rule once **per** matching event (the
+  count-each shape — e.g. `adjust_counter` per dead member; event-sourced, so it rides `fork_branch`,
+  unlike a shadow game-code counter). Fences: `$trigger` is legal only in a ref slot of a rule (never
+  a literal value slot or an agenda rule) and its field is validated against the event catalog at
+  parse (the same check that fences `trigger.where`, and it must be a *string* field, not a list);
+  an unbound-or-null ref fails the **whole** `when` closed. Read-only, so the action fence is
+  untouched. `per_event` fan-out is bounded by the existing per-pass action cap (over-cap actions
+  are audited). `RULES_API_VERSION` 4→5 (v1–v4 packs byte-identical). Resolves Ironwake's
+  quantified-trigger gap-report row. (D-42)
 - **Participant memory (B8, #7)** — a player's out-of-world notes that **survive a fork** (time-loop /
   roguelike / NG+): a caller-owned `ParticipantMemory` lane keyed on `(participant_id, world_ref)`,
   deliberately outside the branch/projection axis so `fork_branch` never resets it. Surfaces to the

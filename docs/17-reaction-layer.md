@@ -155,3 +155,43 @@ Two follow-ups the four games evidenced (Sable G-3/G-12, Ironwake, Seventh G-6),
   SILENTLY, so an author could not tell a working rule from a no-op. The gauntlet stays pure (records
   only); `react`/`agenda_tick` log one summary line per pass. Not canon, not an event — a diagnostic
   (a committed `ReactionDropped` event was rejected as canon-ish noise).
+
+## Post-INC extension (D-42, RL-6 / docs/18 Ironwake) — quantified/relational triggers
+
+The reaction grammar could express "on a death" but not "on the death of ANY member of faction X" —
+a quantified/relational trigger. Ironwake wanted it (a wished rule in exact syntax); the old attempt
+(`trigger.where: {actor.member_of: f:red-band}`) was accepted-but-inert, then (dogfood findings) is
+now refused loudly. RL-6 ships the real primitive, chosen via a lightweight design check (3 blind
+proposers converged; an adversary killed the naive shape).
+
+- **`$trigger.<field>`-aware `when`.** A condition's ENTITY-REF slots (`actor`/`src`/`dst`/
+  `scope_ref`/`thread`) may be `$trigger.<field>`, bound from the triggering event's payload — reusing
+  the C3 `_resolve_trigger` machinery that already fed `for_each` actions, now hoisted into
+  `engines/rules.py` and threaded into the (previously payload-blind) condition evaluator `_eval`. So
+  "ANY Red Band member died" is a plain `ActorDied` trigger + `when: edge_exists(src=$trigger.actor_id,
+  rel=member_of, dst=f:red-band)`. It composes with `all`/`any`/`not` and world-state gates, and
+  generalizes the whole predicate-on-the-trigger-entity family ("a T3 died", "a PC died", "an actor in
+  place P died") for free.
+- **Per-event evaluation + `trigger.per_event`.** `when` is evaluated PER matching trigger event (not
+  just the first — the load-bearing fix: the adversary showed first-only misfires when a non-member
+  dies first in a multi-death beat). Default fires the rule ONCE, bound to the first satisfying event
+  (existential); `per_event: true` fires it once per satisfying event (count-each — e.g. an
+  `adjust_counter` per dead member), each keyed by `FiredAction.event_key` so per-event claim/counter
+  ids stay distinct + idempotent (mirroring `for_each`'s neighbor-index id path). Fan-out is bounded
+  by the per-pass `_MAX_ACTIONS` cap (an over-cap tail is audited, D-40) — a beat with more matching
+  events than the cap under-counts, by design (the DoS guard wins over exactness). A `$trigger`-free
+  `when` is evaluated ONCE per beat (not per event), so a legacy pack's node-budget cost is unchanged.
+- **Fences (trust unchanged).** Conditions are READS, so `$trigger` widens what a rule may OBSERVE,
+  never the closed non-canon Action union it may EMIT — no action-fence change. At parse, a
+  recursive walk validates every `$trigger.<field>`: legal only in a ref slot (a `$trigger` in a
+  literal slot — a counter key, a relation — is a loud error, not a silent type-confusion misfire),
+  its field must exist on the trigger event AND be a *string-scalar* field (a list field like
+  `ClaimRecorded.subject_refs` would `str()`-ify and never match — rejected, not accepted-but-inert),
+  and any `$trigger` in an agenda rule (no trigger event) is rejected. At eval, a ref that is unbound
+  OR present-but-null (a nullable field such as `BeliefChanged.learned_from` on a first-hand witness)
+  raises through the tree so the WHOLE `when` fails CLOSED — a `not`-wrapped unbound ref can't fail open. `RULES_API_VERSION` 4→5 (v1–v4
+  packs are byte-identical: a `when` with no `$trigger` is constant across events, so per-event
+  evaluation returns exactly the old first-match-then-eval-once result).
+- **Still deferred (honest ceiling).** Multi-hop/transitive triggers ("a member of an ALLY of X") need
+  `for_each` traversal in CONDITIONS (reserved); aggregate triggers ("the 3rd death this season")
+  compose WITH a counter+threshold but are not themselves a new primitive.
