@@ -131,6 +131,28 @@ def test_outcome_endpoint_distills_the_bundle() -> None:
     assert recorded["bundle"]["encounter_id"] == "e:battle-7"  # path param injected into the bundle
 
 
+def test_outcome_endpoint_rejects_a_token_scoped_to_another_campaign() -> None:
+    # D-41: the outcome endpoint mutates the timeline, so a campaign-scoped minted token (D-39) must
+    # be enforced HERE too, not just on the WS play channel. A static token (campaign None) is
+    # server-wide and passes.
+    hit: dict[str, bool] = {}
+
+    async def report_outcome(campaign_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
+        hit["reached"] = True
+        return {"committed_events": 0, "commit_id": "c", "receipt": []}
+
+    deps = _fake_deps()
+    deps.report_outcome = report_outcome
+    deps.token_campaign = lambda t: "camp-1" if t == "tok-a" else None  # tok-a minted for camp-1
+    client = TestClient(create_app(deps))
+    blocked = client.post("/campaigns/camp-2/encounters/e/outcome?token=tok-a", json={})
+    assert blocked.status_code == 403 and "reached" not in hit  # never reached the distiller
+    own = client.post("/campaigns/camp-1/encounters/e/outcome?token=tok-a", json={})
+    assert own.status_code == 200  # …but tok-a works on its OWN campaign
+    static = client.post("/campaigns/camp-2/encounters/e/outcome?token=tok-b", json={})
+    assert static.status_code == 200  # …and tok-b (unscoped/static) is server-wide
+
+
 def test_outcome_endpoint_rejects_a_bad_token() -> None:
     resp = TestClient(create_app(_fake_deps())).post(
         "/campaigns/camp-1/encounters/e/outcome?token=nope", json={}

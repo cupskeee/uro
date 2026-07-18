@@ -152,4 +152,4 @@ async def test_out_of_cast_refs_drop_or_downgrade(store: PostgresEventStore) -> 
     lies = [c for c in await store.claims_about(b, MERC2) if "not in the fight" in c.statement]
     assert lies == []  # out-of-cast feat: dropped entirely
     gossip = [c for c in await store.claims_about(b, MIRA) if "said to have fallen" in c.statement]
-    assert gossip, "an out-of-cast casualty DOWNGRADES to gossip rather than dropping (D-32 nuance)"
+    assert gossip == [], "an out-of-cast casualty is now DROPPED, not rumored (D-41, row-7)"
