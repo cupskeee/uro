@@ -170,6 +170,7 @@ class ClaimRecordedPayload(BaseModel):
     subject_refs: list[str] = Field(default_factory=list)
     truth: Truth = "unknown"
     origin: str = ""  # what produced it (event/actor ref, or "narration")
+    created_day: int = 0  # in-fiction birth day (C5, D-34) — for rumor-age / expire_claims
 
 
 class ClaimTruthChangedPayload(BaseModel):
@@ -228,6 +229,7 @@ def claim_recorded(
     subject_refs: list[str] | None = None,
     truth: Truth = "unknown",
     origin: str = "",
+    created_day: int = 0,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     refs = subject_refs or []
@@ -236,7 +238,12 @@ def claim_recorded(
         entity_refs=[claim_id, *refs],
         caused_by=_default_cause(caused_by),
         payload=ClaimRecordedPayload(
-            claim_id=claim_id, statement=statement, subject_refs=refs, truth=truth, origin=origin
+            claim_id=claim_id,
+            statement=statement,
+            subject_refs=refs,
+            truth=truth,
+            origin=origin,
+            created_day=created_day,
         ).model_dump(),
     )
 

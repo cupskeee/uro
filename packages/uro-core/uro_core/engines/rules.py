@@ -9,7 +9,8 @@ A deterministic node budget bounds cost (fail-closed: the pass is dropped, the b
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.worldpack.rules import (
@@ -34,12 +35,15 @@ class RuleBudgetExceeded(Exception):
 @dataclass(frozen=True)
 class FiredAction:
     """A rule whose trigger + condition matched, paired with one of its actions (carrying the
-    rule's id + scope for the gauntlet, and the action's index for a deterministic id)."""
+    rule's id + scope for the gauntlet, and the action's index for a deterministic id).
+    `trigger_payload` is the FIRST matching trigger event's payload — the `$trigger.<field>` source
+    for for_each (C3); empty for agenda rules."""
 
     rule_id: str
     scope: Scope
     action: Action
     index: int
+    trigger_payload: dict[str, Any] = field(default_factory=dict)
 
 
 def _cmp(a: int, op: CmpOp, b: int) -> bool:
@@ -56,15 +60,16 @@ def _cmp(a: int, op: CmpOp, b: int) -> bool:
     return a < b  # "<"
 
 
-def _trigger_matches(trigger: Trigger, trigger_events: list) -> bool:  # type: ignore[type-arg]
-    """True if the beat committed an event of the trigger type whose payload matches every
-    `where` field (string-compared — the grammar is int/string/bool, all stringifiable)."""
+def _matching_trigger(trigger: Trigger, trigger_events: list):  # type: ignore[no-untyped-def, type-arg]
+    """The FIRST beat event of the trigger type whose payload matches every `where` field
+    (string-compared — the grammar is int/string/bool, all stringifiable), or None. Returning the
+    event (not a bool) lets `for_each` bind `$trigger.<field>` from its payload (C3)."""
     for e in trigger_events:
         if e.event_type != trigger.event:
             continue
         if all(str(e.payload.get(k)) == v for k, v in trigger.where.items()):
-            return True
-    return False
+            return e
+    return None
 
 
 async def _eval(
@@ -128,14 +133,23 @@ async def evaluate_rules(
     budget = [_MAX_NODES]
     fired: list[FiredAction] = []
     for rule in sorted(rules, key=lambda r: r.id):
-        if not _trigger_matches(rule.trigger, trigger_events):
+        match = _matching_trigger(rule.trigger, trigger_events)
+        if match is None:
             continue
         if rule.when is not None and not await _eval(
             store, branch_id, rule.when, world_day, budget
         ):
             continue
         for i, action in enumerate(rule.then):
-            fired.append(FiredAction(rule_id=rule.id, scope=rule.scope, action=action, index=i))
+            fired.append(
+                FiredAction(
+                    rule_id=rule.id,
+                    scope=rule.scope,
+                    action=action,
+                    index=i,
+                    trigger_payload=dict(match.payload),  # source of $trigger.<field> for for_each
+                )
+            )
     return fired
 
 

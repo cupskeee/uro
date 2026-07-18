@@ -31,6 +31,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   frames: `table_talk`, `proposal_opened`, `vote_tally`, `vote_decided`, `vote_unsupported`. All
   session-only (D-31), zero events/migrations. Consensual-PvP / simultaneous / reactive-interrupt stay
   reserved behind the same port (D-38).
+- **Computation layer C3/C4/C5 — `for_each`, `roll_table`, `expire_claims` (#13)** — the reaction-layer
+  rule grammar (`RULES_API_VERSION` 3→4; v1–v3 packs stay valid) gains: **`for_each`** (one bounded loop
+  over a ref's edge-neighbors, with `$trigger.<field>` binding + `as`-var substitution, each neighbor
+  scope-fenced); **`roll_table`** (a seeded, deterministic weighted pick → a chosen outcome's nested
+  actions, baked so replay re-picks identically); and **`expire_claims`** (rumor decay — retract a stale
+  module rumor to `truth=false`, migration 019 adds `created_day` to claims). All recursion is
+  bounded (nested lists capped at parse; a shared per-pass node budget). Trust fences: a rule can never
+  retract canon or reach a ref outside its scope through a binding. C6 (cascade) + computed-delta
+  arithmetic stay staged (docs/19). (D-34)
 - **Chronicler trusted-embedder ingestion tier + untrusted-path hardening (B6, #12)** — a Posture-A
   library embedder (which already holds root via `append_beat`) can now reuse outcome distillation
   *without* the D-32 protection ceiling via `uro_core.authored.distill_authored_outcome`, so an

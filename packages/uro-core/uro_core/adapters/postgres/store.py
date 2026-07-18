@@ -1614,7 +1614,8 @@ class PostgresEventStore:
     async def get_claim(self, branch_id: str, claim_id: str) -> ClaimView | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT claim_id, statement, subject_refs, truth, origin FROM proj_claims "
+                "SELECT claim_id, statement, subject_refs, truth, origin, created_day "
+                "FROM proj_claims "
                 "WHERE branch_id = $1 AND claim_id = $2",
                 branch_id,
                 claim_id,
@@ -1624,7 +1625,8 @@ class PostgresEventStore:
     async def list_claims(self, branch_id: str) -> list[ClaimView]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT claim_id, statement, subject_refs, truth, origin FROM proj_claims "
+                "SELECT claim_id, statement, subject_refs, truth, origin, created_day "
+                "FROM proj_claims "
                 "WHERE branch_id = $1 ORDER BY claim_id",
                 branch_id,
             )
@@ -1633,7 +1635,8 @@ class PostgresEventStore:
     async def claims_about(self, branch_id: str, entity_ref: str) -> list[ClaimView]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT claim_id, statement, subject_refs, truth, origin FROM proj_claims "
+                "SELECT claim_id, statement, subject_refs, truth, origin, created_day "
+                "FROM proj_claims "
                 "WHERE branch_id = $1 AND subject_refs @> ARRAY[$2]::text[] "
                 "ORDER BY claim_id",  # deterministic — recall/replay must be reproducible
                 branch_id,

@@ -43,10 +43,12 @@ async def _actor_promoted(conn: asyncpg.Connection, branch_id: str, p: dict[str,
 
 async def _claim_recorded(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     await conn.execute(
-        "INSERT INTO proj_claims (branch_id, claim_id, statement, subject_refs, truth, origin) "
-        "VALUES ($1, $2, $3, $4, $5, $6) "
+        "INSERT INTO proj_claims (branch_id, claim_id, statement, subject_refs, truth, origin, "
+        "created_day) VALUES ($1, $2, $3, $4, $5, $6, $7) "
         "ON CONFLICT (branch_id, claim_id) DO UPDATE SET "
         "statement = EXCLUDED.statement, subject_refs = EXCLUDED.subject_refs, "
+        # created_day is NOT updated on conflict — a re-minted rumor (same deterministic id each
+        # cadence, RL-8) keeps its FIRST-recorded day so its age is stable (C5).
         "truth = EXCLUDED.truth, origin = EXCLUDED.origin",
         branch_id,
         p["claim_id"],
@@ -54,6 +56,7 @@ async def _claim_recorded(conn: asyncpg.Connection, branch_id: str, p: dict[str,
         p.get("subject_refs", []),
         p["truth"],
         p.get("origin", ""),
+        p.get("created_day", 0),
     )
 
 
@@ -363,7 +366,7 @@ async def apply_event(conn: asyncpg.Connection, branch_id: str, event: DomainEve
 
 _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "actors": ("actor_id", "name", "tier", "role", "aliases", "status"),
-    "claims": ("claim_id", "statement", "subject_refs", "truth", "origin"),
+    "claims": ("claim_id", "statement", "subject_refs", "truth", "origin", "created_day"),
     "beliefs": ("actor_id", "claim_id", "confidence", "learned_from"),
     "places": ("place_id", "name", "kind", "status", "description"),
     "pcs": ("campaign_id", "actor_id", "participant_id", "active"),

@@ -15,6 +15,7 @@ from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import (
     actor_created,
     actor_died,
+    claim_recorded,
     counter_changed,
     edge_added,
     faction_created,
@@ -944,3 +945,316 @@ async def test_concurrent_react_passes_do_not_lose_a_counter_increment(
         engine.react(c, head, died),
     )
     assert await store.get_counter(c.branch_id, "f:h", "n") == 2  # both counted, none lost
+
+
+# --- C3 / C4 / C5 (D-34): for_each + roll_table + expire_claims (docs/19 staged) ---
+
+
+async def test_expire_claims_retracts_old_module_rumors_never_canon(
+    store: PostgresEventStore,
+) -> None:
+    # C5 (RL-8): expire_claims retracts a STALE module rumor (truth→false) but STRUCTURALLY never a
+    # canon claim (truth=true / origin=narration), and never one that isn't old enough yet.
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActExpireClaims, Scope
+
+    world = await store.create_world(f"expire-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    branch = campaign.branch_id
+    await store.append_beat(
+        branch,
+        [
+            actor_created(actor_id="a:m", name="M", tier=1),
+            claim_recorded(
+                claim_id="c:old",
+                statement="a stale rumor",
+                subject_refs=["a:m"],
+                truth="unknown",
+                origin="module",
+                created_day=0,
+            ),
+            claim_recorded(  # canon about the SAME subject — must be untouchable
+                claim_id="c:canon",
+                statement="the truth",
+                subject_refs=["a:m"],
+                truth="true",
+                origin="narration",
+                created_day=0,
+            ),
+            claim_recorded(  # a module rumor, but not old enough at world_day 100
+                claim_id="c:fresh",
+                statement="fresh gossip",
+                subject_refs=["a:m"],
+                truth="unknown",
+                origin="module",
+                created_day=90,
+            ),
+        ],
+    )
+    await store.time_skip(branch, 100)  # world_day → 100; cutoff = 100 - 60 = 40
+    fired = [
+        FiredAction(
+            rule_id="r1",
+            scope=Scope(world=True),
+            index=0,
+            action=ActExpireClaims(do="expire_claims", older_than_days=60),
+        )
+    ]
+    result = await run_rules_gauntlet(store, branch, fired, trigger_commit="c1")
+    await store.append_beat(branch, result.events)
+    assert (await store.get_claim(branch, "c:old")).truth == "false"  # stale module rumor retracted
+    assert (await store.get_claim(branch, "c:canon")).truth == "true"  # canon UNTOUCHED
+    assert (await store.get_claim(branch, "c:fresh")).truth == "unknown"  # not old enough → kept
+
+
+def test_roll_table_weights_must_match_outcomes() -> None:
+    import pytest
+    from uro_core.worldpack.rules import ActRollTable
+
+    with pytest.raises(ValueError):
+        ActRollTable(do="roll_table", weights={"A": 1}, outcomes={"B": []})  # key mismatch
+    with pytest.raises(ValueError):
+        ActRollTable(do="roll_table", weights={"A": 0}, outcomes={"A": []})  # non-positive weight
+    with pytest.raises(ValueError):
+        ActRollTable(do="roll_table", weights={}, outcomes={})  # empty → ZeroDivision (review fix)
+
+
+async def test_roll_table_picks_deterministically_and_applies_one_outcome(
+    store: PostgresEventStore,
+) -> None:
+    # C4 (RL-4): a seeded weighted pick applies exactly ONE outcome; BAKED → replay-identical.
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActRollTable, ActSetThreadState, Scope
+
+    world = await store.create_world(f"roll-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    branch = campaign.branch_id
+    await store.append_beat(
+        branch,
+        [
+            thread_created(thread_id="t:a", stakes="A", state="dormant"),
+            thread_created(thread_id="t:b", stakes="B", state="dormant"),
+        ],
+    )
+    action = ActRollTable(
+        do="roll_table",
+        weights={"A": 1, "B": 1},
+        outcomes={
+            "A": [ActSetThreadState(do="set_thread_state", thread="t:a", to="active")],
+            "B": [ActSetThreadState(do="set_thread_state", thread="t:b", to="active")],
+        },
+    )
+    fired = [FiredAction(rule_id="r1", scope=Scope(world=True), index=0, action=action)]
+    r1 = await run_rules_gauntlet(store, branch, fired, trigger_commit="c1")
+    r2 = await run_rules_gauntlet(store, branch, fired, trigger_commit="c1")
+    assert [e.payload for e in r1.events] == [e.payload for e in r2.events]  # deterministic (baked)
+    assert len(r1.events) == 1 and r1.events[0].event_type == "ThreadStateChanged"  # one outcome
+
+
+async def test_for_each_drags_allies_into_war_scope_fenced(store: PostgresEventStore) -> None:
+    # C3 (RL-11): for_each traverses allied_with from $trigger.src, binding each ally, and applies
+    # add_edge(ally, at_war_with, $trigger.dst). A neighbor out of scope is dropped + audited.
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActForEach, Scope
+
+    world = await store.create_world(f"foreach-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    branch = campaign.branch_id
+    await store.append_beat(
+        branch,
+        [
+            faction_created(faction_id="f:a", name="A"),
+            faction_created(faction_id="f:b", name="B"),
+            faction_created(faction_id="f:ally1", name="Ally1"),
+            faction_created(faction_id="f:ally2", name="Ally2"),
+            edge_added(src="f:a", rel_type="allied_with", dst="f:ally1"),
+            edge_added(src="f:a", rel_type="allied_with", dst="f:ally2"),
+        ],
+    )
+    action = ActForEach.model_validate(
+        {
+            "do": "for_each",
+            "traverse": "allied_with",
+            "from": "$trigger.src",
+            "as": "ALLY",
+            "apply": [
+                {"do": "add_edge", "src": "ALLY", "rel": "at_war_with", "dst": "$trigger.dst"}
+            ],
+        }
+    )
+    fired = [
+        FiredAction(
+            rule_id="r1",
+            scope=Scope(world=True),
+            index=0,
+            action=action,
+            trigger_payload={"src": "f:a", "dst": "f:b", "rel_type": "at_war_with"},
+        )
+    ]
+    result = await run_rules_gauntlet(store, branch, fired, trigger_commit="c1")
+    await store.append_beat(branch, result.events)
+    for ally in ("f:ally1", "f:ally2"):  # both allies dragged into war with f:b (the $trigger.dst)
+        edges = await store.edges_from(branch, ally)
+        assert any(e.rel_type == "at_war_with" and e.dst == "f:b" for e in edges)
+
+
+async def test_for_each_drops_out_of_scope_neighbors(store: PostgresEventStore) -> None:
+    # C3: under a narrow faction scope, an ally reached by traversal that is NOT in the jurisdiction
+    # is DROPPED + audited (the for_each body can't reach out of scope via a bound neighbor).
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActForEach, Scope
+
+    world = await store.create_world(f"foreach2-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    branch = campaign.branch_id
+    await store.append_beat(
+        branch,
+        [
+            faction_created(faction_id="f:a", name="A"),
+            faction_created(faction_id="f:out", name="Outsider"),
+            edge_added(src="f:a", rel_type="allied_with", dst="f:out"),  # ally, NOT a member
+        ],
+    )
+    action = ActForEach.model_validate(
+        {
+            "do": "for_each",
+            "traverse": "allied_with",
+            "from": "f:a",
+            "as": "ALLY",
+            "apply": [{"do": "add_edge", "src": "ALLY", "rel": "at_war_with", "dst": "f:a"}],
+        }
+    )
+    # scope = faction f:a → allowed is {f:a} + its members; f:out (an ally, not a member) is out
+    fired = [FiredAction(rule_id="r1", scope=Scope(faction="f:a"), index=0, action=action)]
+    result = await run_rules_gauntlet(store, branch, fired, trigger_commit="c1")
+    assert result.events == []  # the out-of-scope neighbor produced nothing
+    assert any(d.ref == "f:out" and "out of scope" in d.reason for d in result.drops)  # audited
+
+
+# --- D-34 review fixes (C3/C4/C5 phase-end review) ---
+
+
+def test_created_day_is_in_snapshot_tables() -> None:
+    # HIGH review fix: else a snapshot-based fork/materialize zeroes rumor age and expire mis-fires.
+    from uro_core.adapters.postgres.projector import _SNAPSHOT_TABLES
+
+    assert "created_day" in _SNAPSHOT_TABLES["claims"]
+
+
+async def test_claim_created_day_survives_a_snapshot_fork(store: PostgresEventStore) -> None:
+    # HIGH review fix (C5 x P2): a rumor's created_day must survive a SNAPSHOT-based fork intact.
+    store._snapshot_every = 3  # force snapshots so the fork materializes from one
+    world = await store.create_world(f"cday-{new_id()}")
+    b = world.main_branch_id
+    await store.append_beat(
+        b,
+        [
+            claim_recorded(
+                claim_id="c:r",
+                statement="a rumor",
+                subject_refs=[],
+                truth="unknown",
+                origin="module",
+                created_day=5,
+            )
+        ],
+    )
+    for i in range(6):  # pad past a snapshot boundary (depths 2..7 → snapshots at 3, 6)
+        await store.append_beat(b, [actor_created(actor_id=f"a:{i}", name=f"A{i}")])
+    fork = await store.fork_branch(world.world_id, await _head(store, b), "fork")
+    forked = await store.get_claim(fork.branch_id, "c:r")
+    assert forked is not None and forked.created_day == 5  # NOT zeroed by the snapshot restore
+
+
+def test_recursive_action_lists_are_capped_at_parse() -> None:
+    import pytest
+    from uro_core.worldpack.rules import ActForEach, ActRollTable
+
+    leaf = {"do": "set_thread_state", "thread": "t:x", "to": "active"}
+    with pytest.raises(ValueError):  # for_each apply cap (DoS review fix)
+        ActForEach.model_validate(
+            {"do": "for_each", "traverse": "knows", "from": "f:a", "as": "X", "apply": [leaf] * 17}
+        )
+    with pytest.raises(ValueError):  # roll_table outcome cap
+        ActRollTable.model_validate(
+            {"do": "roll_table", "weights": {"a": 1}, "outcomes": {"a": [leaf] * 17}}
+        )
+
+
+async def test_expire_claims_subjectless_rumor_needs_world_scope(store: PostgresEventStore) -> None:
+    # LOW review fix: a SUBJECT-LESS module rumor has no scope anchor — a narrow (faction) rule must
+    # NOT retract it; only a `world` rule may.
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActExpireClaims, Scope
+
+    world = await store.create_world(f"subless-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    b = campaign.branch_id
+    await store.append_beat(
+        b,
+        [
+            faction_created(faction_id="f:court", name="Court"),
+            claim_recorded(
+                claim_id="c:sub",
+                statement="a subjectless rumor",
+                subject_refs=[],
+                truth="unknown",
+                origin="module",
+                created_day=0,
+            ),
+        ],
+    )
+    await store.time_skip(b, 100)
+    action = ActExpireClaims(do="expire_claims", older_than_days=60)
+    faction = [FiredAction(rule_id="r1", scope=Scope(faction="f:court"), index=0, action=action)]
+    faction_r = await run_rules_gauntlet(store, b, faction, trigger_commit="c1")
+    assert faction_r.events == []  # a faction scope can't reach a subject-less rumor
+    world_scope = [FiredAction(rule_id="r2", scope=Scope(world=True), index=0, action=action)]
+    world_r = await run_rules_gauntlet(store, b, world_scope, trigger_commit="c1")
+    assert len(world_r.events) == 1  # only world scope may
+
+
+async def test_for_each_bind_var_named_like_a_verb_does_not_corrupt_do(
+    store: PostgresEventStore,
+) -> None:
+    # LOW review fix (the do-skip): even a pathological loop var NAMED like an action verb must not
+    # corrupt the `do` discriminator during substitution — the action still applies correctly.
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import ActForEach, Scope
+
+    world = await store.create_world(f"bindname-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    b = campaign.branch_id
+    await store.append_beat(
+        b,
+        [
+            faction_created(faction_id="f:a", name="A"),
+            faction_created(faction_id="f:n", name="N"),
+            edge_added(src="f:a", rel_type="allied_with", dst="f:n"),
+        ],
+    )
+    # `as: add_edge` — the bind token collides with an action verb; src="add_edge" is the loop var.
+    # The do-skip keeps each inner `do` intact, so it still produces a valid add_edge.
+    action = ActForEach.model_validate(
+        {
+            "do": "for_each",
+            "traverse": "allied_with",
+            "from": "f:a",
+            "as": "add_edge",
+            "apply": [{"do": "add_edge", "src": "add_edge", "rel": "knows", "dst": "f:a"}],
+        }
+    )
+    result = await run_rules_gauntlet(
+        store,
+        b,
+        [FiredAction(rule_id="r1", scope=Scope(world=True), index=0, action=action)],
+        trigger_commit="c1",
+    )
+    assert len(result.events) == 1  # neighbor (f:n) → knows → f:a; `do` was never corrupted
+    assert result.events[0].payload["src"] == "f:n"
