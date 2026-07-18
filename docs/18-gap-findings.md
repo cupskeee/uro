@@ -87,8 +87,8 @@ fork/event-sourcing) → adversarial verify (default-REJECTED) → a completenes
 | # | Finding | Games | What Uro needs |
 |---|---|---|---|
 | B3 | **No REST management/read surface** | Ironwake (row 1), Seventh Vault G-15 (10 enumerated 404s) | ✅ **DONE** — an authed management surface over the `EngineStore` port (docs/08 "What actually ships"): `POST/GET /worlds`, `POST /worlds/{w}/campaigns`, `GET /campaigns[/{c}]`, `POST /campaigns/{c}/join`, `GET /campaigns/{c}/{roster,state,chronicle}`, `POST …/time-skip` (`ServerDeps.store`; `501` transport-only; `400` malformed; `state` reuses B5 `query_across`). "The difference between *Uro has a server* and *Uro is a server*." Still CLI-only: seed/branches/probe/export/import, SSE beats, `/usage`; authority coarse (token authorizes, `participant` from body). |
-| B4 | **Place-state never reaches the narrator** | Sable Court G-9 (with a recall dump), Hollowloop G-7 | A place channel in `RecallBundle` + the narrator prompt (+ entity-ref claim matching for `p:`/`f:` refs). A game about holdings can't let the narrator see holdings change. |
-| B5 | **No cross-branch / aggregate query surface** | Hollowloop G-5 (937 ms to draw 502 loops — the *core UI* of a branching game is its slowest op), Sable Court (fork-compare) | ✅ **DONE** — `store.query_across(branch_ids, sections)` (ONE query per section via `branch_id = ANY(...)`, not N×round-trips) + `diff_branches(a, b)` (per-section added/removed/changed by PK). Read-only over `proj_*`. *Follow-up:* batching `world_time` across branches (still a per-branch CTE) — small P3. |
+| B4 | **Place-state never reaches the narrator** | Sable Court G-9 (with a recall dump), Hollowloop G-7 | ✅ **DONE** — a place channel in `RecallBundle` + the narrator prompt (shipped earlier), and now **entity-ref claim matching for `p:`/`f:` refs** (recall's `relevant()` unions on-stage place/faction ids, so a module rumor carrying a bare `p:`/`f:` subject_ref — never a `name:` token — actually surfaces when its entity is on stage; P4×P9 seam). A game about holdings can now let the narrator see holdings change. |
+| B5 | **No cross-branch / aggregate query surface** | Hollowloop G-5 (937 ms to draw 502 loops — the *core UI* of a branching game is its slowest op), Sable Court (fork-compare) | ✅ **DONE** — `store.query_across(branch_ids, sections)` (ONE query per section via `branch_id = ANY(...)`, not N×round-trips) + `diff_branches(a, b)` (per-section added/removed/changed by PK). Read-only over `proj_*`. *Follow-up ✅ DONE:* `store.current_world_time_batch(branch_ids)` — one recursive CTE seeded from every requested head (carrying its origin branch), so a branch tree costs one round-trip; `uro branch list` now shows each branch's in-fiction `day=`. |
 | B6 | **Chronicler write path returns no receipt / no protected-canon channel** | Ironwake (rows 2–3), Seventh G-22, Sable G-7 | (a) ✅ **DONE** — `distill_outcome_with_receipt` + the outcome endpoint return a per-ref receipt (`applied\|downgraded\|dropped` + reason); `distill_outcome` stays the events-only wrapper. (b) ✅ **DONE (D-41)** — a **trusted-embedder tier** (`uro_core.authored.distill_authored_outcome`, `protect=_never_protected`) lets a Posture-A embedder that holds root reuse distillation with the D-32 ceiling OFF, so an authored protected (T2+/PC) death commits as real canon + fires succession rules — unblocking Sable G-7 / Ironwake 2-3-7. Trust = which MODULE you import (an import-linter fence forbids `uro_server`→`authored`/`_distill_core`), never a wire flag (`OutcomeBundle` is `extra='forbid'`+version-pinned → a forged trust field 400s). Untrusted hardening: out-of-cast casualty now DROPS; loot `to_ref` protection; outcome-endpoint token→campaign scope. (c) The **untrusted parked-encounter registry** (a genuinely external network game killing a named boss) stays RESERVED (OQ-12) — no external network consumer exists; the design pass recorded a corrected shape (branch-scoped event-sourced, non-`cast` column, campaign-agnostic admin auth). |
 
 ### P2 — real, one primary consumer
@@ -132,8 +132,7 @@ semantics (all 4) · `AliasAdded` / actor-merge for post-hoc entity repair (Sabl
 (Ironwake, "legend grows in the telling") · pack-declared thread-state vocabularies (the closed
 `ThreadState` literal blocks a game's own alarm words — Seventh G-5, Hollow G-6) · branch deletion /
 GC (Hollowloop G-11) · `--token NAME=PARTICIPANT` + expose `campaign_pcs` in the read surface ·
-`tier` capped at 3 vs a brief's `tier 4` (doc mismatch, Sable G-2) · snapshot cadence is depth-from-
-genesis so it never fires in a fork-per-loop game (Hollowloop G-4) · append-time emitter whitelist
+`tier` capped at 3 vs a brief's `tier 4` (doc mismatch, Sable G-2) · append-time emitter whitelist
 (the by-policy invariant; Ironwake, Seventh G-27 tripped it deliberately).
 
 ## Validated DEFERRALS — what NOT to build (equally valuable)
@@ -152,6 +151,18 @@ The games proved several horizon items are **not** needed, killing speculative w
   add only an authorized channel (B6) for the "kill the boss" genre.
 - **Zero-witness silence, idempotent bundles, the in-process party-race** — all confirmed
   done-and-good. No work needed.
+- **A fork-relative snapshot cadence (Hollowloop G-4) is NOT justified.** G-4 read as "the
+  depth-from-genesis cadence never fires in a fork-per-loop game (a 502-branch world has one
+  snapshot)." Investigated (a phase-end review built and then *reverted* the fork-relative fix): the
+  existing absolute cadence **already bounds materialization replay to < N in every topology** —
+  depths along any ancestry are contiguous, so every multiple-of-N commit is snapshotted and
+  `_materialize_into` always finds an ancestor snapshot within N. Hollowloop's short loops replay
+  cheaply *because they're short*; the missing snapshots are the cadence correctly not paying to
+  cache an already-cheap path (Hollowloop itself called G-4 "latent, not a live wound"). A
+  fork-relative term is a **no-op for the fork-per-loop shape** and only shaves actual (already
+  sub-N) replay for a *long-lived* fork rooted at a non-round deep depth — a case no game has hit.
+  *If ever needed*, the real lever is a per-branch-commit-count anchor or a `snapshot(commit_id)`
+  pin at fork time, not the depth-modulo tweak. Deferred until evidence.
 - **NATS distribution** — no consumer is remotely near multi-process scale; still correctly deferred.
 
 ## The headline decision: Stage B's evidence gate has fired

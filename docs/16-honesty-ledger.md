@@ -30,7 +30,7 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 
 | Capability | Status | Note |
 |---|---|---|
-| Structured (entity-triggered) recall | proven | word-boundary matching, dead-actor exclusion; `test_recall.py`. **Scope: actors/claims/beliefs only** — NOT place-state/active-threads (docs/04 overstated; reconciled). |
+| Structured (entity-triggered) recall | proven | word-boundary matching, dead-actor exclusion; `test_recall.py`. **Scope: on-stage actors + their beliefs, plus every claim about an on-stage actor/place/faction (by id) or a mentioned `name:` token; mentioned place-state; active/offered threads; the acting participant's out-of-world notes.** (docs/04's original narrower claim was superseded as these channels landed — P4 place-state, P9 module-rumor `p:`/`f:` claim matching, B8 notes.) |
 | Semantic / pgvector recall | proven | branch-scoped cosine, degrades to structured-only; `test_memory.py`. Tests use the stub embedder (a bag-of-words proxy); real embeddings run live once. |
 | Extractor whitelist (only actors + claims proposable) | **proven (by construction)** | the `Extraction` schema can't *express* damage/death/terrain — the load-bearing anti-hallucination defense. |
 | Extractor tier ceiling (new actors ≤ T1) + player-text isolation | proven | `tier=1` always; the extractor sees narration only, never the raw intent. |

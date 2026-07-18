@@ -69,6 +69,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   `--admin-token` (an operator tier, distinct from ordinary `--token` players — only operators may act
   for others) and decouples `--arbiter` from the launch token count (so a runtime-added player still
   gets turns). New WS reject code `4403` (a minted token used on the wrong campaign). (D-39)
+- **Small P3 follow-ups (B4/B5, #14)** — two evidenced, low-risk gap closures. **B4:** structured
+  recall now surfaces a claim whose subject is an on-stage **place or faction** (`relevant()` unions
+  on-stage `place_id`/`faction_id`), so a reaction-layer module rumor carrying a bare `p:`/`f:` ref
+  (never a `name:` token) actually reaches the narrator when its entity is on stage — closing the
+  P4×P9 seam. **B5 follow-up:** `store.current_world_time_batch(branch_ids)` returns each branch's
+  in-fiction day in one recursive CTE (seeded from every head, carrying its origin), and `uro branch
+  list` now prints each branch's `day=`. A third candidate — a fork-relative snapshot cadence for
+  Hollowloop G-4 — was built, reviewed, and **reverted as a validated deferral**: the existing
+  absolute cadence already bounds materialization replay to < N in every topology (`docs/18`).
 
 ### Changed
 - **Repositioned Uro as its own thing — "a world-state engine" — and retired the git→GitHub analogy**

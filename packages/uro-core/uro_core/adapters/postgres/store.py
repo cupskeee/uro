@@ -844,6 +844,32 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             return await self._current_day(conn, branch_id)
 
+    async def current_world_time_batch(self, branch_ids: list[str]) -> dict[str, int]:
+        """The in-fiction day for many branches at once (docs/18 B5 - a cross-branch read).
+        One recursive walk seeded from every requested head, carrying its origin branch, so a
+        branch tree costs one round-trip instead of one per branch. Branches with no world_time
+        events are absent from the result; callers default them to 0. Empty input -> empty dict."""
+        if not branch_ids:
+            return {}
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE chain AS (
+                    SELECT b.branch_id AS origin, c.commit_id, c.parent_id
+                    FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+                    WHERE b.branch_id = ANY($1::text[])
+                    UNION ALL
+                    SELECT chain.origin, c.commit_id, c.parent_id
+                    FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+                )
+                SELECT origin, max((e.world_time->>'day')::int) AS day
+                FROM chain JOIN events e ON e.commit_id = chain.commit_id
+                GROUP BY origin
+                """,
+                branch_ids,
+            )
+        return {r["origin"]: int(r["day"]) for r in rows if r["day"] is not None}
+
     @staticmethod
     async def _current_day(conn: asyncpg.Connection, branch_id: str) -> int:
         day = await conn.fetchval(

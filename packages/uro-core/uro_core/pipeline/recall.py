@@ -93,9 +93,20 @@ async def assemble_recall(
     ]
     on_stage_ids = {a.actor_id for a in on_stage}
 
+    # Places/factions the beat MENTIONS (by name), like on-stage actors. Computed here (not just for
+    # the narrator's place-state block below) so a claim ABOUT one surfaces too: a module rumor
+    # carries pack refs like "f:red-band"/"p:vault" in subject_refs (never a name: token, since the
+    # extractor only mints those for unresolved actors) — so without this, a rumor about an on-stage
+    # faction/place was invisible even while its name was on stage (docs/04 B4).
+    places = [p for p in await store.list_places(branch_id) if _mentions(haystack, p.name)]
+    factions = [f for f in await store.list_factions(branch_id) if _mentions(haystack, f.name)]
+    on_stage_entity_ids = (
+        on_stage_ids | {p.place_id for p in places} | {f.faction_id for f in factions}
+    )
+
     def relevant(claim: ClaimView) -> bool:
         for ref in claim.subject_refs:
-            if ref in on_stage_ids:
+            if ref in on_stage_entity_ids:
                 return True
             if ref.startswith("name:") and _mentions(haystack, ref[len("name:") :]):
                 return True
@@ -120,9 +131,8 @@ async def assemble_recall(
         t for t in await store.list_threads(branch_id) if t.state in ("active", "offered")
     ]
 
-    # Places the beat MENTIONS (by name), so the narrator sees their current state — especially a
-    # destroyed place or a changed description it would otherwise narrate as still-standing (B4).
-    places = [p for p in await store.list_places(branch_id) if _mentions(haystack, p.name)]
+    # (on-stage `places`/`factions` were computed above, before `relevant`, so a claim about one
+    # surfaces; the narrator's place-state block below reuses `places`.)
 
     # The acting player's out-of-world notes (B8): pinned OR entity-triggered (surfaced this beat).
     # Best-effort like semantic recall — a failure here must not sink the beat. Fetched only for the

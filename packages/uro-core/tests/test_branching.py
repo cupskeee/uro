@@ -254,6 +254,26 @@ async def test_full_replay_when_no_snapshot(store: PostgresEventStore) -> None:
     assert len(await store.list_actors(target)) == 4
 
 
+async def test_current_world_time_batch(store: PostgresEventStore) -> None:
+    """B5: many branches' in-fiction day in one query - matching the per-branch method, siblings
+    isolated, empty input -> empty, unknown/dayless branch absent (caller defaults it to 0)."""
+    w = await _world(store)
+    main = w.main_branch_id
+    root = await store.append_beat(main, [actor_created(actor_id="a:0", name="Root")])
+    a = await store.fork_branch(w.world_id, root.commit_id, f"a-{new_id()}")
+    b = await store.fork_branch(w.world_id, root.commit_id, f"b-{new_id()}")
+    await store.time_skip(a.branch_id, 100)
+    await store.time_skip(b.branch_id, 250)
+    days = await store.current_world_time_batch([main, a.branch_id, b.branch_id])
+    assert days.get(a.branch_id) == 100  # skipped
+    assert days.get(b.branch_id) == 250  # sibling untouched by a's skip
+    assert days.get(main, 0) == 0  # never advanced
+    for br in (a.branch_id, b.branch_id):  # agrees with the per-branch method
+        assert days[br] == await store.current_world_time(br)
+    assert await store.current_world_time_batch([]) == {}  # empty in -> empty out
+    assert "nope" not in await store.current_world_time_batch(["nope"])  # unknown absent
+
+
 # --- markers & ref resolution ---
 
 
