@@ -31,6 +31,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   frames: `table_talk`, `proposal_opened`, `vote_tally`, `vote_decided`, `vote_unsupported`. All
   session-only (D-31), zero events/migrations. Consensual-PvP / simultaneous / reactive-interrupt stay
   reserved behind the same port (D-38).
+- **Reaction-layer multi-ref scopes + dropped-action audit (B11, #11)** — a rule `scope` may now name
+  several entities of one category (`factions: [a, b]` unions their members), the least-privilege
+  middle ground between a single faction and the whole-`world` scope; a validator enforces exactly one
+  jurisdiction. The action fence is unchanged (jurisdiction widened only). The rule gauntlet now
+  produces a **dropped-action audit**: every refused action (out of scope, nonexistent target, a
+  partial subject/witness filter, or over the per-pass cap) is recorded with a reason and logged —
+  before, a fenced action vanished silently and an author couldn't tell a working rule from a no-op.
+  `rules_api_version` bumped 2→3 (v1/v2 packs stay valid; a multi-ref pack declares v3). (D-40)
 - **Session lifecycle: durable turn order + runtime tokens (B10, #10)** — refines D-31 (does not
   reverse it). Multiplayer **turn order is now reconnect/restart-stable**: the arbiter ring is seeded
   from durable PC-binding order (`store.pc_seats`, recovered from the `PCBound`/`PCReleased` log) — the

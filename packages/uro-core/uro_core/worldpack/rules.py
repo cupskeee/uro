@@ -28,8 +28,8 @@ from uro_core.domain.events import ThreadState
 # D-34). The additions are purely additive, so v1 packs (no counters) remain valid — the engine
 # accepts the whole SUPPORTED set; a pack outside it fails loud at parse. A counter-using pack
 # should declare 2 so an old (v1) engine rejects it with a clear version error.
-RULES_API_VERSION = 2
-_SUPPORTED_VERSIONS = frozenset({1, 2})
+RULES_API_VERSION = 3
+_SUPPORTED_VERSIONS = frozenset({1, 2, 3})  # v3 (D-40) adds multi-ref scopes; v1/v2 stay valid
 
 
 def _event_payload_fields() -> dict[str, frozenset[str]]:
@@ -272,18 +272,48 @@ Action = Annotated[
 
 class Scope(BaseModel):
     """A rule's jurisdiction — the gauntlet drops any emitted ref outside it (the generalization of
-    D-32 participant-scoping). Set `world: true` for a whole-realm rule, else exactly one of
-    thread/faction/place. `world` (docs/19 C2, OQ-2) is the first-class form of the umbrella-faction
-    hack Sable/Ironwake used for cross-entity rules — it relaxes the JURISDICTION fence (any ref is
-    reachable), NOT the action fence: a rule still can only emit the closed, non-canon Action union
-    (no mint/kill/loot/truth=true), so a realm-wide rule can adjust any counter or move a
-    non-authoritative edge, never assert canon."""
+    D-32 participant-scoping). Set `world: true` for a whole-realm rule, else EXACTLY ONE category:
+    thread(s) / faction(s) / place(s). `world` (docs/19 C2, OQ-2) is the first-class form of the
+    umbrella-faction hack Sable/Ironwake used for cross-entity rules — it relaxes the JURISDICTION
+    fence (any ref reachable), NOT the action fence: a rule can still only emit the closed,
+    non-canon Action union (no mint/kill/loot/truth=true), so a realm-wide rule may adjust any
+    counter or move a non-authoritative edge, never assert canon.
+
+    MULTI-REF (D-40, B11): the plural forms (`factions: [a, b]`) let a rule span several entities of
+    ONE category — a pact BETWEEN two factions, a thread across three — without the blunt `world`
+    scope (least-privilege middle ground). The singular and plural of one category merge; mixing
+    categories, or a category with `world`, is rejected (a scope names one jurisdiction)."""
 
     model_config = _STRICT
     world: bool = False  # whole-realm jurisdiction (cross-entity rules); takes precedence
     thread: str | None = None  # the thread's stakeholders
     faction: str | None = None  # a faction's members
     place: str | None = None  # a place's occupants
+    threads: list[str] = Field(default_factory=list)  # multi-ref (D-40): several threads
+    factions: list[str] = Field(default_factory=list)  # e.g. a pact BETWEEN factions
+    places: list[str] = Field(default_factory=list)  # several places' occupants
+
+    def refs(self) -> dict[str, list[str]]:
+        """The merged jurisdiction per category (singular folded into plural), for the gauntlet."""
+        return {
+            "thread": ([self.thread] if self.thread else []) + self.threads,
+            "faction": ([self.faction] if self.faction else []) + self.factions,
+            "place": ([self.place] if self.place else []) + self.places,
+        }
+
+    @model_validator(mode="after")
+    def _one_jurisdiction(self) -> Scope:
+        set_cats = [name for name, refs in self.refs().items() if refs]
+        if self.world and set_cats:
+            raise ValueError("scope: `world` is exclusive — do not also set thread/faction/place")
+        if len(set_cats) > 1:
+            raise ValueError(f"scope: name exactly ONE jurisdiction category, got {set_cats}")
+        if not self.world and not set_cats:
+            raise ValueError(
+                "scope: set `world: true` or one of thread(s)/faction(s)/place(s) — an empty scope "
+                "would drop every action"
+            )
+        return self
 
 
 class Trigger(BaseModel):

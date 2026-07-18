@@ -154,8 +154,10 @@ invariant before C6.
 1. **Computed-delta arithmetic (the economy-formula half):** a bounded expression in
    `adjust_counter` now, or defer it as the reserved-tier's sharper gate? (This decides whether the
    Sable economy shadow-state is deleted or explicitly deferred.)
-2. **The multi-ref / `world` scope shape** (B11): list-of-refs vs a `world` wildcard vs a pair-scope
-   — the sharpest scope-escape surface; wants its own mini design pass before C2.
+2. ~~**The multi-ref / `world` scope shape** (B11): list-of-refs vs a `world` wildcard vs a pair-scope.~~
+   **SETTLED (D-40):** `world` shipped in D-34/C2 (unrestricted jurisdiction); the multi-ref half is the
+   **list-of-refs** form (`factions: [a, b]` unions members) — the least-privilege middle ground, one
+   jurisdiction category per scope, action fence untouched. `RULES_API_VERSION` 2→3.
 3. **Materialize-at-trigger-commit read pin:** accumulation makes read-at-commit *load-bearing*
    under P7 party play. Pin it structurally when C1 lands, or accept round-robin serialization?
 4. **Downtime economy under a multi-boundary skip:** add a `boundaries_crossed` binding to the

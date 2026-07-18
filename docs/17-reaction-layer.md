@@ -138,3 +138,20 @@ documented refusal-log shows authors genuinely need computation the data layer c
 > imports stay self-contained. A `ports/module.py` sandbox tier (WASM-preferred, never
 > RestrictedPython) is RESERVED and refused until a computation-shaped use-case escapes the data
 > layer's ceiling. Reverses D-6's "not yet" for the declarative tier; keeps its caution for scripting.
+
+## Post-INC extension (D-40, docs/18 B11)
+
+Two follow-ups the four games evidenced (Sable G-3/G-12, Ironwake, Seventh G-6), built directly:
+
+- **Multi-ref scopes.** `Scope` gains plural jurisdiction fields (`threads`/`factions`/`places`); the
+  gauntlet's `_scope_refs` unions members across all named entities of ONE category — a rule may span
+  a pact *between* two factions without the blunt `world` scope (which shipped in D-34/C2). A validator
+  enforces exactly one jurisdiction (world XOR one category; empty / multi-category / world+category
+  rejected). This widens JURISDICTION only — the action fence (the closed, non-canon Action union) is
+  untouched, so multi-ref is not a trust-escape. `RULES_API_VERSION` 2→3 (v1/v2 packs stay valid).
+- **Dropped-action audit.** `run_rules_gauntlet` returns `GauntletResult(events, drops)`; every refused
+  action (out of scope / nonexistent target / partial subject-witness filter / over the `_MAX_ACTIONS`
+  cap) records a `DroppedAction(rule_id, do, ref, reason)`. Before this, a fenced action `return []`-ed
+  SILENTLY, so an author could not tell a working rule from a no-op. The gauntlet stays pure (records
+  only); `react`/`agenda_tick` log one summary line per pass. Not canon, not an event — a diagnostic
+  (a committed `ReactionDropped` event was rejected as canon-ish noise).

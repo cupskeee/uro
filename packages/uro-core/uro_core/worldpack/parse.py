@@ -65,8 +65,8 @@ def _rule_pack(root: Path) -> RulePack | None:
         data.setdefault("rules_api_version", raw.get("rules_api_version"))
         data[key] = raw.get(key, [])
     try:
-        # RulePack's model validator enforces the supported-version set (docs/19: v1 and v2) + the
-        # closed grammar — one authority for parse, runtime, and import.
+        # RulePack's model validator enforces the supported-version set (v1..v3; v3 adds multi-ref
+        # scopes, D-40) + the closed grammar — one authority for parse, runtime, and import.
         return RulePack(**data)  # type: ignore[arg-type]
     except ValidationError as exc:
         raise PackError(f"rule pack failed validation: {exc}") from exc
