@@ -36,6 +36,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   and a path-traversal check. Adds `python-multipart` to `uro-server` (FastAPI file parsing). The
   pack-upload *create* (a structural write, operator-only per D-44) is a follow-up.
 
+- **Campaign end + codex over HTTP (BE-9, #41)** — `POST /campaigns/{c}/end {marker, outcome?}`
+  ends a campaign (releases its PCs, marks + snapshots the closing commit as a fork root; mirrors
+  `uro campaign end`) — **operator-only** (D-44, a timeline lifecycle write). And the **codex**
+  (participant memory, D-36): `GET /campaigns/{c}/codex[?participant=]` + `POST …/codex {text,
+  participant?, key?, pinned?, refs?}` — out-of-world player notes that survive a fork, **self-or-
+  admin** scoped (D-39: a caller reads/writes their own; an operator may act for another). Closes
+  the gap the uro-loom console's M3 explicitly deferred (campaign end had no endpoint).
+
 ### Fixed
 - **PyPI publish workflow** — split into one job per package, each in its own GitHub environment
   (`pypi-core` / `pypi-server` / `pypi-cli`). A PyPI *pending* trusted publisher must be unique on

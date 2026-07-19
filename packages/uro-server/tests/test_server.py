@@ -16,7 +16,15 @@ from fastapi import HTTPException
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from uro_core.export import BundleCommit, BundleEvent
-from uro_core.timeline.models import Branch, BranchInfo, Campaign, LineageEntry, Marker, World
+from uro_core.timeline.models import (
+    Branch,
+    BranchInfo,
+    Campaign,
+    LineageEntry,
+    Marker,
+    ParticipantNote,
+    World,
+)
 from uro_server.app import ServerDeps, create_app
 from uro_server.sessions import SessionHub
 
@@ -1060,3 +1068,125 @@ def test_validate_pack_401_without_a_valid_token() -> None:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("world.toml", "")
     assert _post_pack(_fake_deps(), buf.getvalue(), token="nope").status_code == 401
+
+
+# --- BE-9 (#41): campaign end (operator, D-44) + codex/participant memory (self-or-admin, D-39) ---
+
+
+class _FakeCodexStore:
+    """EngineStore stand-in for BE-9 — end_campaign + participant memory (no live DB)."""
+
+    def __init__(self, *, campaign_exists: bool = True, end_error: Exception | None = None) -> None:
+        self._exists = campaign_exists
+        self._end_error = end_error
+        self.remembered: tuple[str, str, str, str | None, bool, list[str] | None] | None = None
+
+    async def get_campaign(self, campaign_id: str) -> Campaign | None:
+        return (
+            Campaign(campaign_id=campaign_id, world_id="w:1", branch_id="b")
+            if self._exists
+            else None
+        )
+
+    async def end_campaign(
+        self, campaign_id: str, marker_name: str, *, outcome: str = ""
+    ) -> Marker:
+        if self._end_error is not None:
+            raise self._end_error
+        return Marker(marker_id="m:end", world_id="w:1", name=marker_name, commit_id="c:9")
+
+    async def participant_notes(self, participant_id: str, world_ref: str) -> list[ParticipantNote]:
+        return [
+            ParticipantNote(
+                key="k1", text="the vault code is 4-7-1", pinned=True, entity_refs=["name:vault"]
+            )
+        ]
+
+    async def participant_remember(
+        self,
+        participant_id: str,
+        world_ref: str,
+        text: str,
+        *,
+        key: str | None = None,
+        pinned: bool = False,
+        entity_refs: list[str] | None = None,
+    ) -> str:
+        self.remembered = (participant_id, world_ref, text, key, pinned, entity_refs)
+        return key or "hash:abc"
+
+
+def test_end_campaign_operator_marks_and_returns_the_marker() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeCodexStore()))).post(
+        "/campaigns/camp-1/end?token=tok-a",
+        json={"marker": "campaign-a-end", "outcome": "the heir fell"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "campaign-a-end"
+
+
+def test_end_campaign_403_for_a_plain_player_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeCodexStore()))).post(
+        "/campaigns/camp-1/end?token=tok-b", json={"marker": "x"}
+    )
+    assert resp.status_code == 403
+
+
+def test_end_campaign_404_for_an_unknown_campaign() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeCodexStore(campaign_exists=False)))).post(
+        "/campaigns/nope/end?token=tok-a", json={"marker": "x"}
+    )
+    assert resp.status_code == 404
+
+
+def test_end_campaign_400_on_a_duplicate_marker() -> None:
+    store = _FakeCodexStore(end_error=ValueError("marker 'x' already exists in this world"))
+    resp = TestClient(create_app(_operator_deps(store))).post(
+        "/campaigns/camp-1/end?token=tok-a", json={"marker": "x"}
+    )
+    assert resp.status_code == 400
+
+
+def test_codex_add_and_list_own_notes() -> None:
+    store = _FakeCodexStore()
+    client = TestClient(create_app(_operator_deps(store)))
+    # player-2 (tok-b) writes their OWN codex (world-scoped, fork-surviving)
+    add = client.post(
+        "/campaigns/camp-1/codex?token=tok-b",
+        json={"text": "the vault code is 4-7-1", "pinned": True, "refs": ["name:vault"]},
+    )
+    assert add.status_code == 200
+    assert store.remembered == (
+        "player-2",
+        "w:1",
+        "the vault code is 4-7-1",
+        None,
+        True,
+        ["name:vault"],
+    )
+    got = client.get("/campaigns/camp-1/codex?token=tok-b").json()  # …and lists it back
+    assert got["participant"] == "player-2"
+    assert (
+        got["notes"][0]["text"] == "the vault code is 4-7-1" and got["notes"][0]["pinned"] is True
+    )
+
+
+def test_codex_403_reading_another_participants_notes_as_non_operator() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeCodexStore()))).get(
+        "/campaigns/camp-1/codex?token=tok-b&participant=player-1"  # tok-b is player-2, not admin
+    )
+    assert resp.status_code == 403
+
+
+def test_codex_operator_may_read_anothers_notes() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeCodexStore()))).get(
+        "/campaigns/camp-1/codex?token=tok-a&participant=player-2"  # tok-a is the operator
+    )
+    assert resp.status_code == 200
+
+
+def test_codex_401_without_a_valid_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeCodexStore()))).get(
+        "/campaigns/camp-1/codex?token=nope"
+    )
+    assert resp.status_code == 401

@@ -57,6 +57,9 @@ GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats
 POST /campaigns/{c}/time-skip    {days}                            engine agenda_tick (D-33)
 POST /campaigns/{c}/dry-run      {intent}                          preview a beat's events, commit nothing (BE-5)
 GET  /campaigns/{c}/consistency                                    narrator contradiction-survival proxy T2 (BE-5)
+POST /campaigns/{c}/end          {marker, outcome?}                end campaign, release PCs (OPERATOR-only, D-44) (BE-9)
+GET  /campaigns/{c}/codex         [?participant=]                  a participant's fork-surviving notes (self/admin, D-39) (BE-9)
+POST /campaigns/{c}/codex        {text, participant?, key?, pinned?, refs?}   add a note (self/admin, D-39) (BE-9)
 ```
 
 The shipped `state`/`chronicle` reads are **campaign-scoped** (they resolve the campaign's branch)
