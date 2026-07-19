@@ -9,6 +9,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Fixed
+- **PyPI publish workflow** — split into one job per package, each in its own GitHub environment
+  (`pypi-core` / `pypi-server` / `pypi-cli`). A PyPI *pending* trusted publisher must be unique on
+  `(owner, repo, workflow, environment)`, so all three sharing `environment: pypi` collided on setup.
+  Owner setup updated in `docs/14` → "Publishing to PyPI". (D-43)
+
 ## [0.2.0] - 2026-07-19
 
 ### Added
