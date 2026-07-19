@@ -114,8 +114,9 @@ surface** is no longer fully reserved — B3/#12 shipped the authed CRUD/read co
 `EngineStore` port; some endpoints — seed/probe/export/import, SSE beats, `/usage` — stay
 CLI-only. The timeline surface now ships over HTTP: branch **list** + **log** (reads), **fork** +
 **marker-create** (operator-only, D-44), the **raw event log + commit detail** (operator-only,
-D-45 — omniscient truth, never a player read), and **dry-run** (intent-only, D-37) + **consistency**
-(the T2 proxy) — BE-1..BE-5, #33-#37.)
+D-45 — omniscient truth, never a player read), **dry-run** (intent-only, D-37) + **consistency**
+(the T2 proxy), and **pack validate** (a `.zip` upload → sufficiency grade, parse-only) — BE-1..BE-6,
+#33-#38. Pack-upload *create* + backfill/probe/seed/export/import stay CLI-only.)
 
 **Cross-branch reads (B5/#14):** `store.query_across(branch_ids, sections)` (one query per section
 via `branch_id = ANY(...)`, not N round-trips) + `diff_branches(a, b)` (added/removed/changed by PK)

@@ -39,6 +39,7 @@ transport-only deps). **Built now:**
 
 ```
 POST /worlds                     {name, tone?, rule_pack?}         create (JSON body, not pack-upload yet)
+POST /worlds/validate            (multipart .zip of the pack)      grade an uploaded pack, no import (BE-6)
 GET  /worlds                                                       list
 GET  /worlds/{w}/branches                                          branch tree + markers, per-branch in-fiction day (BE-1)
 GET  /worlds/{w}/log             [?branch=&limit=]                 commit lineage, git-log style (BE-3)
