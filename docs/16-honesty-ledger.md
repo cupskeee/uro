@@ -113,8 +113,9 @@ concurrency guard, consequence-gating (D-21), the `entity_index` (OQ-3). (The **
 surface** is no longer fully reserved — B3/#12 shipped the authed CRUD/read core over the
 `EngineStore` port; some endpoints — seed/probe/export/import, SSE beats, `/usage` — stay
 CLI-only. The timeline surface now ships over HTTP: branch **list** + **log** (reads), **fork** +
-**marker-create** (operator-only, D-44), and the **raw event log + commit detail** (operator-only,
-D-45 — omniscient truth, never a player read) — BE-1..BE-4, #33-#36.)
+**marker-create** (operator-only, D-44), the **raw event log + commit detail** (operator-only,
+D-45 — omniscient truth, never a player read), and **dry-run** (intent-only, D-37) + **consistency**
+(the T2 proxy) — BE-1..BE-5, #33-#37.)
 
 **Cross-branch reads (B5/#14):** `store.query_across(branch_ids, sections)` (one query per section
 via `branch_id = ANY(...)`, not N round-trips) + `diff_branches(a, b)` (added/removed/changed by PK)

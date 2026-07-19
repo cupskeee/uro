@@ -54,6 +54,8 @@ GET  /campaigns/{c}/roster                                         active PC ids
 GET  /campaigns/{c}/state        [?sections=actors,threads,…]      query_across the branch's projections (B5)
 GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats
 POST /campaigns/{c}/time-skip    {days}                            engine agenda_tick (D-33)
+POST /campaigns/{c}/dry-run      {intent}                          preview a beat's events, commit nothing (BE-5)
+GET  /campaigns/{c}/consistency                                    narrator contradiction-survival proxy T2 (BE-5)
 ```
 
 The shipped `state`/`chronicle` reads are **campaign-scoped** (they resolve the campaign's branch)
@@ -69,7 +71,10 @@ require an `--admin-token`, a plain player token → 403), via `_require_operato
 `is_admin` choke point as D-39's self-or-admin scoping. The **raw event log** (`GET …/events`,
 `GET …/commits/{id}`) is ALSO operator-only, but for a different reason (**D-45**): the raw log
 carries omniscient truth — `ClaimRecorded` truth-values, hidden beliefs, `caused_by` — that the
-non-omniscient player reads deliberately never expose, so it is a GM/operator observability surface. Otherwise authority is coarse — a
+non-omniscient player reads deliberately never expose, so it is a GM/operator observability surface.
+The **dry-run** (`POST …/dry-run`) is any-authed — the non-committing twin of a play beat — and is
+**intent-only** (no client `plan=`, D-37: a network-supplied plan would first have to route through
+the D-32 protection ceiling, so this path never accepts one). Otherwise authority is coarse — a
 valid token authorizes the call and the acting `participant` is taken from the body (finer
 endpoint→campaign authority is deferred, docs/18 P3).
 

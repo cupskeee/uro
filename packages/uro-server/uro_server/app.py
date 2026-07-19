@@ -71,6 +71,10 @@ class ServerDeps:
     # on a raw branch id (a fork has no campaign), returning the new in-fiction day. None → fork's
     # optional time-skip leg returns 501.
     advance_branch_time: Callable[[str, int], Awaitable[int]] | None = None
+    # Dry-run a beat (BE-5): run the full pipeline and return the would-be events WITHOUT committing
+    # (campaign, participant, intent) → serialized events. Intent-only over the network (no client
+    # `plan=`, D-37). None → the dry-run endpoint returns 501.
+    preview_beat: Callable[[str, str, str], Awaitable[list[dict[str, Any]]]] | None = None
     # Runtime token management (docs/18 B10, D-39): mint/revoke durable session tokens + the admin
     # check, behind the same resolve_participant choke point. None → the token endpoints return 501.
     mint_token: Callable[[str, str], Awaitable[str]] | None = None  # (participant, campaign)→token
@@ -149,6 +153,22 @@ def engine_deps(
         await engine.agenda_tick(branch_id, days)
         return await store.current_world_time(branch_id)
 
+    async def preview_beat(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
+        # BE-5 dry-run: run the full pipeline (plan→narrate→extract) and return the would-be events,
+        # committing NOTHING. Intent-only (no `plan=`, D-37 — a network plan would need the D-32
+        # ceiling; this path never accepts one). Same one-ruleset-per-process guard as run_beat.
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        if campaign.ruleset_id and engine.ruleset_id and campaign.ruleset_id != engine.ruleset_id:
+            raise ValueError(
+                f"campaign {campaign_id} is bound to ruleset {campaign.ruleset_id!r}, but this "
+                f"server runs {engine.ruleset_id!r} — start `uro serve --ruleset "
+                f"{campaign.ruleset_id}` (one ruleset per server process)"
+            )
+        events = await engine.preview_beat(campaign, participant, intent)
+        return [e.model_dump() for e in events]
+
     return ServerDeps(
         resolve_participant=registry.resolve,
         campaign_exists=campaign_exists,
@@ -157,6 +177,7 @@ def engine_deps(
         store=store,
         advance_time=advance_time,
         advance_branch_time=advance_branch_time,
+        preview_beat=preview_beat,
         mint_token=registry.mint,
         revoke_token=registry.revoke,
         is_admin=registry.is_admin,
@@ -624,6 +645,48 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         if days <= 0:  # store.time_skip rejects this deeper (a 500); catch it here as bad input
             raise HTTPException(status_code=400, detail="days must be a positive integer")
         return await deps.advance_time(campaign_id, days)
+
+    @app.post("/campaigns/{campaign_id}/dry-run")
+    async def dry_run_beat(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Dry-run a beat: run the full pipeline and return the events it WOULD commit, writing
+        NOTHING (BE-5, mirrors `uro dry-run`). Any-authed — the non-committing twin of a play beat
+        (the WS channel is any-authed too); INTENT-ONLY (no client `plan=`, D-37). Acting PC = the
+        token's participant (solo fallback if unbound)."""
+        _auth(request)
+        if deps.preview_beat is None:
+            raise HTTPException(status_code=501, detail="dry-run not enabled")
+        intent = str(_require(body, "intent"))
+        if not intent.strip():
+            raise HTTPException(status_code=400, detail="intent must be non-empty")
+        _, participant, _ = _scope(request)  # token → acting participant (non-None past _auth)
+        try:
+            events = await deps.preview_beat(campaign_id, participant or "", intent)
+        except (
+            ValueError
+        ) as exc:  # e.g. the campaign is pinned to a different ruleset (one/process)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"events": events}
+
+    @app.get("/campaigns/{campaign_id}/consistency")
+    async def campaign_consistency(campaign_id: str, request: Request) -> dict[str, Any]:
+        """The narrator contradiction-survival proxy (T2, BE-5, `uro consistency`). A plain
+        any-authed read — a metric count, not omniscient truth. `ratio` = consistent/total
+        (1.0 when there are no claims yet)."""
+        _auth(request)
+        store = _mgmt()
+        c = await store.get_campaign(campaign_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        consistent, total = await store.fact_consistency(c.branch_id)
+        return {
+            "consistent": consistent,
+            "total": total,
+            "ratio": consistent / total if total else 1.0,
+        }
 
     @app.websocket("/campaigns/{campaign_id}/play")
     async def play(ws: WebSocket, campaign_id: str) -> None:
