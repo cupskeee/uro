@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+from uro_core.timeline.models import BranchInfo, Marker, World
 from uro_server.app import ServerDeps, create_app
 from uro_server.sessions import SessionHub
 
@@ -462,6 +463,75 @@ def test_ws_rejects_a_token_scoped_to_another_campaign() -> None:
     ):
         pass
     assert exc.value.code == 4403  # rejected on a DIFFERENT campaign, before accept
+
+
+# --- BE-1 (#33): GET /worlds/{w}/branches — the branch-list read (docs/18 B3, D-44) ---
+
+
+class _FakeBranchStore:
+    """Minimal EngineStore stand-in for the branch-list read — no live DB (mirrors the
+    management-GET fake idiom). Only the four methods the endpoint calls."""
+
+    def __init__(self, *, world_exists: bool = True) -> None:
+        self._world_exists = world_exists
+
+    async def get_world(self, world_id: str) -> World | None:
+        if not self._world_exists:
+            return None
+        return World(world_id=world_id, name="Ashfall", main_branch_id="b:main")
+
+    async def list_branches(self, world_id: str) -> list[BranchInfo]:
+        return [
+            BranchInfo(
+                branch_id="b:main", world_id=world_id, name="main", head_commit="c:7", head_depth=7
+            ),
+            BranchInfo(
+                branch_id="b:whatif",
+                world_id=world_id,
+                name="what-if",
+                head_commit="c:9",
+                forked_from="c:3",
+                head_depth=5,
+            ),
+        ]
+
+    async def current_world_time_batch(self, branch_ids: list[str]) -> dict[str, int]:
+        return {"b:whatif": 365}  # b:main is ABSENT → the endpoint must default it to 0
+
+    async def list_markers(self, world_id: str) -> list[Marker]:
+        return [Marker(marker_id="m:1", world_id=world_id, name="pre-strike", commit_id="c:3")]
+
+
+def test_list_world_branches_returns_branches_markers_and_the_in_fiction_day() -> None:
+    deps = _fake_deps()
+    deps.store = _FakeBranchStore()  # type: ignore[assignment]
+    body = TestClient(create_app(deps)).get("/worlds/w:1/branches?token=tok-a").json()
+
+    assert [b["name"] for b in body["branches"]] == ["main", "what-if"]
+    main, whatif = body["branches"]
+    # the in-fiction day is merged in; an absent branch defaults to 0
+    assert main["world_day"] == 0 and main["forked_from"] is None and main["head_depth"] == 7
+    assert whatif["world_day"] == 365 and whatif["forked_from"] == "c:3"
+    assert [m["name"] for m in body["markers"]] == ["pre-strike"]
+
+
+def test_list_world_branches_404_for_an_unknown_world() -> None:
+    deps = _fake_deps()
+    deps.store = _FakeBranchStore(world_exists=False)  # type: ignore[assignment]
+    assert TestClient(create_app(deps)).get("/worlds/nope/branches?token=tok-a").status_code == 404
+
+
+def test_list_world_branches_401_without_a_valid_token() -> None:
+    # _auth fires before the store is touched → a bad token is 401 even for an existing world
+    deps = _fake_deps()
+    deps.store = _FakeBranchStore()  # type: ignore[assignment]
+    assert TestClient(create_app(deps)).get("/worlds/w:1/branches?token=nope").status_code == 401
+
+
+def test_list_world_branches_501_when_the_management_surface_is_disabled() -> None:
+    # _fake_deps() leaves store=None → _mgmt() raises 501 (authed, but no store wired)
+    resp = TestClient(create_app(_fake_deps())).get("/worlds/w:1/branches?token=tok-a")
+    assert resp.status_code == 501
 
 
 def test_a_failed_beat_still_rotates_the_party_token() -> None:

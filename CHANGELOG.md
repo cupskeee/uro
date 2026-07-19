@@ -9,6 +9,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **`GET /worlds/{w}/branches` (BE-1, #33)** — the branch-list read over HTTP: the branch tree
+  (head, depth, fork origin) + markers + each branch's in-fiction day, mirroring `uro branch list`.
+  A plain any-authed read (D-44 — reads are ungated; only structural writes / act-for-another are
+  operator-scoped). First of the uro-loom backend co-evolution endpoints (epic #44).
+
 ### Fixed
 - **PyPI publish workflow** — split into one job per package, each in its own GitHub environment
   (`pypi-core` / `pypi-server` / `pypi-cli`). A PyPI *pending* trusted publisher must be unique on
