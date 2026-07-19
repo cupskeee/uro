@@ -3,10 +3,16 @@ name = "uro-server"
 version = "0.1.0"
 description = "Uro Engine headless server — thin FastAPI shell over uro-core (REST + WebSocket)"
 license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
 authors = [{ name = "cupskeee" }]
 requires-python = ">=3.12"
+# The transport shell imports no adapter itself, but a deployed play server needs the store
+# and a provider at runtime, so it pulls both uro-core extras (D-43). uro-core is pinned to the
+# exact lockstep version (single-versioned workspace) so a partial upgrade can't mismatch them;
+# `just release` bumps all three together and `{workspace = true}` fails `uv sync` on a drift.
 dependencies = [
-    "uro-core",
+    "uro-core[postgres,llm]==0.1.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.51.0",
 ]

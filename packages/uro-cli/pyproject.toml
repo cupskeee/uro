@@ -3,11 +3,18 @@ name = "uro-cli"
 version = "0.1.0"
 description = "Uro Engine reference client — play, dry-run, and dev tools against the engine"
 license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
 authors = [{ name = "cupskeee" }]
 requires-python = ">=3.12"
+# The reference client drives the whole engine: it wires the Postgres store and the LLM
+# providers, so it pulls both uro-core extras (D-43). The internal deps are pinned to the exact
+# lockstep version (the workspace is single-versioned) so a partial `pip install --upgrade` can't
+# pair a new uro-cli with an old uro-core; `just release` bumps all three together, and the
+# `{workspace = true}` sources make a drifted pin fail `uv sync` locally.
 dependencies = [
-    "uro-core",
-    "uro-server",
+    "uro-core[postgres,llm]==0.1.0",
+    "uro-server==0.1.0",
     "typer>=0.15",
     "rich>=13.9",
     "websockets>=16.1",

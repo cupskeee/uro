@@ -3,18 +3,29 @@ name = "uro-core"
 version = "0.1.0"
 description = "Uro Engine core library — persistent, AI-driven RPG world engine (embeddable, headless)"
 license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
 authors = [{ name = "cupskeee" }]
 keywords = ["ai", "llm", "rpg", "game-engine", "event-sourcing", "worldbuilding"]
 requires-python = ">=3.12"
+# Base = the engine logic (the hexagonal core ring imports only these). The shipped
+# concrete adapters live behind extras — see D-43 / docs/14: `import uro_core` and the
+# core ring stay importable without a DB driver or an HTTP client, so an embedder can
+# supply its own adapters. The bundled Postgres store and LLM providers need the extras.
 dependencies = [
     "pydantic>=2.9",
-    "asyncpg>=0.30",
-    "pgvector>=0.5.0",
     "python-ulid>=2.7",
     "jinja2>=3.1",
-    "httpx>=0.27",
     "pyyaml>=6.0",
 ]
+
+[project.optional-dependencies]
+# The bundled EventStore/VectorIndex adapter (uro_core.adapters.postgres).
+postgres = ["asyncpg>=0.30", "pgvector>=0.5.0"]
+# The bundled LLM provider adapters (uro_core.providers.adapters — OpenAI-compatible + Anthropic).
+llm = ["httpx>=0.27"]
+# Everything the reference deployment uses.
+all = ["uro-core[postgres,llm]"]
 
 [project.urls]
 Homepage = "https://github.com/cupskeee/uro"
