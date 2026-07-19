@@ -29,6 +29,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
     beliefs, `caused_by`; never a player read). A new `advance_branch_time` server dep runs the
     fork's `--time-skip-days` via `engine.agenda_tick`.
 
+- **Pack validate over HTTP (BE-6, #38)** — `POST /worlds/validate` accepts a **multipart `.zip`**
+  of a world-pack directory, extracts it zip-slip-safely to a temp dir, and returns the sufficiency
+  grade + per-dimension detail + gaps + ruleset check (mirrors `uro world validate`). Parse-only —
+  nothing is imported, no world state is touched — so it's any-authed, guarded by a 20 MB size cap
+  and a path-traversal check. Adds `python-multipart` to `uro-server` (FastAPI file parsing). The
+  pack-upload *create* (a structural write, operator-only per D-44) is a follow-up.
+
 ### Fixed
 - **PyPI publish workflow** — split into one job per package, each in its own GitHub environment
   (`pypi-core` / `pypi-server` / `pypi-cli`). A PyPI *pending* trusted publisher must be unique on

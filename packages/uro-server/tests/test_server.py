@@ -5,7 +5,10 @@ SAME streamed beats. Tested with fake deps so the transport is exercised without
 (the engine path is tested in uro-core).
 """
 
+import io
+import zipfile
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -993,3 +996,67 @@ def test_consistency_401_without_a_valid_token() -> None:
         TestClient(create_app(deps)).get("/campaigns/camp-1/consistency?token=nope").status_code
         == 401
     )
+
+
+# --- BE-6 (#38): pack upload (multipart .zip) + validate — parse-only, any-authed ---
+
+_REPO = Path(__file__).resolve().parents[3]  # tests → uro-server → packages → repo root
+
+
+def _zip_dir(src: Path, *, prefix: str = "") -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for f in sorted(src.rglob("*")):
+            if f.is_file():
+                zf.write(f, arcname=prefix + f.relative_to(src).as_posix())
+    return buf.getvalue()
+
+
+def _post_pack(deps: ServerDeps, zip_bytes: bytes, *, token: str = "tok-a") -> Any:
+    return TestClient(create_app(deps)).post(
+        f"/worlds/validate?token={token}",
+        files={"pack": ("pack.zip", zip_bytes, "application/zip")},
+    )
+
+
+def test_validate_pack_grades_an_uploaded_pack() -> None:
+    resp = _post_pack(_fake_deps(), _zip_dir(_REPO / "worlds" / "ashfall"))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"]  # the manifest name parsed from world.toml
+    assert body["grade"] in ("runnable", "thin", "insufficient")
+    assert body["counts"]["places"] > 0 and body["counts"]["actors"] > 0
+    assert any(d["name"] == "geography" for d in body["dimensions"])
+    assert body["ruleset_ok"] is True  # ashfall pins an installed ruleset
+
+
+def test_validate_pack_handles_a_top_level_dir_in_the_zip() -> None:
+    # a zip built WITH a top-level `ashfall/` dir still validates (single-subdir root detection)
+    resp = _post_pack(_fake_deps(), _zip_dir(_REPO / "worlds" / "ashfall", prefix="ashfall/"))
+    assert resp.status_code == 200
+
+
+def test_validate_pack_400_on_a_non_zip_upload() -> None:
+    assert _post_pack(_fake_deps(), b"this is not a zip").status_code == 400
+
+
+def test_validate_pack_400_when_no_world_toml() -> None:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("readme.txt", "hello")
+    assert _post_pack(_fake_deps(), buf.getvalue()).status_code == 400
+
+
+def test_validate_pack_400_on_zip_slip() -> None:
+    # a malicious archive escaping the extraction dir is rejected before extractall
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("../evil.txt", "pwned")
+    assert _post_pack(_fake_deps(), buf.getvalue()).status_code == 400
+
+
+def test_validate_pack_401_without_a_valid_token() -> None:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("world.toml", "")
+    assert _post_pack(_fake_deps(), buf.getvalue(), token="nope").status_code == 401

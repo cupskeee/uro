@@ -10,11 +10,24 @@ directly in uro-core.
 from __future__ import annotations
 
 import asyncio
+import io
+import tempfile
+import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Body,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from starlette.websockets import WebSocketState
 from uro_core.pipeline.engine import Engine
 from uro_core.ports.projections import EngineStore
@@ -27,6 +40,33 @@ def _bearer_token(request: Request) -> str:
     """Extract a bearer token from the Authorization header, or ''."""
     auth = request.headers.get("authorization", "")
     return auth[7:] if auth.lower().startswith("bearer ") else ""
+
+
+_MAX_PACK_BYTES = 20 * 1024 * 1024  # 20 MB — an authored world pack is small; cap untrusted input
+
+
+def _safe_extract_pack(data: bytes, dest: Path) -> Path:
+    """Extract an uploaded pack `.zip` into `dest` (ZIP-SLIP-SAFE) and return the pack root — the
+    dir holding `world.toml` (the archive root, or a single top-level subdir). Raises
+    HTTPException on a too-large / non-zip / path-escaping / rootless archive (BE-6)."""
+    if len(data) > _MAX_PACK_BYTES:
+        raise HTTPException(status_code=413, detail="pack archive too large")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="upload must be a .zip of the pack") from exc
+    dest_root = dest.resolve()
+    for member in zf.namelist():
+        target = (dest / member).resolve()
+        if not (target == dest_root or dest_root in target.parents):  # zip-slip guard
+            raise HTTPException(status_code=400, detail=f"unsafe path in archive: {member!r}")
+    zf.extractall(dest)
+    if (dest / "world.toml").is_file():
+        return dest
+    subdirs = [d for d in dest.iterdir() if d.is_dir()]
+    if len(subdirs) == 1 and (subdirs[0] / "world.toml").is_file():
+        return subdirs[0]
+    raise HTTPException(status_code=400, detail="no world.toml found in the archive")
 
 
 def _default_sheet(ruleset_id: str, version: str) -> tuple[dict[str, Any], str]:
@@ -290,6 +330,46 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
     async def list_worlds(request: Request) -> list[dict[str, Any]]:
         _auth(request)
         return [w.model_dump() for w in await _mgmt().list_worlds()]
+
+    @app.post("/worlds/validate")
+    async def validate_world_pack(
+        request: Request,
+        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+    ) -> dict[str, Any]:
+        """Validate an uploaded world pack (a `.zip` of the pack directory) → its sufficiency grade
+        + gaps (BE-6, `uro world validate`). PARSE-ONLY: nothing is imported, no world state is
+        touched — a plain any-authed read-shaped op, guarded against untrusted input (a size cap + a
+        zip-slip-safe extraction). The pack-upload CREATE (a structural write, operator-only D-44)
+        is a follow-up."""
+        _auth(request)
+        from uro_core.errors import PackError
+        from uro_core.rulesets import registry
+        from uro_core.worldpack.parse import parse_pack
+        from uro_core.worldpack.sufficiency import check_sufficiency
+
+        data = await pack.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _safe_extract_pack(data, Path(tmp))
+            try:
+                parsed = parse_pack(root)
+            except PackError as exc:  # a malformed pack is bad INPUT → 400, not a 500
+                raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
+            report = check_sufficiency(parsed)
+            rid = parsed.manifest.ruleset.id
+            return {
+                "name": parsed.manifest.name,
+                "grade": report.grade,
+                "counts": {
+                    "places": len(parsed.places),
+                    "actors": len(parsed.actors),
+                    "factions": len(parsed.factions),
+                    "threads": len(parsed.threads),
+                },
+                "dimensions": [d.model_dump() for d in report.dimensions],
+                "ruleset_id": rid,
+                "ruleset_ok": rid in registry.available(),
+                "gaps": report.gaps,
+            }
 
     @app.get("/worlds/{world_id}/branches")
     async def list_world_branches(world_id: str, request: Request) -> dict[str, Any]:
