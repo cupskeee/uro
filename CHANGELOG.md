@@ -9,6 +9,8 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-19
+
 ### Added
 - **Quantified/relational reaction triggers (RL-6, #25)** — a reaction rule can now react to "ANY
   member of faction X dying" (and the whole `$trigger`-bound predicate family): a `when` condition's
@@ -208,5 +210,6 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/cupskeee/uro/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cupskeee/uro/releases/tag/v0.1.0
