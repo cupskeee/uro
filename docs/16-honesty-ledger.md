@@ -111,13 +111,17 @@ the transactional outbox + async event bus (docs/07 — the shipped model is inl
 `uro world delete` (privacy wipe), persisted probe reports, the per-campaign expected-head
 concurrency guard, consequence-gating (D-21), the `entity_index` (OQ-3). (The **REST management
 surface** is no longer fully reserved — B3/#12 shipped the authed CRUD/read core over the
-`EngineStore` port; some endpoints — seed/probe/export/import, SSE beats, `/usage` — stay
+`EngineStore` port; some endpoints — seed/probe, SSE beats, `/usage` — stay
 CLI-only. The timeline surface now ships over HTTP: branch **list** + **log** (reads), **fork** +
 **marker-create** (operator-only, D-44), the **raw event log + commit detail** (operator-only,
 D-45 — omniscient truth, never a player read), **dry-run** (intent-only, D-37) + **consistency**
 (the T2 proxy), **pack validate** (a `.zip` upload → sufficiency grade, parse-only), **campaign end**
-(operator-only, D-44) and the **codex** (participant-memory get/post, self-or-admin D-39) — BE-1..BE-9
-except BE-7/BE-8, #33-#41. Pack-upload *create* + backfill/probe/seed/export/import stay CLI-only.)
+(operator-only, D-44), the **codex** (participant-memory get/post, self-or-admin D-39) and world
+**export/import** (a hash-chained bundle out / verify-chain-then-instantiate in; both operator-only —
+export D-45 disclosure, import D-44 structural write; a tampered bundle → 400 before any write) —
+BE-1..BE-9, #33-#41. Pack-upload *create* + backfill/probe/**seed** stay CLI-only — seed is carved
+out because `seed_history` needs the pack's `manifest.history`, which the world doesn't persist, so
+it belongs with pack-upload create, not a `{seed}`-only body.)
 
 **Cross-branch reads (B5/#14):** `store.query_across(branch_ids, sections)` (one query per section
 via `branch_id = ANY(...)`, not N round-trips) + `diff_branches(a, b)` (added/removed/changed by PK)

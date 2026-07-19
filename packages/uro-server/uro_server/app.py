@@ -28,7 +28,10 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from pydantic import ValidationError
 from starlette.websockets import WebSocketState
+from uro_core.errors import ExportError
+from uro_core.export import WorldBundle
 from uro_core.pipeline.engine import Engine
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
@@ -523,6 +526,45 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         if detail is None:
             raise HTTPException(status_code=404, detail="no such commit")
         return detail.model_dump()
+
+    @app.get("/worlds/{world_id}/export")
+    async def export_world_bundle(world_id: str, request: Request) -> dict[str, Any]:
+        """Export the whole world as a portable, hash-chain-verified bundle (BE-8, docs/08) —
+        mirrors `uro world export`. OPERATOR-only (D-45): the bundle carries the ENTIRE event log
+        (omniscient truth + beliefs), so it's bulk disclosure, never player-facing. The response IS
+        the `.uwp` JSON; a consumer saves it verbatim and can re-import it anywhere. The bundle is
+        materialized in memory (the log can be large) — cap it at a reverse proxy for production."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        bundle = await store.export_world(world_id)
+        return bundle.model_dump(mode="json")
+
+    @app.post("/worlds/import")
+    async def import_world_bundle(
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Import a world bundle (BE-8, docs/08) — mirrors `uro world import`. OPERATOR-only (D-44:
+        a structural write that instantiates a fresh world). The bundle's SHA-256 hash chain is
+        recomputed and a tampered/altered bundle is rejected with 400 BEFORE anything is written;
+        on success the world is re-instantiated with remapped ids and projections rebuilt by replay.
+        The bundle rides in the JSON body (buffered in memory, like the CLI reading the `.uwp`
+        file) — cap the body at a reverse proxy for production."""
+        _require_operator(request)
+        store = _mgmt()
+        try:
+            bundle = WorldBundle.model_validate(body)
+        except ValidationError as exc:  # a body that isn't a well-formed bundle is bad input
+            raise HTTPException(status_code=400, detail=f"malformed bundle: {exc}") from exc
+        try:
+            world = await store.import_world(bundle)  # verify_bundle inside → ExportError on tamper
+        except ExportError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"bundle failed verification: {exc}"
+            ) from exc
+        return world.model_dump()  # {world_id (remapped), name, main_branch_id}
 
     @app.post("/worlds/{world_id}/campaigns")
     async def create_campaign(
