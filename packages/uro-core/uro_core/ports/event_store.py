@@ -107,6 +107,11 @@ class EventStore(Protocol):
 
     async def current_world_time(self, branch_id: str) -> int: ...
 
+    async def current_world_time_batch(self, branch_ids: list[str]) -> dict[str, int]:
+        """Batch `current_world_time`: branch_id → in-fiction day. A branch with no world_time
+        events yet is ABSENT from the map (callers default it to 0). Empty input → {}."""
+        ...
+
     async def append_beat(self, branch_id: str, events: list[DomainEvent]) -> Commit:
         """Append one beat commit to the branch head and advance it — one transaction."""
         ...

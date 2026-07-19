@@ -40,6 +40,7 @@ transport-only deps). **Built now:**
 ```
 POST /worlds                     {name, tone?, rule_pack?}         create (JSON body, not pack-upload yet)
 GET  /worlds                                                       list
+GET  /worlds/{w}/branches                                          branch tree + markers, per-branch in-fiction day (BE-1)
 POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id}   start_campaign
 GET  /campaigns                  [?world_id=]                      list
 GET  /campaigns/{c}                                                one campaign
@@ -56,8 +57,9 @@ world's declared ruleset and sheets its PC** exactly like the CLI `uro campaign 
 (D-30 + Phase-3) — so a PbtA world's campaign started over REST plays as PbtA, and the WS
 cross-ruleset guard still fires. Bad **input** is `400` (a malformed body, an unknown `?sections=`,
 a non-int `?limit=`, `days<=0`), an unknown campaign/world `404`. Still **CLI-only / scaffolded**
-(deferred, not regressed): world `seed`/`branches`/`probe`/`export`/`import`, the SSE `POST …/beats`
-(play is WS), and `GET /usage`. Authority is coarse — a valid token authorizes the call, but the
+(deferred, not regressed): world `seed`/`probe`/`export`/`import`, the SSE `POST …/beats`
+(play is WS), and `GET /usage`. The sibling `POST /worlds/{w}/branches` (fork) + marker-create stay
+CLI-only and are **operator-tier** when built (D-44); the branch **list** above is a plain read. Authority is coarse — a valid token authorizes the call, but the
 acting `participant` is taken from the body (finer endpoint→campaign authority is deferred, docs/18 P3).
 
 The WebSocket channel carries: client→server `intent`, `table_talk` *(the non-canon coordination lane, D-38)*, `vote` *(consensus, D-38)*, `encounter_action` *(future — encounters auto-resolve in the PoC, D-29)*, `pin_actor`; server→client `narration_chunk`, `scene_update`, `mechanics_result`, `mode_change`, `beat_started`, `beat_committed`, `beat_failed`, `not_your_turn` *(round-robin turn arbitration, D-31)*, `proposal_opened` *(a QUEUED non-holder intent surfaced as a proposal, D-38)*, `table_talk`, `vote_tally` / `vote_decided` / `vote_unsupported` *(D-38)*, `intent_rejected`, `suggestions`, `participant_*`. Message envelope always includes `campaign_id`, `beat_id`, and `participant_id` — that last one is the multiplayer seam (below).

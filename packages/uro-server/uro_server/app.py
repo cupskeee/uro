@@ -247,6 +247,26 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         _auth(request)
         return [w.model_dump() for w in await _mgmt().list_worlds()]
 
+    @app.get("/worlds/{world_id}/branches")
+    async def list_world_branches(world_id: str, request: Request) -> dict[str, Any]:
+        """The branch tree + markers for a world (docs/03, docs/18 B3). A plain any-authed READ:
+        `_auth` only, NO operator gate — D-44 scopes only structural writes / act-for-another to
+        `is_admin`; reads stay open. Mirrors `uro branch list`: each branch carries its in-fiction
+        `world_day` (default 0 when the branch has no world_time events yet)."""
+        _auth(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branches = await store.list_branches(world_id)
+        days = await store.current_world_time_batch([b.branch_id for b in branches])
+        markers = await store.list_markers(world_id)
+        return {
+            "branches": [
+                {**b.model_dump(), "world_day": days.get(b.branch_id, 0)} for b in branches
+            ],
+            "markers": [m.model_dump() for m in markers],
+        }
+
     @app.post("/worlds/{world_id}/campaigns")
     async def create_campaign(
         world_id: str,
