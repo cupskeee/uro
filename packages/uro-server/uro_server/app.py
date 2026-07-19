@@ -384,6 +384,45 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             "entries": [e.model_dump() for e in entries],
         }
 
+    @app.get("/worlds/{world_id}/events")
+    async def world_events(world_id: str, request: Request) -> dict[str, Any]:
+        """The raw event log along a branch, filterable (BE-4, docs/12). OPERATOR-only (D-45): the
+        raw log carries omniscient truth — `ClaimRecorded` truth-values, hidden beliefs, `caused_by`
+        — so it is a GM/operator observability surface, never a player read. `?branch=` (default
+        `main`); optional `?type=`, `?entity_ref=`, `?caused_by=`; `?limit=` (default 50)."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch = request.query_params.get("branch") or "main"
+        try:
+            limit = int(request.query_params.get("limit") or 50)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
+        b = await store.get_branch_by_name(world_id, branch)
+        if b is None:
+            raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
+        events = await store.branch_events(
+            b.branch_id,
+            event_type=request.query_params.get("type"),
+            entity_ref=request.query_params.get("entity_ref"),
+            caused_by=request.query_params.get("caused_by"),
+            limit=limit,
+        )
+        return {"branch": branch, "events": [e.model_dump() for e in events]}
+
+    @app.get("/worlds/{world_id}/commits/{commit_id}")
+    async def world_commit_detail(
+        world_id: str, commit_id: str, request: Request
+    ) -> dict[str, Any]:
+        """One commit's ordered events + metadata (BE-4, docs/12). OPERATOR-only (D-45 — raw
+        events). 404 if the commit is not in this world."""
+        _require_operator(request)
+        detail = await _mgmt().commit_detail(world_id, commit_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="no such commit")
+        return detail.model_dump()
+
     @app.post("/worlds/{world_id}/campaigns")
     async def create_campaign(
         world_id: str,

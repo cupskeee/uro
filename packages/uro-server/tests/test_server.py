@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+from uro_core.export import BundleCommit, BundleEvent
 from uro_core.timeline.models import Branch, BranchInfo, LineageEntry, Marker, World
 from uro_server.app import ServerDeps, create_app
 from uro_server.sessions import SessionHub
@@ -749,5 +750,141 @@ def test_world_log_is_a_plain_read_open_to_any_token() -> None:
 def test_world_log_404_for_an_unknown_branch() -> None:
     resp = TestClient(create_app(_operator_deps(_FakeTimelineStore(branch_exists=False)))).get(
         "/worlds/w:1/log?token=tok-a&branch=ghost"
+    )
+    assert resp.status_code == 404
+
+
+# --- BE-4 (#36): raw event log + commit detail — OPERATOR-only observability (D-45) ---
+
+
+class _FakeEventStore:
+    """EngineStore stand-in for the BE-4 event-inspector reads (no live DB)."""
+
+    def __init__(
+        self, *, world_exists: bool = True, branch_exists: bool = True, commit_exists: bool = True
+    ) -> None:
+        self._world_exists = world_exists
+        self._branch_exists = branch_exists
+        self._commit_exists = commit_exists
+        self.filters: dict[str, object] = {}
+
+    async def get_world(self, world_id: str) -> World | None:
+        if not self._world_exists:
+            return None
+        return World(world_id=world_id, name="Ashfall", main_branch_id="b:main")
+
+    async def get_branch_by_name(self, world_id: str, name: str) -> BranchInfo | None:
+        if not self._branch_exists:
+            return None
+        return BranchInfo(
+            branch_id="b:main", world_id=world_id, name=name, head_commit="c:7", head_depth=3
+        )
+
+    async def branch_events(
+        self,
+        branch_id: str,
+        *,
+        event_type: str | None = None,
+        entity_ref: str | None = None,
+        caused_by: str | None = None,
+        limit: int = 50,
+    ) -> list[BundleEvent]:
+        self.filters = {
+            "event_type": event_type,
+            "entity_ref": entity_ref,
+            "caused_by": caused_by,
+            "limit": limit,
+        }
+        return [
+            BundleEvent(
+                event_id="e:1",
+                seq=0,
+                event_type="ClaimRecorded",
+                entity_refs=["a:hero"],
+                caused_by={"kind": "player_action"},
+                payload={"truth": True},
+            )
+        ]
+
+    async def commit_detail(self, world_id: str, commit_id: str) -> BundleCommit | None:
+        if not self._commit_exists:
+            return None
+        return BundleCommit(
+            commit_id=commit_id,
+            parent_id="c:0",
+            depth=1,
+            commit_hash="h:1",
+            events=[
+                BundleEvent(
+                    event_id="e:1",
+                    seq=0,
+                    event_type="WorldGenesis",
+                    caused_by={"kind": "system"},
+                    payload={},
+                )
+            ],
+        )
+
+
+def test_world_events_operator_sees_the_raw_log_and_filters_pass_through() -> None:
+    store = _FakeEventStore()
+    resp = TestClient(create_app(_operator_deps(store))).get(
+        "/worlds/w:1/events?token=tok-a&type=ClaimRecorded&entity_ref=a:hero"
+        "&caused_by=player_action&limit=10"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["events"][0]["event_type"] == "ClaimRecorded"
+    assert body["events"][0]["payload"] == {"truth": True}  # the raw (omniscient) payload
+    assert store.filters == {
+        "event_type": "ClaimRecorded",
+        "entity_ref": "a:hero",
+        "caused_by": "player_action",
+        "limit": 10,
+    }
+
+
+def test_world_events_403_for_a_plain_player_token() -> None:
+    # D-45: the raw event log carries omniscient truth → operator-only, never a player read
+    resp = TestClient(create_app(_operator_deps(_FakeEventStore()))).get(
+        "/worlds/w:1/events?token=tok-b"
+    )
+    assert resp.status_code == 403
+
+
+def test_world_events_401_without_a_valid_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeEventStore()))).get(
+        "/worlds/w:1/events?token=nope"
+    )
+    assert resp.status_code == 401
+
+
+def test_world_events_404_for_unknown_world_and_branch() -> None:
+    no_world = TestClient(create_app(_operator_deps(_FakeEventStore(world_exists=False))))
+    assert no_world.get("/worlds/nope/events?token=tok-a").status_code == 404
+    no_branch = TestClient(create_app(_operator_deps(_FakeEventStore(branch_exists=False))))
+    assert no_branch.get("/worlds/w:1/events?token=tok-a&branch=ghost").status_code == 404
+
+
+def test_commit_detail_operator_sees_a_commits_events() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeEventStore()))).get(
+        "/worlds/w:1/commits/c:7?token=tok-a"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["commit_id"] == "c:7" and body["commit_hash"] == "h:1"
+    assert body["events"][0]["event_type"] == "WorldGenesis"
+
+
+def test_commit_detail_403_for_a_plain_player_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeEventStore()))).get(
+        "/worlds/w:1/commits/c:7?token=tok-b"
+    )
+    assert resp.status_code == 403
+
+
+def test_commit_detail_404_for_an_unknown_commit() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeEventStore(commit_exists=False)))).get(
+        "/worlds/w:1/commits/ghost?token=tok-a"
     )
     assert resp.status_code == 404
