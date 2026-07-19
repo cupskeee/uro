@@ -42,6 +42,8 @@ POST /worlds                     {name, tone?, rule_pack?}         create (JSON 
 GET  /worlds                                                       list
 GET  /worlds/{w}/branches                                          branch tree + markers, per-branch in-fiction day (BE-1)
 GET  /worlds/{w}/log             [?branch=&limit=]                 commit lineage, git-log style (BE-3)
+GET  /worlds/{w}/events          [?branch=&type=&entity_ref=&caused_by=&limit=]  raw event log (OPERATOR-only, D-45) (BE-4)
+GET  /worlds/{w}/commits/{id}                                      one commit's events (OPERATOR-only, D-45) (BE-4)
 POST /worlds/{w}/branches        {from_ref, name, time_skip_days?}  fork (OPERATOR-only, D-44) (BE-2)
 POST /worlds/{w}/markers         {name, branch?}                   name a branch head (OPERATOR-only, D-44) (BE-3)
 POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id}   start_campaign
@@ -61,10 +63,13 @@ world's declared ruleset and sheets its PC** exactly like the CLI `uro campaign 
 cross-ruleset guard still fires. Bad **input** is `400` (a malformed body, an unknown `?sections=`,
 a non-int `?limit=`, `days<=0`), an unknown campaign/world `404`. Still **CLI-only / scaffolded**
 (deferred, not regressed): world `seed`/`probe`/`export`/`import`, the SSE `POST …/beats`
-(play is WS), and `GET /usage`. **Authority (D-44):** the timeline reads (`/branches`, `/log`) are
-plain any-authed reads; the *structural writes* — `POST …/branches` (fork) and `POST …/markers` —
-are **operator-only** (require an `--admin-token`; a plain player token → 403), via `_require_operator`
-on the same `is_admin` choke point as D-39's self-or-admin scoping. Otherwise authority is coarse — a
+(play is WS), and `GET /usage`. **Authority:** the timeline summary reads (`/branches`, `/log`) are plain any-authed reads; the
+*structural writes* — `POST …/branches` (fork) and `POST …/markers` — are **operator-only** (D-44;
+require an `--admin-token`, a plain player token → 403), via `_require_operator` on the same
+`is_admin` choke point as D-39's self-or-admin scoping. The **raw event log** (`GET …/events`,
+`GET …/commits/{id}`) is ALSO operator-only, but for a different reason (**D-45**): the raw log
+carries omniscient truth — `ClaimRecorded` truth-values, hidden beliefs, `caused_by` — that the
+non-omniscient player reads deliberately never expose, so it is a GM/operator observability surface. Otherwise authority is coarse — a
 valid token authorizes the call and the acting `participant` is taken from the body (finer
 endpoint→campaign authority is deferred, docs/18 P3).
 

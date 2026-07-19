@@ -147,6 +147,19 @@ def _lineage_entry(
     )
 
 
+def _bundle_event(row: asyncpg.Record) -> BundleEvent:
+    """One events-table row → the BundleEvent transport shape (BE-4 / export share it)."""
+    return BundleEvent(
+        event_id=row["event_id"],
+        seq=row["seq"],
+        event_type=row["event_type"],
+        entity_refs=list(row["entity_refs"]),
+        world_time=row["world_time"],
+        caused_by=row["caused_by"],
+        payload=row["payload"],
+    )
+
+
 async def _init_conn(conn: asyncpg.Connection) -> None:
     # asyncpg does not encode dict <-> jsonb automatically; register a codec.
     await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
@@ -1153,6 +1166,70 @@ class PostgresEventStore:
             )
             for c in commits
         ]
+
+    async def commit_detail(self, world_id: str, commit_id: str) -> BundleCommit | None:
+        """One commit's metadata + its ordered events, world-scoped (BE-4). None if the commit is
+        not in this world. Reuses the export commit/event transport shapes."""
+        async with self.pool.acquire() as conn:
+            c = await conn.fetchrow(
+                "SELECT commit_id, parent_id, depth, commit_hash FROM commits "
+                "WHERE commit_id = $1 AND world_id = $2",
+                commit_id,
+                world_id,
+            )
+            if c is None:
+                return None
+            event_rows = await conn.fetch(
+                "SELECT event_id, seq, event_type, entity_refs, world_time, caused_by, payload "
+                "FROM events WHERE commit_id = $1 ORDER BY seq ASC",
+                commit_id,
+            )
+        return BundleCommit(
+            commit_id=c["commit_id"],
+            parent_id=c["parent_id"],
+            depth=c["depth"],
+            commit_hash=c["commit_hash"],
+            events=[_bundle_event(e) for e in event_rows],
+        )
+
+    async def branch_events(
+        self,
+        branch_id: str,
+        *,
+        event_type: str | None = None,
+        entity_ref: str | None = None,
+        caused_by: str | None = None,
+        limit: int = 50,
+    ) -> list[BundleEvent]:
+        """Raw events along a branch's lineage (head→genesis), optionally filtered. Reuses the
+        `lineage` recursive walk; a NULL filter arg is a no-op (SQL `$n IS NULL OR …`)."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE chain AS (
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+                    WHERE b.branch_id = $1
+                    UNION ALL
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+                )
+                SELECT e.event_id, e.seq, e.event_type, e.entity_refs, e.world_time,
+                       e.caused_by, e.payload, ch.depth
+                FROM events e JOIN chain ch ON e.commit_id = ch.commit_id
+                WHERE ($2::text IS NULL OR e.event_type = $2)
+                  AND ($3::text IS NULL OR $3 = ANY(e.entity_refs))
+                  AND ($4::text IS NULL OR e.caused_by->>'kind' = $4)
+                ORDER BY ch.depth DESC, e.seq DESC
+                LIMIT $5
+                """,
+                branch_id,
+                event_type,
+                entity_ref,
+                caused_by,
+                limit,
+            )
+        return [_bundle_event(r) for r in rows]
 
     # --- places projection (docs/02); used by the meteor test and `uro log` ---
 

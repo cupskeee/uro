@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent
+from uro_core.export import BundleCommit, BundleEvent  # transport shapes for a stored commit/event
 from uro_core.metering import LLMCall
 from uro_core.timeline.models import (
     Branch,
@@ -153,4 +154,23 @@ class EventStore(Protocol):
 
     async def lineage(self, branch_id: str, limit: int = 50) -> list[LineageEntry]:
         """A branch's commit lineage head→genesis — the `uro log` view."""
+        ...
+
+    async def commit_detail(self, world_id: str, commit_id: str) -> BundleCommit | None:
+        """One commit's metadata + its ordered events, world-scoped (BE-4). None if the commit is
+        not in this world. Raw events — operator-only at the API edge (D-45)."""
+        ...
+
+    async def branch_events(
+        self,
+        branch_id: str,
+        *,
+        event_type: str | None = None,
+        entity_ref: str | None = None,
+        caused_by: str | None = None,
+        limit: int = 50,
+    ) -> list[BundleEvent]:
+        """Raw events along a branch's lineage (head→genesis), optionally filtered by event_type /
+        an entity_ref / caused_by kind (BE-4). The omniscient event stream — operator-only at the
+        edge (D-45). Bounded by `limit`."""
         ...
