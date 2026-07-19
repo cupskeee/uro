@@ -125,6 +125,10 @@ class ServerDeps:
     is_admin: Callable[[str], bool] | None = None  # (token) → operator tier (may act for others)?
     token_campaign: Callable[[str], str | None] | None = None  # minted token → its campaign (scope)
     hydrate_tokens: Callable[[], Awaitable[None]] | None = None  # load durable tokens at startup
+    # The bound ruleset registry (BE-10): id@version + sheet shape of each built-in. A pure
+    # composition-root lookup (not store-backed), so it's wired here rather than on the store. None
+    # → `GET /rulesets` returns 501.
+    list_rulesets: Callable[[], list[dict[str, Any]]] | None = None
 
 
 def engine_deps(
@@ -212,6 +216,18 @@ def engine_deps(
         events = await engine.preview_beat(campaign, participant, intent)
         return [e.model_dump() for e in events]
 
+    def list_rulesets() -> list[dict[str, Any]]:
+        # The registry is a COMPOSITION concern (it knows the concrete built-ins) — resolving it
+        # here keeps app.py's request handlers from importing concrete rulesets. id@version + the
+        # sheet shape a Ruleset viewer needs (BE-10; docs/06, D-30).
+        from uro_core.rulesets import registry as ruleset_registry
+
+        out: list[dict[str, Any]] = []
+        for rid in ruleset_registry.available():
+            rs = ruleset_registry.resolve(rid)
+            out.append({"id": rs.id, "version": rs.version, "sheet_schema": rs.sheet_schema()})
+        return out
+
     return ServerDeps(
         resolve_participant=registry.resolve,
         campaign_exists=campaign_exists,
@@ -226,6 +242,7 @@ def engine_deps(
         is_admin=registry.is_admin,
         token_campaign=registry.campaign_of,
         hydrate_tokens=registry.hydrate,
+        list_rulesets=list_rulesets,
     )
 
 
@@ -237,6 +254,39 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/usage")
+    async def usage(request: Request) -> dict[str, Any]:
+        """LLM-call telemetry aggregated by stage (BE-10, docs/07). OPERATOR-only (D-44): it reveals
+        model/token/latency cost. The engine EXPOSES metering (docs/00) — it never bills/caps.
+        `?stage=` scopes to one engine role. `?world=`/`?campaign=` are **not supported yet** (the
+        `llm_calls` rows carry no world/campaign column — see docs/08) → 400, never silently
+        ignored, so a consumer never mistakes a global total for a per-world one."""
+        _require_operator(request)
+        store = _mgmt()
+        for unsupported in ("world", "campaign"):
+            if request.query_params.get(unsupported):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"filtering usage by {unsupported!r} is not supported yet — the metering "
+                        "rows are not keyed by world/campaign (docs/08 deferral)"
+                    ),
+                )
+        stage = request.query_params.get("stage") or None
+        rows = await store.usage_by_stage(stage)
+        total_calls = sum(int(r["calls"]) for r in rows)
+        return {"stage": stage, "total_calls": total_calls, "by_stage": rows}
+
+    @app.get("/rulesets")
+    async def rulesets(request: Request) -> dict[str, Any]:
+        """The bound ruleset registry (BE-10, docs/06): each built-in's `id`, `version`, and sheet
+        shape — what a Ruleset viewer needs. A plain any-authed read (public capability info, no
+        world state). 501 if the deployment wired transport-only deps."""
+        _auth(request)
+        if deps.list_rulesets is None:
+            raise HTTPException(status_code=501, detail="ruleset registry not enabled")
+        return {"rulesets": deps.list_rulesets()}
 
     @app.post("/campaigns/{campaign_id}/encounters/{encounter_id}/outcome")
     async def report_outcome(
@@ -526,6 +576,28 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         if detail is None:
             raise HTTPException(status_code=404, detail="no such commit")
         return detail.model_dump()
+
+    @app.get("/worlds/{world_id}/chronicle")
+    async def world_chronicle(world_id: str, request: Request) -> dict[str, Any]:
+        """A branch's recent beats, world-scoped (BE-10, docs/08) — the world twin of the
+        campaign chronicle. OPERATOR-only: unlike the campaign read (a player's own current
+        branch), this reads ANY named branch — including sibling what-if forks the player isn't
+        in — so it's a GM/operator timeline-inspection surface (same family as `/log`, `/events`).
+        `?branch=` (default `main`), `?limit=` (default 20)."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch = str(request.query_params.get("branch") or "main")
+        b = await store.get_branch_by_name(world_id, branch)
+        if b is None:
+            raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
+        try:
+            limit = int(request.query_params.get("limit") or 20)
+        except ValueError as exc:  # ?limit=abc is bad input → 400, not a 500
+            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
+        beats = await store.recent_beats(b.branch_id, limit)
+        return {"branch": branch, "beats": [bt.model_dump() for bt in beats]}
 
     @app.get("/worlds/{world_id}/export")
     async def export_world_bundle(world_id: str, request: Request) -> dict[str, Any]:

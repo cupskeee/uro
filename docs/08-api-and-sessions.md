@@ -49,6 +49,7 @@ POST /worlds/{w}/branches        {from_ref, name, time_skip_days?}  fork (OPERAT
 POST /worlds/{w}/markers         {name, branch?}                   name a branch head (OPERATOR-only, D-44) (BE-3)
 GET  /worlds/{w}/export                                            whole world → hash-chained bundle (OPERATOR-only, D-45) (BE-8)
 POST /worlds/import              {…WorldBundle JSON…}              verify chain + instantiate a fresh world (OPERATOR-only, D-44) (BE-8)
+GET  /worlds/{w}/chronicle       [?branch=&limit=]                a named branch's recent beats (OPERATOR-only) (BE-10)
 POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id}   start_campaign
 GET  /campaigns                  [?world_id=]                      list
 GET  /campaigns/{c}                                                one campaign
@@ -62,6 +63,8 @@ GET  /campaigns/{c}/consistency                                    narrator cont
 POST /campaigns/{c}/end          {marker, outcome?}                end campaign, release PCs (OPERATOR-only, D-44) (BE-9)
 GET  /campaigns/{c}/codex         [?participant=]                  a participant's fork-surviving notes (self/admin, D-39) (BE-9)
 POST /campaigns/{c}/codex        {text, participant?, key?, pinned?, refs?}   add a note (self/admin, D-39) (BE-9)
+GET  /usage                      [?stage=]                        LLM-call telemetry by stage (OPERATOR-only, D-44) (BE-10)
+GET  /rulesets                                                    registry: id@version + sheet shape (any-authed) (BE-10)
 ```
 
 The shipped `state`/`chronicle` reads are **campaign-scoped** (they resolve the campaign's branch)
@@ -74,8 +77,23 @@ HTTP (BE-8):** `GET …/export` returns the whole world as a portable, SHA-256 h
 `WorldBundle` JSON (the `.uwp` content); `POST /worlds/import` recomputes that chain and rejects a
 tampered bundle with `400` (`ExportError`) **before** any write, else re-instantiates a fresh world
 (remapped ids, projections rebuilt by replay). Both are **operator-only** (import a structural write
-→ D-44; export bulk omniscient disclosure → D-45). Still **CLI-only / scaffolded** (deferred, not
-regressed): world `seed`/`probe`, the SSE `POST …/beats` (play is WS), and `GET /usage`. `seed` is
+→ D-44; export bulk omniscient disclosure → D-45). **Telemetry + registry + world-scoped chronicle
+ship (BE-10):** `GET /usage[?stage=]` aggregates the `llm_calls` metering by engine stage (count,
+token sums, avg latency) — **operator-only** (D-44, it reveals model/token/latency cost); the engine
+only *exposes* metering, it never bills (docs/00). `?world=`/`?campaign=` are **not supported yet**
+(the `llm_calls` rows carry no world/campaign column) and return `400` rather than silently ignoring
+the filter — a consumer never mistakes a global total for a per-world one; keying metering by
+world/campaign is a forward-only migration + threading campaign context through the `_meter` seam
+(deferred). `GET /rulesets` lists each built-in ruleset's `id`, `version`, and sheet schema
+(any-authed — public capability info). `GET /worlds/{w}/chronicle[?branch=&limit=]` is the
+**world-scoped** twin of the campaign chronicle: it reads ANY named branch's recent beats (incl.
+sibling what-if forks), so it's a GM/operator timeline-inspection surface (operator-only, same family
+as `/log`, `/events`). The world-scoped **`state?branch=&at=`** (materialize projections at an
+arbitrary commit — nearest-snapshot + replay) is **deferred to its own slice**: it's a new read-only
+materialize-at-commit core primitive (not the head-only `query_across` the campaign `/state` uses),
+which deserves a focused implementation + snapshot-correctness tests, not a bolt-on. Still
+**CLI-only / scaffolded** (deferred, not regressed): world `seed`/`probe`, the SSE `POST …/beats`
+(play is WS), and world `state?at=`. `seed` is
 carved out on purpose — `seed_history` needs the pack's `manifest.history` (era, simulate_years),
 which the world does **not** persist in a `seed_history`-usable form (`WorldGenesis` stores only
 name/tone/overrides/ruleset/rule-pack), so a `{seed}`-only body can't reconstruct it; seeding needs

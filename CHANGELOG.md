@@ -52,6 +52,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   promoted onto the `EventStore` port (they lived only on the concrete store). Seeding is **not** in
   this slice — `seed_history` needs the pack's `manifest.history`, which the world doesn't persist,
   so `POST /worlds/{w}/seed` belongs with the pack-upload create endpoint, not a `{seed}`-only body.
+- **Usage telemetry + ruleset registry + world-scoped chronicle over HTTP (BE-10, #42)** —
+  `GET /usage[?stage=]` aggregates the `llm_calls` metering by engine stage (call count, token sums,
+  avg latency) — **operator-only** (D-44: it reveals model/token/latency cost; the engine *exposes*
+  metering, never bills). `?world=`/`?campaign=` return `400`, not a silent no-op — the metering rows
+  aren't keyed by world/campaign yet (a forward-only migration + `_meter` threading; deferred).
+  `GET /rulesets` lists each built-in ruleset's `id`, `version`, and sheet schema (any-authed —
+  public capability info; wired via a new `ServerDeps.list_rulesets` composition closure so request
+  handlers never import concrete rulesets). `GET /worlds/{w}/chronicle[?branch=&limit=]` is the
+  world-scoped twin of the campaign chronicle — any named branch's recent beats — **operator-only**
+  (it reads sibling what-if forks; same timeline-inspection family as `/log`/`/events`). Adds
+  `usage_by_stage` to the `EventStore` port. The world-scoped **`state?branch=&at=`**
+  (materialize-at-commit) is deferred to its own slice — it's a new read-only materialize primitive
+  (nearest-snapshot + replay), not the head-only `query_across` the campaign `/state` uses.
 
 ### Fixed
 - **PyPI publish workflow** — split into one job per package, each in its own GitHub environment

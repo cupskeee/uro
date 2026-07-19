@@ -1673,6 +1673,24 @@ class PostgresEventStore:
                 call.latency_ms,
             )
 
+    async def usage_by_stage(self, stage: str | None = None) -> list[dict[str, Any]]:
+        """Aggregate `llm_calls` by (stage_tag, model): count, token sums, avg latency (docs/07,
+        D-14). `stage` scopes to one engine role (uses the `llm_calls_stage_idx`). `model` may be
+        NULL (the stub records none) — it groups as its own bucket. Read-only observability."""
+        where = "WHERE stage_tag = $1" if stage else ""
+        args: list[Any] = [stage] if stage else []
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT stage_tag, model, count(*) AS calls, "
+                "  coalesce(sum(tokens_in), 0) AS tokens_in, "
+                "  coalesce(sum(tokens_out), 0) AS tokens_out, "
+                "  round(avg(latency_ms))::int AS avg_latency_ms "
+                f"FROM llm_calls {where} "
+                "GROUP BY stage_tag, model ORDER BY stage_tag, model NULLS FIRST",
+                *args,
+            )
+            return [dict(r) for r in rows]
+
     # --- projection queries (ProjectionQueries port; docs/02, 07) ---
 
     async def get_actor(self, branch_id: str, actor_id: str) -> ActorView | None:

@@ -15,6 +15,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+from uro_core.domain.events import BeatResolvedPayload
 from uro_core.export import (
     BundleBranch,
     BundleCommit,
@@ -1321,3 +1322,175 @@ def test_import_400_for_a_malformed_bundle() -> None:
     )
     assert resp.status_code == 400
     assert "malformed bundle" in resp.json()["detail"]
+
+
+# BE-10: usage telemetry + world-scoped chronicle + ruleset registry
+
+
+class _FakeUsageStore:
+    """EngineStore stand-in for BE-10 usage + world-chronicle (no live DB)."""
+
+    def __init__(self, *, world_exists: bool = True, branch_exists: bool = True) -> None:
+        self._world_exists = world_exists
+        self._branch_exists = branch_exists
+        self.stage_arg: str | None = "<<unset>>"
+
+    async def get_world(self, world_id: str) -> World | None:
+        if not self._world_exists:
+            return None
+        return World(world_id=world_id, name="Ashfall", main_branch_id="b:main")
+
+    async def get_branch_by_name(self, world_id: str, name: str) -> BranchInfo | None:
+        if not self._branch_exists:
+            return None
+        return BranchInfo(
+            branch_id="b:what-if", world_id=world_id, name=name, head_commit="c:9", head_depth=4
+        )
+
+    async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:
+        return [
+            BeatResolvedPayload(
+                beat_id="beat:1",
+                participant_id="player-1",
+                intent_text="strike the warlord",
+                narration="Steel meets steel under a bleeding sky.",
+            )
+        ]
+
+    async def usage_by_stage(self, stage: str | None = None) -> list[dict[str, Any]]:
+        self.stage_arg = stage
+        return [
+            {
+                "stage_tag": "narrator",
+                "model": None,
+                "calls": 3,
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "avg_latency_ms": 12,
+            },
+            {
+                "stage_tag": "planner",
+                "model": "gpt-x",
+                "calls": 2,
+                "tokens_in": 40,
+                "tokens_out": 10,
+                "avg_latency_ms": 30,
+            },
+        ]
+
+
+def test_usage_operator_gets_aggregated_stage_telemetry() -> None:
+    store = _FakeUsageStore()
+    resp = TestClient(create_app(_operator_deps(store))).get("/usage?token=tok-a")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_calls"] == 5 and len(body["by_stage"]) == 2  # 3 + 2
+    assert store.stage_arg is None  # no ?stage= → aggregate over all
+
+
+def test_usage_stage_filter_passes_through() -> None:
+    store = _FakeUsageStore()
+    resp = TestClient(create_app(_operator_deps(store))).get("/usage?token=tok-a&stage=planner")
+    assert resp.status_code == 200 and store.stage_arg == "planner"
+
+
+def test_usage_403_for_a_plain_player_token() -> None:
+    # D-44: cost/model telemetry → operator-only.
+    resp = TestClient(create_app(_operator_deps(_FakeUsageStore()))).get("/usage?token=tok-b")
+    assert resp.status_code == 403
+
+
+def test_usage_401_without_a_valid_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeUsageStore()))).get("/usage?token=nope")
+    assert resp.status_code == 401
+
+
+def test_usage_400_for_unsupported_world_or_campaign_filter() -> None:
+    # Honest: llm_calls isn't keyed by world/campaign — reject, never silently ignore.
+    client = TestClient(create_app(_operator_deps(_FakeUsageStore())))
+    for q in ("world=w:1", "campaign=camp-1"):
+        resp = client.get(f"/usage?token=tok-a&{q}")
+        assert resp.status_code == 400
+        assert "not supported yet" in resp.json()["detail"]
+
+
+def test_world_chronicle_operator_reads_a_named_branch() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeUsageStore()))).get(
+        "/worlds/w:1/chronicle?token=tok-a&branch=what-if"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["branch"] == "what-if" and body["beats"][0]["beat_id"] == "beat:1"
+
+
+def test_world_chronicle_403_for_a_plain_player_token() -> None:
+    # Cross-branch narration (incl. sibling forks) → operator timeline-inspection surface.
+    resp = TestClient(create_app(_operator_deps(_FakeUsageStore()))).get(
+        "/worlds/w:1/chronicle?token=tok-b"
+    )
+    assert resp.status_code == 403
+
+
+def test_world_chronicle_404_for_a_missing_world() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeUsageStore(world_exists=False)))).get(
+        "/worlds/nope/chronicle?token=tok-a"
+    )
+    assert resp.status_code == 404
+
+
+def test_world_chronicle_404_for_a_missing_branch() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeUsageStore(branch_exists=False)))).get(
+        "/worlds/w:1/chronicle?token=tok-a&branch=ghost"
+    )
+    assert resp.status_code == 404
+
+
+def test_world_chronicle_400_for_a_non_integer_limit() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeUsageStore()))).get(
+        "/worlds/w:1/chronicle?token=tok-a&limit=abc"
+    )
+    assert resp.status_code == 400
+
+
+def _rulesets_deps(rulesets: object) -> ServerDeps:
+    deps = _fake_deps()
+    deps.is_admin = lambda t: t == "tok-a"
+    deps.list_rulesets = rulesets  # type: ignore[assignment]
+    return deps
+
+
+def test_rulesets_any_authed_lists_the_registry() -> None:
+    canned = [{"id": "uro-basic", "version": "0", "sheet_schema": {"hp": "int"}}]
+    resp = TestClient(create_app(_rulesets_deps(lambda: canned))).get("/rulesets?token=tok-b")
+    assert resp.status_code == 200  # a plain player token is fine — public capability info
+    assert resp.json()["rulesets"] == canned
+
+
+def test_rulesets_reflects_the_real_registry() -> None:
+    # Wire the REAL composition closure: the two built-ins, each with id@version + sheet shape.
+    from uro_core.rulesets import registry as ruleset_registry
+
+    def real() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": ruleset_registry.resolve(rid).id,
+                "version": ruleset_registry.resolve(rid).version,
+                "sheet_schema": ruleset_registry.resolve(rid).sheet_schema(),
+            }
+            for rid in ruleset_registry.available()
+        ]
+
+    resp = TestClient(create_app(_rulesets_deps(real))).get("/rulesets?token=tok-a")
+    assert resp.status_code == 200
+    ids = {r["id"] for r in resp.json()["rulesets"]}
+    assert {"uro-basic", "uro-pbta"} <= ids
+
+
+def test_rulesets_501_when_not_wired() -> None:
+    resp = TestClient(create_app(_rulesets_deps(None))).get("/rulesets?token=tok-a")
+    assert resp.status_code == 501
+
+
+def test_rulesets_401_without_a_valid_token() -> None:
+    resp = TestClient(create_app(_rulesets_deps(lambda: []))).get("/rulesets?token=nope")
+    assert resp.status_code == 401
