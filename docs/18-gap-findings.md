@@ -75,6 +75,15 @@ fork/event-sourcing) → adversarial verify (default-REJECTED) → a completenes
 > pack thread-state vocabularies (grammar latitude); append-time emitter whitelist (repeatedly
 > deferred as structural-at-source-suffices; hot-path risk). Dispositions annotated per item below.
 
+> **Update (2026-07-19) — the [DECIDE] backlog is essentially cleared.** After the [AUTO] pass, the
+> owner worked the flagged forks one-by-one as GitHub issues → branch→PR→merge, each with its own
+> phase-end SYSTEM-WIDE review: **B8 #7/D-36**, **B9 #8/D-37**, **B7 #9/D-38**, **B10 #10/D-39**,
+> **B11 #11/D-40**, **B6 trusted-embedder tier #12/D-41**, **B2 C3/C4/C5 #13** (C6 + computed-delta
+> OQ-1 still staged), **B4/B5 P3 trio #14**, and **RL-6 #25/D-42** (quantified/relational triggers).
+> The ONLY open backlog issue is **#15 (PyPI/ghcr distribution), PARKED**. Still genuinely reserved:
+> the parked-encounter registry (OQ-12), rumor statement-distortion, branch GC, the append-time
+> emitter whitelist, C6 cascade + computed-delta.
+
 ### P0 — hit by 3–4 games, clear win
 
 | # | Finding | Games | What Uro needs | Notes |
@@ -176,3 +185,12 @@ feature and its branching feature actively undermine each other through this hol
 "should we build Stage B?" is now answerable with data. **Recommended next decision:** scope
 engine-owned numeric state / the computation tier (a new decision superseding the D-33 reservation),
 using this refusal log as the spec.
+
+> **RESOLVED (2026-07-12 → 2026-07-19).** This decision was made and executed: **D-34** (superseding
+> D-33's refusal clause) shipped the engine-owned **computation layer** — event-sourced integer
+> counters that fork by construction (Phase 10, INC-C1/C2, docs/19) — then the reaction grammar's
+> `for_each`/`roll_table`/`expire_claims` (C3/C4/C5, #13) and RL-6's `$trigger`-aware quantified
+> triggers (#25/D-42). The declarative-rules × branching hole is closed (counters ride `fork_branch`).
+> A WASM tier stays reserved at a **sharper** gate (UNBOUNDED computation / entity-minting the closed
+> grammar + counters still can't express); only C6 cascade + computed cross-counter arithmetic (OQ-1)
+> remain staged.
