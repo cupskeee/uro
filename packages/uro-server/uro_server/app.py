@@ -768,6 +768,78 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             "ratio": consistent / total if total else 1.0,
         }
 
+    @app.post("/campaigns/{campaign_id}/end")
+    async def end_campaign_endpoint(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """End a campaign: release its PCs to NPCs and mark + snapshot the closing commit as a fork
+        root (BE-9, `uro campaign end`). OPERATOR-only (D-44 — a timeline lifecycle write). Body:
+        `{marker, outcome?}`."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_campaign(campaign_id) is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        marker = _require(body, "marker")
+        try:
+            m = await store.end_campaign(
+                campaign_id, marker, outcome=str(body.get("outcome") or "")
+            )
+        except (ValueError, KeyError) as exc:  # dup marker name / already ended = bad input
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return m.model_dump()
+
+    @app.get("/campaigns/{campaign_id}/codex")
+    async def list_codex(campaign_id: str, request: Request) -> dict[str, Any]:
+        """A participant's out-of-world notes for this campaign's world (BE-9, `uro codex list`).
+        SELF-or-admin (D-39): a caller reads their OWN codex; an operator may read another's
+        (`?participant=`). The codex is world-scoped and fork-surviving (D-36); never canon."""
+        _auth(request)
+        store = _mgmt()
+        c = await store.get_campaign(campaign_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        _, caller, admin = _scope(request)
+        target = request.query_params.get("participant") or caller
+        if target != caller and not admin:
+            raise HTTPException(
+                status_code=403, detail="can only read your own codex (or as operator)"
+            )
+        notes = await store.participant_notes(target or "", c.world_id)
+        return {"participant": target, "notes": [n.model_dump() for n in notes]}
+
+    @app.post("/campaigns/{campaign_id}/codex")
+    async def add_codex(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Record an out-of-world player note that SURVIVES a fork (BE-9, `uro codex add`; D-36).
+        SELF-or-admin (D-39). Body: `{text, participant?, key?, pinned?, refs?}`. Never canon, never
+        an NPC belief — surfaces only to the narrator as the player's private recollection."""
+        _auth(request)
+        store = _mgmt()
+        c = await store.get_campaign(campaign_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        text = str(_require(body, "text"))
+        _, caller, admin = _scope(request)
+        target = str(body.get("participant") or caller or "")
+        if target != caller and not admin:
+            raise HTTPException(
+                status_code=403, detail="can only write your own codex (or as operator)"
+            )
+        key = await store.participant_remember(
+            target,
+            c.world_id,
+            text,
+            key=body.get("key"),
+            pinned=bool(body.get("pinned", False)),
+            entity_refs=body.get("refs") or [],
+        )
+        return {"participant": target, "key": key}
+
     @app.websocket("/campaigns/{campaign_id}/play")
     async def play(ws: WebSocket, campaign_id: str) -> None:
         # Auth (docs/08 token mode): ?token=… → participant_id. Reject before accept.
