@@ -40,6 +40,8 @@ transport-only deps). **Built now:**
 ```
 POST /worlds                     {name, tone?, rule_pack?}         create (JSON body, not pack-upload yet)
 POST /worlds/validate            (multipart .zip of the pack)      grade an uploaded pack, no import (BE-6)
+POST /worlds/backfill            (multipart .zip of the pack)      AI gap-fill preview, ai_backfill seeds (OPERATOR-only, D-44) (BE-7)
+POST /worlds/probe               (multipart .zip) [?tries=]        model-capability report, warn-not-fail (OPERATOR-only, D-44) (BE-7)
 GET  /worlds                                                       list
 GET  /worlds/{w}/branches                                          branch tree + markers, per-branch in-fiction day (BE-1)
 GET  /worlds/{w}/log             [?branch=&limit=]                 commit lineage, git-log style (BE-3)
@@ -91,9 +93,25 @@ sibling what-if forks), so it's a GM/operator timeline-inspection surface (opera
 as `/log`, `/events`). The world-scoped **`state?branch=&at=`** (materialize projections at an
 arbitrary commit — nearest-snapshot + replay) is **deferred to its own slice**: it's a new read-only
 materialize-at-commit core primitive (not the head-only `query_across` the campaign `/state` uses),
-which deserves a focused implementation + snapshot-correctness tests, not a bolt-on. Still
-**CLI-only / scaffolded** (deferred, not regressed): world `seed`/`probe`, the SSE `POST …/beats`
-(play is WS), and world `state?at=`. `seed` is
+which deserves a focused implementation + snapshot-correctness tests, not a bolt-on. **The AI
+world-authoring stages ship (BE-7):** `POST /worlds/backfill` previews a thin pack's AI gap-fill
+(the augmented seeds, each tagged `provenance=ai_backfill`, + before/after grade) and `POST
+/worlds/probe[?tries=]` returns the judge-scored model-capability report. Both are
+**operator-only** (D-44 — they make live, uncapped LLM calls; the engine exposes cost but never
+caps it) and **pack-UPLOAD-shaped** (multipart `.zip`, like `/worlds/validate`), NOT `/worlds/{w}/`:
+backfill's sufficiency gaps read `manifest.generate_population`/`history`/lore and probe reads
+`manifest.content`, none of which a stored world persists — so the pack must be re-supplied.
+Backfill is **preview-only** (mirrors `uro world backfill` — it commits nothing); committing the
+`ai_backfill` `ThreadCreated` seeds is `world create --backfill`, which rides the deferred
+pack-upload **create** endpoint. Probe is **warn-not-fail** (D-24): a weak/refusing model yields
+`status=warn|fail` in a `200` report (`ok` is the machine verdict), never an HTTP error; a real
+provider transport failure is a `502`, a malformed pack a `400`, and an unwired provider a `501`.
+An over-cap upload (Content-Length > 20 MB) is `413`'d by a small middleware **before** the body is
+spooled — so a large body can't be buffered pre-auth on these operator-only routes (the same guard
+now also fronts `/worlds/validate`; `/worlds/import`'s legitimately-large JSON bundle is exempt).
+CI never makes live calls — the stub provider drives the deterministic path; the live pass is the
+operator's. Still **CLI-only / scaffolded** (deferred, not regressed): world `seed`, the SSE `POST
+…/beats` (play is WS), and world `state?at=`. `seed` is
 carved out on purpose — `seed_history` needs the pack's `manifest.history` (era, simulate_years),
 which the world does **not** persist in a `seed_history`-usable form (`WorldGenesis` stores only
 name/tone/overrides/ruleset/rule-pack), so a `{seed}`-only body can't reconstruct it; seeding needs
