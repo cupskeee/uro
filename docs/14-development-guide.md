@@ -138,24 +138,29 @@ pgvector store), `uro-core[llm]` (the LLM provider adapters), `uro-core[all]` (b
 `uro-server` pull both extras. All **three** packages publish together: `uro-cli` imports
 `uro-server` (for `uro serve`), which builds on `uro-core`, and they are single-versioned.
 
-**One-time setup (owner, on pypi.org).** Register a *trusted publisher* (OIDC — no stored token) for
-**each** of `uro-core`, `uro-server`, `uro-cli`, all pointing at the same identity:
+**One-time setup (owner).** Each package gets its **own** GitHub environment + trusted publisher.
+They cannot share one environment: a PyPI *pending* publisher must be unique on
+`(owner, repo, workflow, environment)`, so three packages on `environment: pypi` collide ("a pending
+trusted publisher matching this configuration has already been registered for a different project
+name"). So `publish.yml` runs one job per package in a distinct environment:
 
-| field | value |
-|---|---|
-| PyPI project name | `uro-core` / `uro-server` / `uro-cli` (one publisher each) |
-| Owner | `cupskeee` |
-| Repository | `uro` |
-| Workflow | `publish.yml` |
-| Environment | `pypi` |
+| PyPI project | GitHub environment | Owner | Repository | Workflow |
+|---|---|---|---|---|
+| `uro-core` | `pypi-core` | `cupskeee` | `uro` | `publish.yml` |
+| `uro-server` | `pypi-server` | `cupskeee` | `uro` | `publish.yml` |
+| `uro-cli` | `pypi-cli` | `cupskeee` | `uro` | `publish.yml` |
 
-Also create a GitHub Actions **environment** named `pypi` in the repo settings (add required
-reviewers there if you want a manual approval gate before every upload).
+1. In repo **Settings → Environments**, create `pypi-core`, `pypi-server`, `pypi-cli` (empty is fine;
+   add required reviewers on any of them for a manual approval gate before that upload).
+2. On **pypi.org → Account → Publishing**, add a *pending publisher* per row above (Workflow name is
+   the filename `publish.yml`; Environment is the matching `pypi-<pkg>`). Field values must match
+   character-for-character.
 
 **Each release.** After cutting the release (steps above), run the publish workflow: Actions →
-**publish** → *Run workflow*. It builds all three packages and uploads them via trusted publishing —
-no API tokens anywhere. (A `ghcr.io` `uro-server` image is a further, still-deferred step: it needs
-a Dockerfile, and `uro-server` is a thin shell for now.)
+**publish** → *Run workflow*. Jobs run `uro-core` → `uro-server` → `uro-cli` (a dependency lands on
+PyPI before its dependents) and upload via trusted publishing — no API tokens anywhere. Set up all
+three publishers before the first run so it completes in one pass. (A `ghcr.io` `uro-server` image is
+a further, still-deferred step: it needs a Dockerfile, and `uro-server` is a thin shell for now.)
 
 ## Definition of done (any phase)
 

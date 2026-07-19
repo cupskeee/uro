@@ -1,18 +1,19 @@
 # PyPI publish (D-43, docs/14). OWNER-ACTIVATED and MANUAL by design.
 #
+# One job per package, each in its OWN GitHub environment (pypi-core / pypi-server / pypi-cli).
+# Why not one shared environment: a PyPI *pending* trusted publisher must be unique on
+# (owner, repo, workflow, environment) — three packages sharing `environment: pypi` collide
+# ("a pending trusted publisher matching this configuration has already been registered for a
+# different project name"). Distinct environments give each package a distinct publisher config.
+#
 # This workflow is inert until the owner completes a one-time PyPI setup: a "pending publisher"
-# (trusted publishing / OIDC) for EACH of uro-core, uro-server, and uro-cli, all pointing at
-#   owner/repo = cupskeee/uro · workflow = publish.yml · environment = pypi
-# Publishing uro-cli requires uro-server and uro-core on PyPI too (uro-cli imports uro-server
-# for `uro serve`), so all three ship together — they are single-versioned across the workspace.
+# (trusted publishing / OIDC) for EACH package, all pointing at
+#   owner/repo = cupskeee/uro · workflow = publish.yml · environment = pypi-<pkg>
+# (matching GitHub environments must exist in repo Settings → Environments). See docs/14.
 #
-# Order of operations for a release (see docs/14 "Publishing to PyPI"):
-#   1. `just release X.Y.Z` (bumps the three pyprojects + CHANGELOG, tags, pushes) — cuts the
-#      GitHub Release via release.yml.
-#   2. Run this workflow (Actions → publish → Run workflow) to upload the built artifacts.
-#
-# No API tokens: PyPI trusted publishing authenticates via the job's OIDC identity. No
-# third-party marketplace actions — uv is installed with pip on the runner.
+# Jobs run core → server → cli so a dependency is on PyPI before its dependents (uro-cli imports
+# uro-server, which builds on uro-core; they are single-versioned). No API tokens: trusted
+# publishing authenticates via the job's OIDC identity. No third-party marketplace actions.
 name: publish
 
 on:
@@ -22,9 +23,9 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  uro-core:
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: pypi-core
     permissions:
       id-token: write # OIDC for PyPI trusted publishing — no stored token
     steps:
@@ -34,10 +35,43 @@ jobs:
           python-version: "3.12"
       - name: Install uv
         run: pip install uv
-      - name: Build all three packages
-        run: |
-          uv build --package uro-core
-          uv build --package uro-server
-          uv build --package uro-cli
-      - name: Publish to PyPI (trusted publishing)
+      - name: Build uro-core
+        run: uv build --package uro-core
+      - name: Publish uro-core
+        run: uv publish
+
+  uro-server:
+    needs: uro-core
+    runs-on: ubuntu-latest
+    environment: pypi-server
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Build uro-server
+        run: uv build --package uro-server
+      - name: Publish uro-server
+        run: uv publish
+
+  uro-cli:
+    needs: uro-server
+    runs-on: ubuntu-latest
+    environment: pypi-cli
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Build uro-cli
+        run: uv build --package uro-cli
+      - name: Publish uro-cli
         run: uv publish
