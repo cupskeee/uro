@@ -111,17 +111,23 @@ the transactional outbox + async event bus (docs/07 — the shipped model is inl
 `uro world delete` (privacy wipe), persisted probe reports, the per-campaign expected-head
 concurrency guard, consequence-gating (D-21), the `entity_index` (OQ-3). (The **REST management
 surface** is no longer fully reserved — B3/#12 shipped the authed CRUD/read core over the
-`EngineStore` port; some endpoints — seed/probe, SSE beats, `/usage` — stay
+`EngineStore` port; some endpoints — seed/probe/backfill, SSE beats, world `state?at=` — stay
 CLI-only. The timeline surface now ships over HTTP: branch **list** + **log** (reads), **fork** +
 **marker-create** (operator-only, D-44), the **raw event log + commit detail** (operator-only,
 D-45 — omniscient truth, never a player read), **dry-run** (intent-only, D-37) + **consistency**
 (the T2 proxy), **pack validate** (a `.zip` upload → sufficiency grade, parse-only), **campaign end**
-(operator-only, D-44), the **codex** (participant-memory get/post, self-or-admin D-39) and world
+(operator-only, D-44), the **codex** (participant-memory get/post, self-or-admin D-39), world
 **export/import** (a hash-chained bundle out / verify-chain-then-instantiate in; both operator-only —
-export D-45 disclosure, import D-44 structural write; a tampered bundle → 400 before any write) —
-BE-1..BE-9, #33-#41. Pack-upload *create* + backfill/probe/**seed** stay CLI-only — seed is carved
-out because `seed_history` needs the pack's `manifest.history`, which the world doesn't persist, so
-it belongs with pack-upload create, not a `{seed}`-only body.)
+export D-45 disclosure, import D-44 structural write; a tampered bundle → 400 before any write),
+**usage telemetry** (`/usage[?stage=]` — llm_calls aggregated by stage, operator-only D-44; the
+engine exposes metering, never bills; `?world=`/`?campaign=` honestly 400 — the rows aren't keyed by
+world/campaign yet), the **ruleset registry** (`/rulesets` — id@version + sheet shape, any-authed)
+and the **world-scoped chronicle** (`/worlds/{w}/chronicle` — any named branch's recent beats,
+operator-only) — BE-1..BE-10, #33-#42. Pack-upload *create* + backfill/probe/**seed** + world
+**`state?at=`** stay CLI-only — seed is carved out because `seed_history` needs the pack's
+`manifest.history` (which the world doesn't persist → belongs with pack-upload create, not a
+`{seed}`-only body); world `state?at=` is a new read-only materialize-at-commit primitive deferred
+to its own focused slice + tests, not the head-only `query_across` the campaign `/state` uses.)
 
 **Cross-branch reads (B5/#14):** `store.query_across(branch_ids, sections)` (one query per section
 via `branch_id = ANY(...)`, not N round-trips) + `diff_branches(a, b)` (added/removed/changed by PK)
