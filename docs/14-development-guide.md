@@ -109,10 +109,15 @@ the event catalog, the world-pack + export formats) is declared stable. `CHANGEL
   breaks anyone building on it. (Pre-public cleanup is the only exception, done once.)
 - A change destined for the next release adds a `CHANGELOG.md [Unreleased]` entry as part of the PR.
 
-**Cutting a release.** A release is a tag + notes; it publishes to no package registry (that's a
-deliberate deferral — consumers embed `uro-core` from git, see the README). Steps:
+**Cutting a release.** A release is a tag + GitHub Release notes (via `release.yml`). Publishing the
+packages to PyPI is a *separate, owner-activated* step (see below). Steps:
 
-1. On a green `main`, bump the `version` in all three `packages/*/pyproject.toml` to `X.Y.Z`.
+1. On a green `main`, bump the `version` in all three `packages/*/pyproject.toml` to `X.Y.Z`, and
+   the internal `uro-core[...]==X.Y.Z` / `uro-server==X.Y.Z` pins in the `uro-cli` and `uro-server`
+   deps to match (the workspace is single-versioned; the pins keep a partial `pip install --upgrade`
+   from mismatching them). `uv sync` fails loudly if a pin drifts from the workspace version, so a
+   forgotten bump is caught by the gate. (`__version__` is read from installed metadata, so it
+   follows the pyproject automatically — no separate copy to sync.)
 2. In `CHANGELOG.md`, move the `[Unreleased]` entries under a new `## [X.Y.Z] - YYYY-MM-DD` section
    (and add its compare/tag link at the bottom).
 3. Commit (`release: vX.Y.Z`), open/merge the PR.
@@ -121,9 +126,36 @@ deliberate deferral — consumers embed `uro-core` from git, see the README). St
 5. `git push origin main --follow-tags`. Pushing the tag triggers `.github/workflows/release.yml`,
    which creates the GitHub Release with that version's CHANGELOG section as the notes.
 
-No PyPI / GitHub-Packages publishing yet: GitHub Packages has no Python registry, and PyPI/ghcr are
-premature for a PoC. When distribution is wanted, add an `on: release` job (PyPI trusted-publishing
-for `uro-core`, or a `uro-server` image to `ghcr.io`).
+### Publishing to PyPI (owner-activated)
+
+Distribution posture (D-43): `uro-core` is embeddable from git today, and the packages can also be
+published to PyPI. Publishing is deliberately **manual and owner-activated** — it needs a one-time
+account setup the workflow can't do for you, and there is no downstream consumer forcing a cadence.
+
+**Package layout.** The base `uro-core` install is the pure engine (it imports only ports, no DB
+driver or HTTP client); the bundled adapters are extras — `uro-core[postgres]` (the Postgres +
+pgvector store), `uro-core[llm]` (the LLM provider adapters), `uro-core[all]` (both). `uro-cli` and
+`uro-server` pull both extras. All **three** packages publish together: `uro-cli` imports
+`uro-server` (for `uro serve`), which builds on `uro-core`, and they are single-versioned.
+
+**One-time setup (owner, on pypi.org).** Register a *trusted publisher* (OIDC — no stored token) for
+**each** of `uro-core`, `uro-server`, `uro-cli`, all pointing at the same identity:
+
+| field | value |
+|---|---|
+| PyPI project name | `uro-core` / `uro-server` / `uro-cli` (one publisher each) |
+| Owner | `cupskeee` |
+| Repository | `uro` |
+| Workflow | `publish.yml` |
+| Environment | `pypi` |
+
+Also create a GitHub Actions **environment** named `pypi` in the repo settings (add required
+reviewers there if you want a manual approval gate before every upload).
+
+**Each release.** After cutting the release (steps above), run the publish workflow: Actions →
+**publish** → *Run workflow*. It builds all three packages and uploads them via trusted publishing —
+no API tokens anywhere. (A `ghcr.io` `uro-server` image is a further, still-deferred step: it needs
+a Dockerfile, and `uro-server` is a thin shell for now.)
 
 ## Definition of done (any phase)
 

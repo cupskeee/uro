@@ -106,6 +106,18 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - `py.typed` markers on all three packages (PEP 561 — ship types to embedding consumers).
 - Public package metadata in each `pyproject.toml` (`[project.urls]`, authors; keywords on uro-core).
 - Least-privilege `permissions: contents: read` on the CI workflow.
+- **Docker-first quickstart (#15, D-43)** — running any `uro` command against an unreachable
+  database now prints one actionable line (`docker compose up -d --wait`, host port 5433, then
+  `uro db migrate`; `URO_DATABASE_URL` to point elsewhere) instead of a raw driver traceback, via a
+  single `connect_store` wrapper. Postgres + pgvector stays the one store — no second backend.
+- **Dependency extras (#15, D-43)** — `uro-core`'s base install is now the pure engine (it imports
+  only ports); the bundled adapters move behind extras: `uro-core[postgres]` (the Postgres + pgvector
+  store), `uro-core[llm]` (the LLM provider adapters), `uro-core[all]`. `uro-cli` and `uro-server`
+  pull both. Verified in a clean venv: the base install carries none of `asyncpg`/`pgvector`/`httpx`.
+- **PyPI publishing plumbing (#15, D-43)** — an owner-activated `publish` workflow (trusted
+  publishing / OIDC, no stored token) builds and uploads all three packages together; wheels now ship
+  the LICENSE (`license-files`) and a per-package README as the PyPI long description. One-time
+  pending-publisher setup and the run order are in `docs/14` → "Publishing to PyPI".
 
 ### Fixed
 - Reconciled `docs/16-honesty-ledger.md` and `docs/10-roadmap.md` to cover Phase 10 (the computation
@@ -117,6 +129,8 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   private-vulnerability-reporting + secret-scanning on the repo so SECURITY.md's channel works.
 - `just release` now checks all three package versions, not just uro-core.
 - Guarded a stray root `data` file (PII) in `.gitignore`.
+- `__version__` (and so `uro version`) now reads from installed package metadata on all three
+  packages — it was hardcoded `0.0.1` and had drifted from the `0.1.0` in each `pyproject.toml`.
 
 ## [0.1.0] - 2026-07-13
 

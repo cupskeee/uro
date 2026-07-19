@@ -15,7 +15,9 @@ import os
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
+import asyncpg
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.providers.adapters.anthropic import AnthropicProvider
 from uro_core.providers.adapters.openai_compat import OpenAICompatProvider
@@ -36,6 +38,40 @@ def db_dsn() -> str:
 
 def build_store() -> PostgresEventStore:
     return PostgresEventStore(db_dsn())
+
+
+class DatabaseUnavailable(RuntimeError):
+    """The engine's Postgres + pgvector database couldn't be reached. Subclasses RuntimeError
+    so `_run_async` prints its (actionable) message as a clean `error: ...` line — the
+    docker-first quickstart path (docs/14), not a raw asyncpg/OSError traceback."""
+
+
+def _safe_dsn(dsn: str) -> str:
+    """A DSN with any embedded password stripped — safe to print in a user-facing error (a DSN
+    from URO_DATABASE_URL may carry credentials). Keeps user@host:port/db for debuggability."""
+    try:
+        p = urlsplit(dsn)
+    except ValueError:
+        return "the configured database"
+    if not p.hostname:
+        return dsn  # not a URL DSN (e.g. a keyword string) — nothing to strip
+    user = f"{p.username}@" if p.username else ""
+    port = f":{p.port}" if p.port else ""
+    return urlunsplit((p.scheme, f"{user}{p.hostname}{port}", p.path, "", ""))
+
+
+async def connect_store(store: PostgresEventStore) -> None:
+    """Open the store's connection pool, translating a connection failure into an actionable
+    hint. Uro's only store is Postgres + pgvector (D-43): if it isn't up, point the user at
+    the one command that starts it rather than leaking the driver's error."""
+    try:
+        await store.connect()
+    except (OSError, asyncpg.PostgresError) as exc:
+        raise DatabaseUnavailable(
+            f"can't reach the Uro database at {_safe_dsn(store.dsn)}. Start Postgres + pgvector "
+            "with `docker compose up -d --wait` (host port 5433), then `uro db migrate`. "
+            "Point elsewhere with URO_DATABASE_URL. See the README quickstart."
+        ) from exc
 
 
 def build_ruleset(

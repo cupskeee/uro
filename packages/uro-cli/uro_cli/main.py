@@ -16,7 +16,14 @@ from uro_core.rulesets.base import CharSpec
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import World
 
-from uro_cli.wiring import build_router, build_ruleset, build_store, parse_role_models
+from uro_cli.wiring import (
+    DatabaseUnavailable,
+    build_router,
+    build_ruleset,
+    build_store,
+    connect_store,
+    parse_role_models,
+)
 
 app = typer.Typer(no_args_is_help=True, help="Uro Engine — reference client.")
 db_app = typer.Typer(no_args_is_help=True, help="Database management.")
@@ -85,7 +92,7 @@ def db_migrate() -> None:
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             applied = await store.migrate()
         finally:
@@ -105,7 +112,7 @@ def world_new(name: str) -> None:
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             world = await store.create_world(name)
             sheet, ruleset_id = _build_pc_sheet()
@@ -204,7 +211,7 @@ def world_create(
             typer.echo(f"error: pack is INSUFFICIENT to run: {'; '.join(report.gaps)}", err=True)
             raise typer.Exit(1)
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             world = await store.create_world(
                 pack.manifest.name,
@@ -246,7 +253,7 @@ def world_seed(
             raise typer.Exit(1) from exc
         events = seed_history(pack.manifest, Rng(seed))
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             world = await store.get_world_by_name(pack.manifest.name)
             if world is None:
@@ -348,7 +355,7 @@ def world_export(
         from pathlib import Path
 
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             w = await _world_or_exit(store, world)
             bundle = await store.export_world(w.world_id)
@@ -373,7 +380,7 @@ def world_import(path: str) -> None:
 
         bundle = WorldBundle.model_validate_json(Path(path).read_text())
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             world = await store.import_world(bundle)
         except ExportError as exc:
@@ -416,7 +423,7 @@ def play(
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             campaign = await store.get_campaign(campaign_id)
             if campaign is None:
@@ -546,13 +553,27 @@ def serve(
 
     @fastapi_app.on_event("startup")
     async def _startup() -> None:
-        await store.connect()
+        await connect_store(store)
         if deps.hydrate_tokens is not None:  # load durable runtime tokens (D-39) — AFTER connect
             await deps.hydrate_tokens()
 
     @fastapi_app.on_event("shutdown")
     async def _shutdown() -> None:
         await store.close()
+
+    # Preflight the DB here so a down database gets the same clean docker-first hint every other
+    # command gives (via connect_store), instead of a uvicorn "Application startup failed"
+    # traceback. The live pool is (re)opened by the startup hook on uvicorn's own event loop — an
+    # asyncpg pool is bound to the loop that created it, so this throwaway probe is closed at once.
+    async def _preflight() -> None:
+        await connect_store(store)
+        await store.close()
+
+    try:
+        asyncio.run(_preflight())
+    except DatabaseUnavailable as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
     shape = type(arbiter).__name__ if arbiter is not None else "solo"
     typer.echo(
@@ -699,7 +720,7 @@ def branch_list(world: str) -> None:
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             w = await _world_or_exit(store, world)
             branches = await store.list_branches(w.world_id)
@@ -735,7 +756,7 @@ def branch_fork(
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             w = await _world_or_exit(store, world)
             branch = await store.fork_branch(w.world_id, at, name)
@@ -765,7 +786,7 @@ def branch_mark(
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             w = await _world_or_exit(store, world)
             b = await store.get_branch_by_name(w.world_id, branch)
@@ -790,7 +811,7 @@ def log(
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             w = await _world_or_exit(store, world)
             b = await store.get_branch_by_name(w.world_id, branch)
@@ -826,7 +847,7 @@ def campaign_new(
             typer.echo("provide exactly one of --adopt <actor_id> or --pc <name>", err=True)
             raise typer.Exit(1)
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             w = await _world_or_exit(store, world)
             b = await store.get_branch_by_name(w.world_id, branch)
@@ -877,7 +898,7 @@ def campaign_end(
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             m = await store.end_campaign(campaign_id, marker, outcome=outcome)
         finally:
@@ -903,7 +924,7 @@ def campaign_join(
             typer.echo("provide exactly one of --adopt <actor_id> or --pc <name>", err=True)
             raise typer.Exit(1)
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             campaign = await store.get_campaign(campaign_id)
             if campaign is None:
@@ -947,7 +968,7 @@ def dry_run(
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             campaign = await store.get_campaign(campaign_id)
             if campaign is None:
@@ -981,7 +1002,7 @@ def consistency(campaign_id: str) -> None:
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             campaign = await store.get_campaign(campaign_id)
             if campaign is None:
@@ -1019,7 +1040,7 @@ def codex_add(
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             campaign = await store.get_campaign(campaign_id)
             if campaign is None:
@@ -1046,7 +1067,7 @@ def codex_list(
 
     async def _run() -> None:
         store = build_store()
-        await store.connect()
+        await connect_store(store)
         try:
             campaign = await store.get_campaign(campaign_id)
             if campaign is None:

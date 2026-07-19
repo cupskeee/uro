@@ -75,7 +75,7 @@ uv run python examples/hello_uro/hello_uro.py   # embed the engine as a library 
 
 Without `just`, `just test` is just: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run lint-imports && uv run pytest`.
 
-**Building on the engine?** [`examples/hello_uro/hello_uro.py`](examples/hello_uro/hello_uro.py) is the smallest real consumer — it imports `uro_core` directly and drives one campaign showing recall, the Reaction Layer, and branching, deterministically (no API key). Per-role model bindings go in `uro.toml` (`[llm.roles]`, see [`uro.example.toml`](uro.example.toml)); secrets stay in env vars.
+**Building on the engine?** [`examples/hello_uro/hello_uro.py`](examples/hello_uro/hello_uro.py) is the smallest real consumer — it imports `uro_core` directly and drives one campaign showing recall, the Reaction Layer, and branching, deterministically (no API key). Per-role model bindings go in `uro.toml` (`[llm.roles]`, see [`uro.example.toml`](uro.example.toml)); secrets stay in env vars. The base `uro-core` install is the pure engine (it imports only ports); enable the bundled Postgres + pgvector store and LLM providers with the `uro-core[postgres,llm]` extras (or `[all]`). Uro's store is Postgres + pgvector — if it isn't reachable, `uro` tells you exactly how to start it.
 
 ## Architecture
 
