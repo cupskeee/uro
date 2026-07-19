@@ -67,6 +67,10 @@ class ServerDeps:
     # None → those endpoints return 501 (a fake-deps test that only exercises play/outcome).
     store: EngineStore | None = None
     advance_time: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None
+    # Branch-scoped time-skip + downtime agendas (BE-2 fork `--time-skip-days`): engine.agenda_tick
+    # on a raw branch id (a fork has no campaign), returning the new in-fiction day. None → fork's
+    # optional time-skip leg returns 501.
+    advance_branch_time: Callable[[str, int], Awaitable[int]] | None = None
     # Runtime token management (docs/18 B10, D-39): mint/revoke durable session tokens + the admin
     # check, behind the same resolve_participant choke point. None → the token endpoints return 501.
     mint_token: Callable[[str, str], Awaitable[str]] | None = None  # (participant, campaign)→token
@@ -138,6 +142,13 @@ def engine_deps(
         world_day = await store.current_world_time(campaign.branch_id)
         return {"branch_id": campaign.branch_id, "world_day": world_day}
 
+    async def advance_branch_time(branch_id: str, days: int) -> int:
+        # BE-2 fork `--time-skip-days`: the same helper the CLI `uro branch fork` uses — agenda_tick
+        # advances in-fiction time AND fires the world's downtime agenda rules (D-33), no LLM. A
+        # rule-less world → a plain time-skip. Returns the new in-fiction day.
+        await engine.agenda_tick(branch_id, days)
+        return await store.current_world_time(branch_id)
+
     return ServerDeps(
         resolve_participant=registry.resolve,
         campaign_exists=campaign_exists,
@@ -145,6 +156,7 @@ def engine_deps(
         report_outcome=report_outcome,
         store=store,
         advance_time=advance_time,
+        advance_branch_time=advance_branch_time,
         mint_token=registry.mint,
         revoke_token=registry.revoke,
         is_admin=registry.is_admin,
@@ -227,6 +239,17 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             raise HTTPException(status_code=400, detail=f"missing required field {key!r}")
         return body[key]
 
+    def _require_operator(request: Request) -> None:
+        """OPERATOR-only gate (D-44): 401 on a missing/invalid token, then 403 unless the caller
+        holds the operator tier (`--admin-token`). A *structural write* to a world's branch
+        topology — fork a branch, mint a marker — is operator-only; a player token can READ the
+        tree/log (`_auth`) but not reshape it. Same `is_admin` choke point as `_scope`."""
+        _, caller, admin = _scope(request)
+        if caller is None:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        if not admin:
+            raise HTTPException(status_code=403, detail="operator token required")
+
     @app.post("/worlds")
     async def create_world(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:  # noqa: B008
         _auth(request)
@@ -265,6 +288,100 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
                 {**b.model_dump(), "world_day": days.get(b.branch_id, 0)} for b in branches
             ],
             "markers": [m.model_dump() for m in markers],
+        }
+
+    @app.post("/worlds/{world_id}/branches")
+    async def fork_world_branch(
+        world_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Fork a branch from any commit or marker (BE-2, docs/03). OPERATOR-only (D-44 — a fork is
+        a structural write: copy-on-fork rebuilds projections + copies memory rows). `from_ref` is a
+        marker name OR a raw commit id (markers win on collision). `time_skip_days>0` advances
+        in-fiction time on the new branch and fires downtime agenda rules — parity with
+        `uro branch fork --time-skip-days`."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        from_ref = _require(body, "from_ref")
+        name = _require(body, "name")
+        try:
+            days = int(body.get("time_skip_days") or 0)
+        except (TypeError, ValueError) as exc:  # a non-numeric time_skip_days is bad input, not 500
+            raise HTTPException(
+                status_code=400, detail="time_skip_days must be an integer"
+            ) from exc
+        if days < 0:
+            raise HTTPException(status_code=400, detail="time_skip_days must be >= 0")
+        try:
+            # fork_branch resolves the ref internally: a duplicate branch name → ValueError, an
+            # unknown marker/commit → KeyError. Both are bad INPUT → 400 (never a raw 500).
+            branch = await store.fork_branch(world_id, from_ref, name)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        result = (
+            branch.model_dump()
+        )  # {branch_id, world_id, name, head_commit(fork pt), forked_from}
+        if days > 0:
+            if deps.advance_branch_time is None:
+                raise HTTPException(status_code=501, detail="time-skip not enabled")
+            # A separate txn from the fork (same non-atomicity as the CLI): the fork is durable; a
+            # failed skip leaves the new branch standing at the fork point.
+            result["world_day"] = await deps.advance_branch_time(branch.branch_id, days)
+            fresh = await store.get_branch(
+                branch.branch_id
+            )  # the head advanced past the fork point
+            if fresh is not None:
+                result["head_commit"] = fresh.head_commit
+        return result
+
+    @app.post("/worlds/{world_id}/markers")
+    async def create_world_marker(
+        world_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Name a branch's current head with an immutable marker (BE-3, docs/03). OPERATOR-only
+        (D-44 — a structural ref write). Markers name a branch HEAD, not an arbitrary commit;
+        `branch` defaults to `main`. Mirrors `uro branch mark`."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        name = _require(body, "name")
+        branch = str(body.get("branch") or "main")
+        b = await store.get_branch_by_name(world_id, branch)
+        if b is None:
+            raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
+        try:
+            marker = await store.create_marker(world_id, name, b.branch_id)
+        except ValueError as exc:  # duplicate marker name (UNIQUE per world) = bad input
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return marker.model_dump()
+
+    @app.get("/worlds/{world_id}/log")
+    async def world_branch_log(world_id: str, request: Request) -> dict[str, Any]:
+        """A branch's commit lineage, git-log style (BE-3, docs/03). A plain any-authed READ
+        (`_auth`). Head→genesis order; `?branch=` (default `main`), `?limit=` (default 20)."""
+        _auth(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch = request.query_params.get("branch") or "main"
+        try:
+            limit = int(request.query_params.get("limit") or 20)
+        except ValueError as exc:  # ?limit=abc is bad input → 400, not a 500
+            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
+        b = await store.get_branch_by_name(world_id, branch)
+        if b is None:
+            raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
+        entries = await store.lineage(b.branch_id, limit)
+        return {
+            "branch": branch,
+            "head_depth": b.head_depth,
+            "entries": [e.model_dump() for e in entries],
         }
 
     @app.post("/worlds/{world_id}/campaigns")

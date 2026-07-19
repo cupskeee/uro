@@ -10,10 +10,16 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
-- **`GET /worlds/{w}/branches` (BE-1, #33)** — the branch-list read over HTTP: the branch tree
-  (head, depth, fork origin) + markers + each branch's in-fiction day, mirroring `uro branch list`.
-  A plain any-authed read (D-44 — reads are ungated; only structural writes / act-for-another are
-  operator-scoped). First of the uro-loom backend co-evolution endpoints (epic #44).
+- **Timeline HTTP surface (BE-1/BE-2/BE-3, #33–#35)** — the branch-graph endpoints, epic #44:
+  - `GET /worlds/{w}/branches` (BE-1) — branch tree + markers + each branch's in-fiction day.
+  - `GET /worlds/{w}/log[?branch=&limit=]` (BE-3) — commit lineage, git-log style.
+  - `POST /worlds/{w}/branches {from_ref, name, time_skip_days?}` (BE-2) — fork from a commit/marker,
+    with optional downtime-agenda time-skip (parity with `uro branch fork`).
+  - `POST /worlds/{w}/markers {name, branch?}` (BE-3) — name a branch head.
+  - **Authority (D-44):** the reads are any-authed; the structural writes (fork, marker-create) are
+    **operator-only** (`--admin-token`; a plain player token → 403) via a new `_require_operator`
+    gate on the existing `is_admin` choke point. A new `advance_branch_time` server dep runs the
+    fork's `--time-skip-days` via `engine.agenda_tick`.
 
 ### Fixed
 - **PyPI publish workflow** — split into one job per package, each in its own GitHub environment

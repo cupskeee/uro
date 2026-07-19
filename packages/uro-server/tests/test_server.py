@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-from uro_core.timeline.models import BranchInfo, Marker, World
+from uro_core.timeline.models import Branch, BranchInfo, LineageEntry, Marker, World
 from uro_server.app import ServerDeps, create_app
 from uro_server.sessions import SessionHub
 
@@ -565,3 +565,189 @@ def test_a_failed_beat_still_rotates_the_party_token() -> None:
         # player-2 now holds → their intent runs (also fails) — NOT a not_your_turn (rotation held)
         b.send_json({"type": "intent", "text": "boom"})
         assert _recv_until(a, "beat_failed")[-1]["participant_id"] == "player-2"
+
+
+# --- BE-2 (#34) + BE-3 (#35): fork / marker-create (operator-tier, D-44) + log (read) ---
+
+
+class _FakeTimelineStore:
+    """EngineStore stand-in for the BE-2/BE-3 timeline endpoints — no live DB. Error knobs let a
+    test drive fork_branch/create_marker's ValueError(dup)/KeyError(bad ref) paths into 400s."""
+
+    def __init__(
+        self,
+        *,
+        world_exists: bool = True,
+        branch_exists: bool = True,
+        fork_error: Exception | None = None,
+        marker_error: Exception | None = None,
+    ) -> None:
+        self._world_exists = world_exists
+        self._branch_exists = branch_exists
+        self._fork_error = fork_error
+        self._marker_error = marker_error
+        self.forked: tuple[str, str, str] | None = None  # (world_id, from_ref, name)
+
+    async def get_world(self, world_id: str) -> World | None:
+        if not self._world_exists:
+            return None
+        return World(world_id=world_id, name="Ashfall", main_branch_id="b:main")
+
+    async def get_branch_by_name(self, world_id: str, name: str) -> BranchInfo | None:
+        if not self._branch_exists:
+            return None
+        return BranchInfo(
+            branch_id="b:main", world_id=world_id, name=name, head_commit="c:7", head_depth=3
+        )
+
+    async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:
+        if self._fork_error is not None:
+            raise self._fork_error
+        self.forked = (world_id, from_ref, name)
+        return Branch(
+            branch_id="b:fork", world_id=world_id, name=name, head_commit="c:3", forked_from="c:3"
+        )
+
+    async def create_marker(self, world_id: str, name: str, branch_id: str) -> Marker:
+        if self._marker_error is not None:
+            raise self._marker_error
+        return Marker(marker_id="m:1", world_id=world_id, name=name, commit_id="c:7")
+
+    async def lineage(self, branch_id: str, limit: int = 50) -> list[LineageEntry]:
+        return [
+            LineageEntry(
+                commit_id="c:7",
+                depth=3,
+                event_types=["BeatResolved"],
+                summary="I open the door",
+                markers=["pre-strike"],
+            ),
+            LineageEntry(
+                commit_id="c:0",
+                depth=0,
+                event_types=["WorldGenesis"],
+                summary="genesis",
+                markers=[],
+            ),
+        ]
+
+
+def _operator_deps(store: object) -> ServerDeps:
+    """A fake-deps with a wired store where tok-a is the OPERATOR (tok-b a plain player)."""
+    deps = _fake_deps()
+    deps.store = store  # type: ignore[assignment]
+    deps.is_admin = lambda t: t == "tok-a"
+    return deps
+
+
+# BE-2: fork
+
+
+def test_fork_branch_operator_can_fork_from_a_ref() -> None:
+    store = _FakeTimelineStore()
+    resp = TestClient(create_app(_operator_deps(store))).post(
+        "/worlds/w:1/branches?token=tok-a", json={"from_ref": "pre-strike", "name": "what-if"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["branch_id"] == "b:fork" and body["forked_from"] == "c:3"
+    assert store.forked == ("w:1", "pre-strike", "what-if")  # the ref passed straight through
+
+
+def test_fork_branch_403_for_a_plain_player_token() -> None:
+    # D-44: a fork is a structural write → operator-only. tok-b resolves but is NOT admin.
+    resp = TestClient(create_app(_operator_deps(_FakeTimelineStore()))).post(
+        "/worlds/w:1/branches?token=tok-b", json={"from_ref": "pre-strike", "name": "x"}
+    )
+    assert resp.status_code == 403
+
+
+def test_fork_branch_401_without_a_valid_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeTimelineStore()))).post(
+        "/worlds/w:1/branches?token=nope", json={"from_ref": "pre-strike", "name": "x"}
+    )
+    assert resp.status_code == 401
+
+
+def test_fork_branch_404_for_an_unknown_world() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeTimelineStore(world_exists=False)))).post(
+        "/worlds/nope/branches?token=tok-a", json={"from_ref": "pre-strike", "name": "x"}
+    )
+    assert resp.status_code == 404
+
+
+def test_fork_branch_400_on_a_duplicate_name() -> None:
+    # fork_branch re-raises the UNIQUE violation as a ValueError → 400 (not a raw 500)
+    store = _FakeTimelineStore(fork_error=ValueError("branch 'main' already exists in this world"))
+    resp = TestClient(create_app(_operator_deps(store))).post(
+        "/worlds/w:1/branches?token=tok-a", json={"from_ref": "pre-strike", "name": "main"}
+    )
+    assert resp.status_code == 400
+
+
+def test_fork_branch_400_on_an_unknown_ref() -> None:
+    # resolve_ref raises KeyError for a bad marker/commit — must be caught into a 400, not a 500
+    store = _FakeTimelineStore(fork_error=KeyError("no marker or commit 'ghost' in world"))
+    resp = TestClient(create_app(_operator_deps(store))).post(
+        "/worlds/w:1/branches?token=tok-a", json={"from_ref": "ghost", "name": "x"}
+    )
+    assert resp.status_code == 400
+
+
+# BE-3: marker create
+
+
+def test_create_marker_operator_names_a_branch_head() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeTimelineStore()))).post(
+        "/worlds/w:1/markers?token=tok-a", json={"name": "pre-strike"}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "marker_id": "m:1",
+        "world_id": "w:1",
+        "name": "pre-strike",
+        "commit_id": "c:7",
+    }
+
+
+def test_create_marker_403_for_a_plain_player_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeTimelineStore()))).post(
+        "/worlds/w:1/markers?token=tok-b", json={"name": "x"}
+    )
+    assert resp.status_code == 403
+
+
+def test_create_marker_404_for_an_unknown_branch() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeTimelineStore(branch_exists=False)))).post(
+        "/worlds/w:1/markers?token=tok-a", json={"name": "x", "branch": "ghost"}
+    )
+    assert resp.status_code == 404
+
+
+def test_create_marker_400_on_a_duplicate_name() -> None:
+    store = _FakeTimelineStore(marker_error=ValueError("marker 'x' already exists in this world"))
+    resp = TestClient(create_app(_operator_deps(store))).post(
+        "/worlds/w:1/markers?token=tok-a", json={"name": "x"}
+    )
+    assert resp.status_code == 400
+
+
+# BE-3: log (a plain read — D-44 keeps reads open, so a NON-operator token works)
+
+
+def test_world_log_is_a_plain_read_open_to_any_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeTimelineStore()))).get(
+        "/worlds/w:1/log?token=tok-b"  # tok-b is NOT an operator → reads stay open per D-44
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["head_depth"] == 3
+    assert [e["commit_id"] for e in body["entries"]] == ["c:7", "c:0"]  # head→genesis
+    assert body["entries"][0]["markers"] == ["pre-strike"]
+
+
+def test_world_log_404_for_an_unknown_branch() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeTimelineStore(branch_exists=False)))).get(
+        "/worlds/w:1/log?token=tok-a&branch=ghost"
+    )
+    assert resp.status_code == 404
