@@ -10,7 +10,11 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent
-from uro_core.export import BundleCommit, BundleEvent  # transport shapes for a stored commit/event
+from uro_core.export import (
+    BundleCommit,
+    BundleEvent,
+    WorldBundle,  # a whole world's portable, hash-chained bundle (export/import)
+)
 from uro_core.metering import LLMCall
 from uro_core.timeline.models import (
     Branch,
@@ -173,4 +177,16 @@ class EventStore(Protocol):
         """Raw events along a branch's lineage (head→genesis), optionally filtered by event_type /
         an entity_ref / caused_by kind (BE-4). The omniscient event stream — operator-only at the
         edge (D-45). Bounded by `limit`."""
+        ...
+
+    async def export_world(self, world_id: str) -> WorldBundle:
+        """The whole world as a portable, SELF-CONSISTENT hash-chained bundle (docs/08): every
+        commit + its events, all branches/markers, plus the shared embedding + memory rows. Carries
+        the omniscient log — operator-only at the API edge (D-45)."""
+        ...
+
+    async def import_world(self, bundle: WorldBundle) -> World:
+        """Verify a bundle's hash chain (`ExportError` if altered in transit, BEFORE any write),
+        then instantiate it as a FRESH world — ids remapped, projections rebuilt by replay, the
+        semantic-memory cache re-inserted. A structural write — operator-only at the edge (D-44)."""
         ...

@@ -47,6 +47,8 @@ GET  /worlds/{w}/events          [?branch=&type=&entity_ref=&caused_by=&limit=] 
 GET  /worlds/{w}/commits/{id}                                      one commit's events (OPERATOR-only, D-45) (BE-4)
 POST /worlds/{w}/branches        {from_ref, name, time_skip_days?}  fork (OPERATOR-only, D-44) (BE-2)
 POST /worlds/{w}/markers         {name, branch?}                   name a branch head (OPERATOR-only, D-44) (BE-3)
+GET  /worlds/{w}/export                                            whole world → hash-chained bundle (OPERATOR-only, D-45) (BE-8)
+POST /worlds/import              {…WorldBundle JSON…}              verify chain + instantiate a fresh world (OPERATOR-only, D-44) (BE-8)
 POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id}   start_campaign
 GET  /campaigns                  [?world_id=]                      list
 GET  /campaigns/{c}                                                one campaign
@@ -67,9 +69,18 @@ rather than the aspirational `world`-scoped `?branch=&at=` form. A REST-created 
 world's declared ruleset and sheets its PC** exactly like the CLI `uro campaign new`/`join` path
 (D-30 + Phase-3) — so a PbtA world's campaign started over REST plays as PbtA, and the WS
 cross-ruleset guard still fires. Bad **input** is `400` (a malformed body, an unknown `?sections=`,
-a non-int `?limit=`, `days<=0`), an unknown campaign/world `404`. Still **CLI-only / scaffolded**
-(deferred, not regressed): world `seed`/`probe`/`export`/`import`, the SSE `POST …/beats`
-(play is WS), and `GET /usage`. **Authority:** the timeline summary reads (`/branches`, `/log`) are plain any-authed reads; the
+a non-int `?limit=`, `days<=0`), an unknown campaign/world `404`. **World export/import ship over
+HTTP (BE-8):** `GET …/export` returns the whole world as a portable, SHA-256 hash-chained
+`WorldBundle` JSON (the `.uwp` content); `POST /worlds/import` recomputes that chain and rejects a
+tampered bundle with `400` (`ExportError`) **before** any write, else re-instantiates a fresh world
+(remapped ids, projections rebuilt by replay). Both are **operator-only** (import a structural write
+→ D-44; export bulk omniscient disclosure → D-45). Still **CLI-only / scaffolded** (deferred, not
+regressed): world `seed`/`probe`, the SSE `POST …/beats` (play is WS), and `GET /usage`. `seed` is
+carved out on purpose — `seed_history` needs the pack's `manifest.history` (era, simulate_years),
+which the world does **not** persist in a `seed_history`-usable form (`WorldGenesis` stores only
+name/tone/overrides/ruleset/rule-pack), so a `{seed}`-only body can't reconstruct it; seeding needs
+the pack re-supplied and so belongs with the deferred pack-upload **create** endpoint, not a bare
+seed call. **Authority:** the timeline summary reads (`/branches`, `/log`) are plain any-authed reads; the
 *structural writes* — `POST …/branches` (fork) and `POST …/markers` — are **operator-only** (D-44;
 require an `--admin-token`, a plain player token → 403), via `_require_operator` on the same
 `is_admin` choke point as D-39's self-or-admin scoping. The **raw event log** (`GET …/events`,

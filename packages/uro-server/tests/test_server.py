@@ -15,7 +15,14 @@ import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-from uro_core.export import BundleCommit, BundleEvent
+from uro_core.export import (
+    BundleBranch,
+    BundleCommit,
+    BundleEvent,
+    WorldBundle,
+    stamp_chain,
+    verify_bundle,
+)
 from uro_core.timeline.models import (
     Branch,
     BranchInfo,
@@ -1190,3 +1197,127 @@ def test_codex_401_without_a_valid_token() -> None:
         "/campaigns/camp-1/codex?token=nope"
     )
     assert resp.status_code == 401
+
+
+# BE-8: world export / import
+
+
+def _valid_bundle(name: str = "Ashfall") -> WorldBundle:
+    """A minimal, hash-chain-STAMPED bundle (one genesis commit) — verify_bundle passes as-is."""
+    bundle = WorldBundle(
+        world_name=name,
+        commits=[
+            BundleCommit(
+                commit_id="c:1",
+                parent_id=None,
+                depth=0,
+                events=[
+                    BundleEvent(
+                        event_id="e:1",
+                        seq=0,
+                        event_type="WorldGenesis",
+                        world_time={},
+                        caused_by={"kind": "system"},
+                        payload={"world_name": name},
+                    )
+                ],
+            )
+        ],
+        branches=[BundleBranch(branch_id="b:main", name="main", head_commit="c:1")],
+        markers=[],
+    )
+    stamp_chain(bundle)
+    return bundle
+
+
+class _FakeExportStore:
+    """EngineStore stand-in for BE-8 export/import (no live DB). `import_world` runs the REAL
+    verify_bundle, so the tamper test exercises the genuine ExportError path."""
+
+    def __init__(self, *, world_exists: bool = True) -> None:
+        self._world_exists = world_exists
+        self.imported: WorldBundle | None = None
+
+    async def get_world(self, world_id: str) -> World | None:
+        if not self._world_exists:
+            return None
+        return World(world_id=world_id, name="Ashfall", main_branch_id="b:main")
+
+    async def export_world(self, world_id: str) -> WorldBundle:
+        return _valid_bundle()
+
+    async def import_world(self, bundle: WorldBundle) -> World:
+        verify_bundle(bundle)  # ExportError on a tampered bundle — BEFORE any write
+        self.imported = bundle
+        return World(world_id="w:new", name=bundle.world_name, main_branch_id="b:new")
+
+
+def test_export_operator_gets_a_verifiable_bundle() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeExportStore()))).get(
+        "/worlds/w:1/export?token=tok-a"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["world_name"] == "Ashfall" and body["manifest_hash"]  # stamped chain present
+    verify_bundle(WorldBundle.model_validate(body))  # the wire bundle round-trips + verifies
+
+
+def test_export_403_for_a_plain_player_token() -> None:
+    # D-45: the whole event log is omniscient disclosure → operator-only, never player-facing.
+    resp = TestClient(create_app(_operator_deps(_FakeExportStore()))).get(
+        "/worlds/w:1/export?token=tok-b"
+    )
+    assert resp.status_code == 403
+
+
+def test_export_401_without_a_valid_token() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeExportStore()))).get(
+        "/worlds/w:1/export?token=nope"
+    )
+    assert resp.status_code == 401
+
+
+def test_export_404_for_a_missing_world() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeExportStore(world_exists=False)))).get(
+        "/worlds/nope/export?token=tok-a"
+    )
+    assert resp.status_code == 404
+
+
+def test_import_operator_instantiates_a_fresh_world() -> None:
+    store = _FakeExportStore()
+    resp = TestClient(create_app(_operator_deps(store))).post(
+        "/worlds/import?token=tok-a", json=_valid_bundle("Emberfell").model_dump(mode="json")
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"world_id": "w:new", "name": "Emberfell", "main_branch_id": "b:new"}
+    assert store.imported is not None  # the verified bundle reached the store
+
+
+def test_import_403_for_a_plain_player_token() -> None:
+    # D-44: import is a structural write (instantiates a world) → operator-only.
+    resp = TestClient(create_app(_operator_deps(_FakeExportStore()))).post(
+        "/worlds/import?token=tok-b", json=_valid_bundle().model_dump(mode="json")
+    )
+    assert resp.status_code == 403
+
+
+def test_import_400_for_a_tampered_bundle_nothing_written() -> None:
+    store = _FakeExportStore()
+    bundle = _valid_bundle().model_dump(mode="json")
+    bundle["world_name"] = "Tampered"  # break the manifest digest after stamping
+    resp = TestClient(create_app(_operator_deps(store))).post(
+        "/worlds/import?token=tok-a", json=bundle
+    )
+    assert resp.status_code == 400
+    assert "verification failed" in resp.json()["detail"]
+    assert store.imported is None  # rejected BEFORE any write
+
+
+def test_import_400_for_a_malformed_bundle() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeExportStore()))).post(
+        "/worlds/import?token=tok-a", json={"not": "a bundle", "commits": "nope"}
+    )
+    assert resp.status_code == 400
+    assert "malformed bundle" in resp.json()["detail"]

@@ -43,6 +43,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   participant?, key?, pinned?, refs?}` — out-of-world player notes that survive a fork, **self-or-
   admin** scoped (D-39: a caller reads/writes their own; an operator may act for another). Closes
   the gap the uro-loom console's M3 explicitly deferred (campaign end had no endpoint).
+- **World export/import over HTTP (BE-8, #40)** — `GET /worlds/{w}/export` returns the whole world
+  as a portable, SHA-256 hash-chained `WorldBundle` JSON (the `.uwp` content; mirrors `uro world
+  export`); `POST /worlds/import` recomputes that chain and rejects a tampered bundle with `400`
+  (`ExportError`) **before** any write, else re-instantiates a fresh world with remapped ids and
+  projections rebuilt by replay (mirrors `uro world import`). Both **operator-only**: export is bulk
+  omniscient disclosure (D-45), import a structural write (D-44). `export_world`/`import_world` were
+  promoted onto the `EventStore` port (they lived only on the concrete store). Seeding is **not** in
+  this slice — `seed_history` needs the pack's `manifest.history`, which the world doesn't persist,
+  so `POST /worlds/{w}/seed` belongs with the pack-upload create endpoint, not a `{seed}`-only body.
 
 ### Fixed
 - **PyPI publish workflow** — split into one job per package, each in its own GitHub environment
