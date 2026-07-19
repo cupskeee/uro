@@ -9,10 +9,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from uro_core.export import BundleCommit, BundleEvent
-from uro_core.timeline.models import Branch, BranchInfo, LineageEntry, Marker, World
+from uro_core.timeline.models import Branch, BranchInfo, Campaign, LineageEntry, Marker, World
 from uro_server.app import ServerDeps, create_app
 from uro_server.sessions import SessionHub
 
@@ -888,3 +889,107 @@ def test_commit_detail_404_for_an_unknown_commit() -> None:
         "/worlds/w:1/commits/ghost?token=tok-a"
     )
     assert resp.status_code == 404
+
+
+# --- BE-5 (#37): dry-run (intent-only, D-37) + consistency (T2 proxy) ---
+
+
+def test_dry_run_returns_the_would_be_events_and_commits_nothing() -> None:
+    seen: dict[str, str] = {}
+
+    async def fake_preview(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
+        if campaign_id != "camp-1":
+            raise HTTPException(status_code=404, detail="no such campaign")
+        seen["participant"], seen["intent"] = participant, intent
+        return [
+            {
+                "event_type": "ClaimRecorded",
+                "entity_refs": ["a:hero"],
+                "payload": {"statement": intent},
+            }
+        ]
+
+    deps = _fake_deps()
+    deps.preview_beat = fake_preview
+    resp = TestClient(create_app(deps)).post(
+        "/campaigns/camp-1/dry-run?token=tok-a", json={"intent": "I bribe the guard"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["events"][0]["event_type"] == "ClaimRecorded"
+    assert seen == {"participant": "player-1", "intent": "I bribe the guard"}  # token→participant
+
+
+def test_dry_run_401_without_a_valid_token() -> None:
+    # _auth fires before the preview/None check → a bad token is 401 regardless
+    resp = TestClient(create_app(_fake_deps())).post(
+        "/campaigns/camp-1/dry-run?token=nope", json={"intent": "x"}
+    )
+    assert resp.status_code == 401
+
+
+def test_dry_run_501_when_preview_is_disabled() -> None:
+    # _fake_deps() leaves preview_beat=None
+    resp = TestClient(create_app(_fake_deps())).post(
+        "/campaigns/camp-1/dry-run?token=tok-a", json={"intent": "x"}
+    )
+    assert resp.status_code == 501
+
+
+def test_dry_run_400_on_an_empty_intent() -> None:
+    async def fake_preview(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
+        return []
+
+    deps = _fake_deps()
+    deps.preview_beat = fake_preview
+    resp = TestClient(create_app(deps)).post(
+        "/campaigns/camp-1/dry-run?token=tok-a", json={"intent": "   "}
+    )
+    assert resp.status_code == 400
+
+
+def test_dry_run_404_for_an_unknown_campaign() -> None:
+    async def fake_preview(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
+        raise HTTPException(status_code=404, detail="no such campaign")
+
+    deps = _fake_deps()
+    deps.preview_beat = fake_preview
+    resp = TestClient(create_app(deps)).post(
+        "/campaigns/nope/dry-run?token=tok-a", json={"intent": "x"}
+    )
+    assert resp.status_code == 404
+
+
+class _FakeConsistencyStore:
+    def __init__(self, *, campaign_exists: bool = True) -> None:
+        self._exists = campaign_exists
+
+    async def get_campaign(self, campaign_id: str) -> Campaign | None:
+        if not self._exists:
+            return None
+        return Campaign(campaign_id=campaign_id, world_id="w", branch_id="b:main")
+
+    async def fact_consistency(self, branch_id: str) -> tuple[int, int]:
+        return (3, 4)
+
+
+def test_consistency_reports_the_survival_ratio() -> None:
+    deps = _fake_deps()
+    deps.store = _FakeConsistencyStore()  # type: ignore[assignment]
+    body = TestClient(create_app(deps)).get("/campaigns/camp-1/consistency?token=tok-a").json()
+    assert body == {"consistent": 3, "total": 4, "ratio": 0.75}
+
+
+def test_consistency_404_for_an_unknown_campaign() -> None:
+    deps = _fake_deps()
+    deps.store = _FakeConsistencyStore(campaign_exists=False)  # type: ignore[assignment]
+    resp = TestClient(create_app(deps)).get("/campaigns/nope/consistency?token=tok-a")
+    assert resp.status_code == 404
+
+
+def test_consistency_401_without_a_valid_token() -> None:
+    deps = _fake_deps()
+    deps.store = _FakeConsistencyStore()  # type: ignore[assignment]
+    assert (
+        TestClient(create_app(deps)).get("/campaigns/camp-1/consistency?token=nope").status_code
+        == 401
+    )
