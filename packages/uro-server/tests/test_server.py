@@ -1664,3 +1664,76 @@ def test_pack_upload_rejects_oversized_body_before_parsing(monkeypatch: Any) -> 
         "/worlds/import"
         not in __import__("uro_server.app", fromlist=["_PACK_UPLOAD_PATHS"])._PACK_UPLOAD_PATHS
     )
+
+
+# BE-11 (#43): the WS wire contract — docs/08 now agrees frame-for-frame with app.py.
+# These assert the EXACT shape (key set) of each real frame + that undocumented client frames
+# are ignored. (vote_*/proposal_opened/not_your_turn/table_talk/beat_failed are shape-checked in
+# the arbiter tests above.)
+
+
+def test_ws_intent_beat_frame_shapes() -> None:
+    client = TestClient(create_app(_fake_deps()))
+    with client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        assert set(_recv_until(ws, "participant_joined")[-1]) == {"type", "participant_id"}
+        ws.send_json({"type": "intent", "text": "I scan the pier"})
+        msgs = _recv_until(ws, "beat_committed")
+    started = next(m for m in msgs if m["type"] == "beat_started")
+    chunk = next(m for m in msgs if m["type"] == "narration_chunk")
+    committed = next(m for m in msgs if m["type"] == "beat_committed")
+    assert set(started) == {"type", "participant_id", "intent"}
+    assert set(chunk) == {"type", "participant_id", "text"}
+    assert set(committed) == {"type", "participant_id", "intent", "narration"}
+    # No universal envelope: real frames carry NO campaign_id / beat_id (docs/08 BE-11 retraction).
+    assert all("campaign_id" not in m and "beat_id" not in m for m in msgs)
+
+
+def test_ws_unknown_client_frames_are_ignored() -> None:
+    # encounter_action / pin_actor are documented as future GROWs, NOT handled today — sending them
+    # must be a silent no-op (no beat, no echo), and the loop must keep serving the next intent.
+    client = TestClient(create_app(_fake_deps()))
+    with client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        _recv_until(ws, "participant_joined")
+        ws.send_json({"type": "encounter_action", "action": "swing"})
+        ws.send_json({"type": "pin_actor", "actor_id": "a:hero"})
+        ws.send_json(
+            {"type": "intent", "text": "I press on"}
+        )  # still served after the ignored ones
+        msgs = _recv_until(ws, "beat_committed")
+    assert not any(m["type"] in ("encounter_action", "pin_actor") for m in msgs)  # never echoed
+
+
+def test_ws_intent_rejected_frame_shape() -> None:
+    from uro_core.session import AdmitDecision, SoloArbiter
+
+    class _RejectArbiter(SoloArbiter):
+        async def admit(self, campaign_id: str, participant_id: str, intent: str) -> AdmitDecision:
+            return AdmitDecision.REJECTED
+
+    client = TestClient(create_app(_fake_deps(), arbiter=_RejectArbiter()))
+    with client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        _recv_until(ws, "participant_joined")
+        ws.send_json({"type": "intent", "text": "I do the forbidden thing"})
+        rejected = _recv_until(ws, "intent_rejected")[-1]
+    assert set(rejected) == {"type", "participant_id", "text"}
+    assert rejected["participant_id"] == "player-1" and rejected["text"]
+
+
+def test_ws_outcome_recorded_broadcast_shape() -> None:
+    # The Chronicler outcome endpoint broadcasts an `outcome_recorded` frame to the play channel —
+    # a real server→client frame docs/08 previously omitted (BE-11). Assert it reaches a listener.
+    async def report_outcome(campaign_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
+        return {"committed_events": 2, "commit_id": "c:xyz"}
+
+    deps = _fake_deps()
+    deps.report_outcome = report_outcome
+    client = TestClient(create_app(deps))
+    with client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        _recv_until(ws, "participant_joined")
+        resp = client.post(
+            "/campaigns/camp-1/encounters/e:battle-9/outcome?token=tok-a", json={"feats": []}
+        )
+        assert resp.status_code == 200
+        frame = _recv_until(ws, "outcome_recorded")[-1]
+    assert frame["encounter_id"] == "e:battle-9"
+    assert frame["committed_events"] == 2 and frame["commit_id"] == "c:xyz"

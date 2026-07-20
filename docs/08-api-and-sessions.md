@@ -129,9 +129,39 @@ the D-32 protection ceiling, so this path never accepts one). Otherwise authorit
 valid token authorizes the call and the acting `participant` is taken from the body (finer
 endpoint→campaign authority is deferred, docs/18 P3).
 
-The WebSocket channel carries: client→server `intent`, `table_talk` *(the non-canon coordination lane, D-38)*, `vote` *(consensus, D-38)*, `encounter_action` *(future — encounters auto-resolve in the PoC, D-29)*, `pin_actor`; server→client `narration_chunk`, `scene_update`, `mechanics_result`, `mode_change`, `beat_started`, `beat_committed`, `beat_failed`, `not_your_turn` *(round-robin turn arbitration, D-31)*, `proposal_opened` *(a QUEUED non-holder intent surfaced as a proposal, D-38)*, `table_talk`, `vote_tally` / `vote_decided` / `vote_unsupported` *(D-38)*, `intent_rejected`, `suggestions`, `participant_*`. Message envelope always includes `campaign_id`, `beat_id`, and `participant_id` — that last one is the multiplayer seam (below).
+### The WebSocket wire contract (BE-11 — frame-for-frame with `app.py`)
 
-Beat results may carry `suggestions[]` — 2–4 affordance-grounded next-action hints emitted by the planner at no extra LLM cost (D-23). **Free-text intent is canonical**; suggestions are hints clients may ignore entirely (the CLI renders them dimmed), never a constrained choice list.
+Every frame is a JSON object with a `type`. There is **no** universal envelope: a frame carries only its `type` + the fields listed below. The channel is already scoped to one campaign by the connection URL, so frames do **not** repeat `campaign_id`; `participant_id` names the actor of the frame (absent only where there is none, e.g. `vote_decided`).
+
+**client→server** (any other `type` is silently ignored):
+
+| frame | fields | effect |
+|---|---|---|
+| `intent` | `text` | run a beat as this participant's PC (canonical — commits) |
+| `table_talk` | `text` | the non-canon coordination lane (D-38) — broadcast only, never a beat |
+| `vote` | `choice` | cast a vote on a `--arbiter vote` server (D-38) |
+
+**server→client** (all broadcast to every connection on the campaign):
+
+| frame | fields |
+|---|---|
+| `participant_joined` / `participant_left` | `participant_id` |
+| `beat_started` | `participant_id`, `intent` |
+| `narration_chunk` | `participant_id`, `text` |
+| `beat_committed` | `participant_id`, `intent`, `narration` |
+| `beat_failed` | `participant_id`, `intent`, `error` |
+| `not_your_turn` | `participant_id`, `text` *(round-robin, D-31)* |
+| `proposal_opened` | `participant_id`, `text` *(a QUEUED non-holder intent, D-38)* |
+| `intent_rejected` | `participant_id`, `text` |
+| `table_talk` | `participant_id`, `text` |
+| `vote_tally` | `participant_id`, `choice`, `tally` *(D-38)* |
+| `vote_decided` | `choice` |
+| `vote_unsupported` | `participant_id` *(the server's arbiter has no vote shape)* |
+| `outcome_recorded` | `encounter_id`, + the distilled receipt (`committed_events`, `commit_id`, …) *(Chronicler mode, D-25 — broadcast when an external outcome is posted)* |
+
+**Deliberately NOT emitted yet (a future GROW, not drift).** `scene_update` / `mode_change` (the highest-value add — Loom's Play surface can't show scene/mode) need the pipeline to surface within-beat mode state (encounters auto-resolve inside one beat under D-29, so between beats the mode is always free-roam — there is no persistent mode frame to send without new engine state). `mechanics_result` needs the same. `suggestions` (the planner's D-23 next-action hints) and a `beat_committed` `beat_id` (for deep-linking a committed beat) both need the `run_beat` streaming contract to yield structured frames, not only narration strings. `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
+
+Beat results may carry `suggestions[]` — 2–4 affordance-grounded next-action hints emitted by the planner at no extra LLM cost (D-23). **Free-text intent is canonical**; suggestions are hints clients may ignore entirely (the CLI renders them dimmed), never a constrained choice list. (Over the WS wire they are a future GROW, above; the embedded/CLI path already surfaces them.)
 
 ## Session model — multiplayer (round-robin, D-31)
 

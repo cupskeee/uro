@@ -83,6 +83,18 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   pack-upload create endpoint.
 
 ### Fixed
+- **WS play-channel wire contract reconciled with `docs/08` (BE-11, #43)** — `docs/08` advertised
+  server frames the handler never emits (`scene_update`/`mode_change`/`mechanics_result`/
+  `suggestions`), client frames it doesn't accept (`encounter_action`/`pin_actor`), and a universal
+  `campaign_id`/`beat_id` envelope that no frame carries. Corrected to the **real** contract,
+  frame-for-frame: a table of the 3 accepted client frames + the 14 broadcast server frames (incl.
+  the previously-undocumented `outcome_recorded` Chronicler frame) with their exact fields, and the
+  non-emitted frames moved to an explicit "future GROW" note (scene/mode is the highest-value add but
+  needs the pipeline to surface within-beat mode state; `suggestions`/`beat_id` need `run_beat` to
+  yield structured frames, not only narration strings). Added transport tests asserting each frame's
+  exact shape + that unknown client frames are silently ignored. No behavior change — the frames were
+  always these; only the docs were wrong. (The uro-loom console's `docs/02` wire-drift note can now
+  be dropped.)
 - **PyPI publish workflow** — split into one job per package, each in its own GitHub environment
   (`pypi-core` / `pypi-server` / `pypi-cli`). A PyPI *pending* trusted publisher must be unique on
   `(owner, repo, workflow, environment)`, so all three sharing `environment: pypi` collided on setup.
