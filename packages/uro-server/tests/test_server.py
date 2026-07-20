@@ -1772,3 +1772,42 @@ def test_dry_run_rejects_a_foreign_scoped_token() -> None:
     assert blocked.status_code == 403
     own = client.post("/campaigns/camp-1/dry-run?token=tok-a", json={"intent": "x"})
     assert own.status_code == 200  # …but tok-a works on its OWN campaign
+
+
+def test_cors_disabled_by_default() -> None:
+    # No --cors-origin → no CORS header, so a browser SPA on another origin is blocked (the symptom
+    # that surfaced this: uro-loom on :5173 → uro-server on :8000 showed all-red network calls).
+    client = TestClient(create_app(_fake_deps()))
+    resp = client.get("/healthz", headers={"Origin": "http://localhost:5173"})
+    assert resp.status_code == 200
+    assert "access-control-allow-origin" not in resp.headers
+
+
+def test_cors_allows_a_configured_origin() -> None:
+    # An allowed origin gets echoed back (simple request) and cleared by preflight (OPTIONS).
+    origin = "http://localhost:5173"
+    client = TestClient(create_app(_fake_deps(), cors_origins=[origin]))
+    simple = client.get("/healthz", headers={"Origin": origin})
+    assert simple.headers.get("access-control-allow-origin") == origin
+
+    preflight = client.options(
+        "/campaigns/camp-1/dry-run",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers.get("access-control-allow-origin") == origin
+    # Bearer tokens ride the Authorization header — the preflight must green-light it.
+    assert "authorization" in preflight.headers.get("access-control-allow-headers", "").lower()
+
+
+def test_cors_wildcard_drops_credentials() -> None:
+    # '*' is dev-only allow-any; per the CORS spec a wildcard origin cannot carry credentials, so
+    # the middleware must NOT also assert allow-credentials (browsers reject that combination).
+    client = TestClient(create_app(_fake_deps(), cors_origins=["*"]))
+    resp = client.get("/healthz", headers={"Origin": "http://anything.example"})
+    assert resp.headers.get("access-control-allow-origin") == "*"
+    assert "access-control-allow-credentials" not in resp.headers

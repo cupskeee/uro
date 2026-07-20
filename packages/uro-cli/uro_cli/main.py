@@ -501,6 +501,14 @@ def serve(
         "(consensus). UNSET = auto (solo for 1 token, party for >1). Setting it EXPLICITLY binds "
         "that shape even for a 1-token launch, so a runtime-added player still gets turns (D-39).",
     ),
+    cors_origin: list[str] = typer.Option(  # noqa: B008
+        None,
+        "--cors-origin",
+        help="allow a browser origin to call this server, e.g. --cors-origin http://localhost:5173 "
+        "(repeatable). REQUIRED for the uro-loom web console (a cross-origin SPA); the browser "
+        "blocks calls with no CORS header. Pass '*' to allow any origin (dev only; disables "
+        "credentials). Omit for CLI/embedded use.",
+    ),
 ) -> None:
     """Run the Uro server (docs/08): a thin FastAPI shell over the engine. Each --token maps to
     a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop).
@@ -550,7 +558,7 @@ def serve(
     else:
         arbiter = shapes[arbiter_kind]()
     deps = engine_deps(store, engine, tokens, admin_tokens, router=router)
-    fastapi_app = create_app(deps, arbiter=arbiter)
+    fastapi_app = create_app(deps, arbiter=arbiter, cors_origins=cors_origin or None)
 
     @fastapi_app.on_event("startup")
     async def _startup() -> None:
@@ -583,6 +591,8 @@ def serve(
     )
     for t, p in tokens.items():
         typer.echo(f"  token {t!r} → {p}")
+    if cors_origin:
+        typer.echo(f"  CORS: allowing {', '.join(cors_origin)}")
     uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
 
 

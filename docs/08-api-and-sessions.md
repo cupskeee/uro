@@ -213,7 +213,19 @@ uro branch fork ashfall --at campaign-a-end --name aftermath
 uro log <world> [--branch B]              # chronicle view — commit lineage (defaults to main; per-branch, never a cross-branch merge — `02`)
 uro world export ashfall -o ashfall.uwp   # hash-chain-stamped bundle;  uro world import ashfall.uwp verifies + instantiates
 uro serve --token alice --token bob       # run the server;  uro connect <campaign> --server URL --token alice  (WS client)
+uro serve --token dev --cors-origin http://localhost:5173   # allow a browser SPA (uro-loom) — see "Browser access" below
 uro usage <campaign>
 ```
 
 `uro play` and `uro dry-run` are the two commands the whole roadmap's acceptance tests run through.
+
+**Browser access (CORS).** A browser SPA (the `uro-loom` console) is a *different origin* from the
+server, so without a CORS header the browser blocks every cross-origin call — the request never
+reaches the app (a `curl` from the shell still works, which is the tell). The server sends **no CORS
+header by default** (CLI/embedded use needs none, and a permissive default would be an unsafe
+surprise); a deployment opts in with `uro serve --cors-origin <origin>` (repeatable — list each
+allowed origin; `*` allows any origin for pure dev and then drops credentials per the CORS spec).
+For a local Loom dev loop that's `--cors-origin http://localhost:5173`. A production deployment can
+instead (or additionally) terminate CORS at a reverse proxy, or route the browser through the
+optional M6 BFF (Loom's [`docs/05-bff-design.md`](https://github.com/cupskeee/uro-loom)) so calls are
+same-origin.
