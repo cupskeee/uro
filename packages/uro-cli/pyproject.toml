@@ -15,7 +15,7 @@ requires-python = ">=3.12"
 dependencies = [
     "uro-core[postgres,llm]==0.2.0",
     "uro-server==0.2.0",
-    "typer>=0.15",
+    "typer>=0.27.0",
     "rich>=13.9",
     "websockets>=16.1",
 ]
