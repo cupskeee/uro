@@ -212,7 +212,10 @@ def test_beat_failure_is_broadcast_not_a_ws_crash() -> None:
         ws.send_json({"type": "intent", "text": "I swing"})
         msgs = _recv_until(ws, "beat_failed")
         failed = msgs[-1]
-        assert failed["error"] == "kaboom" and failed["intent"] == "I swing"
+        # Holistic review: the RAW exception ("kaboom") must NOT be fanned out to clients — a
+        # generic reason is broadcast (info-disclosure fix); the detail is logged server-side.
+        assert failed["error"] == "beat failed; nothing was saved" and failed["intent"] == "I swing"
+        assert "kaboom" not in failed["error"]
         # the connection is still alive — another intent still gets a fresh beat_failed
         ws.send_json({"type": "intent", "text": "again"})
         assert _recv_until(ws, "beat_failed")[-1]["intent"] == "again"
@@ -1737,3 +1740,35 @@ def test_ws_outcome_recorded_broadcast_shape() -> None:
         frame = _recv_until(ws, "outcome_recorded")[-1]
     assert frame["encounter_id"] == "e:battle-9"
     assert frame["committed_events"] == 2 and frame["commit_id"] == "c:xyz"
+
+
+# Holistic-review fixes: transport-level (zip-bomb decompressed cap, dry-run campaign-scope)
+
+
+def test_pack_upload_rejects_a_zip_bomb_by_decompressed_size(monkeypatch: Any) -> None:
+    # A tiny archive whose DECOMPRESSED bytes exceed the cap is 413'd mid-extraction — the
+    # compressed-byte cap + Content-Length middleware don't bound this (holistic review).
+    monkeypatch.setattr("uro_server.app._MAX_UNCOMPRESSED_BYTES", 100)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("world.toml", b"x" * 5000)  # 5 KB decompressed > 100-byte cap
+    resp = TestClient(create_app(_authoring_deps())).post(
+        "/worlds/validate?token=tok-a",
+        files={"pack": ("pack.zip", buf.getvalue(), "application/zip")},
+    )
+    assert resp.status_code == 413
+
+
+def test_dry_run_rejects_a_foreign_scoped_token() -> None:
+    # A minted token scoped to camp-1 can't dry-run camp-2 (LLM cost + state read) — review fix.
+    async def _preview(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
+        return [{"event_type": "BeatResolved"}]
+
+    deps = _fake_deps()
+    deps.preview_beat = _preview
+    deps.token_campaign = lambda t: "camp-1" if t == "tok-a" else None  # tok-a minted for camp-1
+    client = TestClient(create_app(deps))
+    blocked = client.post("/campaigns/camp-2/dry-run?token=tok-a", json={"intent": "x"})
+    assert blocked.status_code == 403
+    own = client.post("/campaigns/camp-1/dry-run?token=tok-a", json={"intent": "x"})
+    assert own.status_code == 200  # …but tok-a works on its OWN campaign

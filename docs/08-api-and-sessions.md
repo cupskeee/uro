@@ -38,7 +38,7 @@ management surface over the `EngineStore` port (`ServerDeps.store`; `501` when a
 transport-only deps). **Built now:**
 
 ```
-POST /worlds                     {name, tone?, rule_pack?}         create (JSON body, not pack-upload yet)
+POST /worlds                     {name, tone?, rule_pack?}         create world (JSON body; OPERATOR-only, D-46)
 POST /worlds/validate            (multipart .zip of the pack)      grade an uploaded pack, no import (BE-6)
 POST /worlds/backfill            (multipart .zip of the pack)      AI gap-fill preview, ai_backfill seeds (OPERATOR-only, D-44) (BE-7)
 POST /worlds/probe               (multipart .zip) [?tries=]        model-capability report, warn-not-fail (OPERATOR-only, D-44) (BE-7)
@@ -57,9 +57,9 @@ GET  /campaigns                  [?world_id=]                      list
 GET  /campaigns/{c}                                                one campaign
 POST /campaigns/{c}/join         {participant, new_pc_name|adopt_actor_id}   bind an additional PC
 GET  /campaigns/{c}/roster                                         active PC ids
-GET  /campaigns/{c}/state        [?sections=actors,threads,…]      query_across the branch's projections (B5)
+GET  /campaigns/{c}/state        [?sections=actors,threads,…]      branch projections; player allowlist, omniscient sections operator-only (D-46) (B5)
 GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats
-POST /campaigns/{c}/time-skip    {days}                            engine agenda_tick (D-33)
+POST /campaigns/{c}/time-skip    {days}                            engine agenda_tick (OPERATOR-only, D-46) (D-33)
 POST /campaigns/{c}/dry-run      {intent}                          preview a beat's events, commit nothing (BE-5)
 GET  /campaigns/{c}/consistency                                    narrator contradiction-survival proxy T2 (BE-5)
 POST /campaigns/{c}/end          {marker, outcome?}                end campaign, release PCs (OPERATOR-only, D-44) (BE-9)
@@ -128,6 +128,21 @@ The **dry-run** (`POST …/dry-run`) is any-authed — the non-committing twin o
 the D-32 protection ceiling, so this path never accepts one). Otherwise authority is coarse — a
 valid token authorizes the call and the acting `participant` is taken from the body (finer
 endpoint→campaign authority is deferred, docs/18 P3).
+
+**Holistic-review hardening (D-46).** A system-wide cross-phase review of the whole BE-1…BE-11
+surface tightened three seams. **Authority:** `POST /worlds` (create) and `POST
+/campaigns/{c}/time-skip` are now **operator-only** — both are the same structural timeline write as
+their already-operator siblings (`import` / fork time-skip / `end`), which D-44's *principle*
+covers even though its enumerated list omitted them; time-skip also caps `days`. **Epistemic
+(D-45 enforced, not just default):** `GET /campaigns/{c}/state` restricts a **player** token to the
+scene-safe sections `{actors,threads,places,factions,pcs}` and `403`s any omniscient section
+(`claims`' truth values, `beliefs`, `sheets`, `items`, `edges`, `counters`) — an **operator** reads
+anything. **Scope + hygiene:** `start_campaign` gains the self-or-admin check (a player may name only
+themselves, like `join`); `time-skip`/`dry-run` gain the minted-token campaign-scope check the
+WS/outcome paths already enforced; the mechanics `seed` is stripped from a player-facing campaign
+read; `beat_failed` broadcasts a generic reason (the raw exception is logged, not fanned out); pack
+upload caps decompressed size (zip-bomb); `?limit<0` and a non-int `seed` are `400`; `/roster` `404`s
+an unknown campaign.
 
 ### The WebSocket wire contract (BE-11 — frame-for-frame with `app.py`)
 

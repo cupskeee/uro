@@ -135,6 +135,19 @@ the operator's) — BE-1..BE-10 + BE-7, #33-#42. Pack-upload *create* + **seed**
 to its own focused slice + tests, not the head-only `query_across` the campaign `/state` uses;
 backfill-COMMIT (the `ai_backfill` `ThreadCreated` at genesis) also rides pack-upload create.)
 
+**Holistic-review hardening (D-46, post-epic system-wide seam hunt).** The BE epic had never had the
+project's phase-end cross-phase review; running it found a real **HIGH epistemic leak** and an
+authority-consistency gap (the "real edge-case outside the happy path" the review reliably surfaces).
+D-45's "by construction" non-omniscience was true only for the DEFAULT `state` sections — a player
+could pass `?sections=claims,beliefs` and read `truth` values + hidden beliefs. Now **enforced, not
+default:** `GET /campaigns/{c}/state` restricts a player token to a scene-safe allowlist and 403s the
+omniscient sections (claims/beliefs/sheets/items/edges/counters); operators read anything. Authority
+reconciled to D-44's principle: `create_world` + `time-skip` are operator-only (structural writes,
+like `import`/fork/`end`). Plus scope + hygiene fixes: `start_campaign` self-or-admin, `time-skip`/
+`dry-run` minted-token scope, `seed` stripped from a player read, generic `beat_failed` (no raw
+exception fan-out), a zip-bomb decompressed cap, `?limit<0`/non-int-`seed`→400, `/roster` 404. All
+enforced by tests (`test_holistic_review_authority_and_epistemic_fixes` on a real store).)
+
 **Cross-branch reads (B5/#14):** `store.query_across(branch_ids, sections)` (one query per section
 via `branch_id = ANY(...)`, not N round-trips) + `diff_branches(a, b)` (added/removed/changed by PK)
 + `current_world_time_batch(branch_ids)` (each branch's in-fiction day in one recursive CTE) —
