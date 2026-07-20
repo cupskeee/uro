@@ -13,7 +13,7 @@ requires-python = ">=3.12"
 # `just release` bumps all three together and `{workspace = true}` fails `uv sync` on a drift.
 dependencies = [
     "uro-core[postgres,llm]==0.2.0",
-    "fastapi>=0.115",
+    "fastapi>=0.139.2",
     "python-multipart>=0.0.9",  # FastAPI file/form parsing — the BE-6 pack-upload endpoint
     "uvicorn[standard]>=0.51.0",
 ]
