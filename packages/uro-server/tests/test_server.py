@@ -1494,3 +1494,173 @@ def test_rulesets_501_when_not_wired() -> None:
 def test_rulesets_401_without_a_valid_token() -> None:
     resp = TestClient(create_app(_rulesets_deps(lambda: []))).get("/rulesets?token=nope")
     assert resp.status_code == 401
+
+
+# BE-7 (#39): AI world-authoring stages (backfill + probe) over HTTP — operator-only, stub-tested
+
+
+async def _fake_backfill(pack: Any) -> Any:
+    """A canned backfill closure (no live model): append one ai_backfill conflict seed."""
+    from uro_core.worldpack.models import ThreadSeed
+
+    seed = ThreadSeed(
+        id="t:ai",
+        stakes="a rival house covets the throne",
+        state="offered",
+        provenance="ai_backfill",
+    )
+    added = [f"conflict seed (ai_backfill): {seed.stakes}"]
+    return pack.model_copy(update={"threads": [*pack.threads, seed]}), added
+
+
+async def _fake_probe(manifest: Any, tries: int) -> Any:
+    """A canned probe report (no live model). Echoes `tries` into the detail for passthrough."""
+    from uro_core.engines.probe import ProbeReport, ProbeResult
+
+    return ProbeReport(
+        world=manifest.name,
+        results=[
+            ProbeResult(name="structured_output", status="pass", detail=f"{tries}/{tries} valid"),
+            ProbeResult(name="content_rating", status="warn", detail="model softened a category"),
+        ],
+    )
+
+
+def _authoring_deps() -> ServerDeps:
+    """Operator (tok-a) deps with backfill+probe wired to canned closures (no live LLM)."""
+    deps = _fake_deps()
+    deps.is_admin = lambda t: t == "tok-a"
+    deps.backfill = _fake_backfill  # type: ignore[assignment]
+    deps.probe = _fake_probe  # type: ignore[assignment]
+    return deps
+
+
+def _post_authoring(deps: ServerDeps, path: str, *, token: str = "tok-a") -> Any:
+    return TestClient(create_app(deps)).post(
+        f"{path}?token={token}",
+        files={"pack": ("pack.zip", _zip_dir(_REPO / "worlds" / "thornwood"), "application/zip")},
+    )
+
+
+# --- backfill ---
+
+
+def test_backfill_operator_previews_ai_seeds() -> None:
+    resp = _post_authoring(_authoring_deps(), "/worlds/backfill")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["added"] and body["before_grade"] and body["after_grade"]
+    # only the ai_backfill seed is surfaced (preview — nothing committed)
+    assert [s["provenance"] for s in body["seeds"]] == ["ai_backfill"]
+
+
+def test_backfill_403_for_a_plain_player_token() -> None:
+    # D-44: a live, uncapped LLM call → operator-only (cost).
+    assert _post_authoring(_authoring_deps(), "/worlds/backfill", token="tok-b").status_code == 403
+
+
+def test_backfill_401_without_a_valid_token() -> None:
+    assert _post_authoring(_authoring_deps(), "/worlds/backfill", token="nope").status_code == 401
+
+
+def test_backfill_501_when_no_provider_wired() -> None:
+    deps = _fake_deps()
+    deps.is_admin = lambda t: t == "tok-a"  # operator, but deps.backfill stays None
+    assert _post_authoring(deps, "/worlds/backfill").status_code == 501
+
+
+def test_backfill_502_on_a_provider_error() -> None:
+    from uro_core.errors import ProviderError
+
+    async def _boom(pack: Any) -> Any:
+        raise ProviderError("model unreachable")
+
+    deps = _authoring_deps()
+    deps.backfill = _boom  # type: ignore[assignment]
+    resp = _post_authoring(deps, "/worlds/backfill")
+    assert resp.status_code == 502 and "provider error" in resp.json()["detail"]
+
+
+def test_backfill_400_on_a_non_zip_upload() -> None:
+    resp = TestClient(create_app(_authoring_deps())).post(
+        "/worlds/backfill?token=tok-a",
+        files={"pack": ("pack.zip", b"not a zip", "application/zip")},
+    )
+    assert resp.status_code == 400
+
+
+# --- probe ---
+
+
+def test_probe_operator_gets_a_warn_not_fail_report() -> None:
+    resp = TestClient(create_app(_authoring_deps())).post(
+        "/worlds/probe?token=tok-a&tries=5",
+        files={"pack": ("pack.zip", _zip_dir(_REPO / "worlds" / "thornwood"), "application/zip")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True  # a 'warn' is not a 'fail' → report.ok stays True
+    assert any("softened" in w for w in body["warnings"])
+    assert body["results"][0]["detail"] == "5/5 valid"  # tries passed through
+
+
+def test_probe_403_for_a_plain_player_token() -> None:
+    assert _post_authoring(_authoring_deps(), "/worlds/probe", token="tok-b").status_code == 403
+
+
+def test_probe_501_when_no_provider_wired() -> None:
+    deps = _fake_deps()
+    deps.is_admin = lambda t: t == "tok-a"
+    assert _post_authoring(deps, "/worlds/probe").status_code == 501
+
+
+def test_probe_400_on_a_bad_or_out_of_range_tries() -> None:
+    client = TestClient(create_app(_authoring_deps()))
+    z = {"pack": ("pack.zip", _zip_dir(_REPO / "worlds" / "thornwood"), "application/zip")}
+    assert client.post("/worlds/probe?token=tok-a&tries=abc", files=z).status_code == 400
+    assert client.post("/worlds/probe?token=tok-a&tries=99", files=z).status_code == 400
+
+
+def test_probe_reports_a_failing_model_as_200_not_an_error() -> None:
+    # warn-not-fail (D-24): even an all-fail report is a 200 with ok=False, never a 4xx/5xx.
+    async def _all_fail(manifest: Any, tries: int) -> Any:
+        from uro_core.engines.probe import ProbeReport, ProbeResult
+
+        return ProbeReport(
+            world=manifest.name,
+            results=[ProbeResult(name="structured_output", status="fail", detail="0/3 valid")],
+        )
+
+    deps = _authoring_deps()
+    deps.probe = _all_fail  # type: ignore[assignment]
+    resp = _post_authoring(deps, "/worlds/probe")
+    assert resp.status_code == 200 and resp.json()["ok"] is False
+
+
+def test_probe_502_on_a_provider_error() -> None:
+    from uro_core.errors import ProviderError
+
+    async def _boom(manifest: Any, tries: int) -> Any:
+        raise ProviderError("judge model unreachable")
+
+    deps = _authoring_deps()
+    deps.probe = _boom  # type: ignore[assignment]
+    assert _post_authoring(deps, "/worlds/probe").status_code == 502
+
+
+def test_pack_upload_rejects_oversized_body_before_parsing(monkeypatch: Any) -> None:
+    # BE-7 hardening: an over-cap multipart upload to a pack route is 413'd by Content-Length
+    # BEFORE the body is spooled — so a large body can't be buffered pre-auth. Even a NO-token
+    # request is rejected (the guard runs ahead of auth). Small cap keeps the test fast.
+    monkeypatch.setattr("uro_server.app._MAX_PACK_BYTES", 100)
+    big = {"pack": ("big.zip", b"0" * 500, "application/zip")}
+    client = TestClient(create_app(_authoring_deps()))
+    for path in ("/worlds/backfill", "/worlds/probe", "/worlds/validate"):
+        assert (
+            client.post(f"{path}?token=nope", files=big).status_code == 413
+        )  # no token, still 413
+    # /worlds/import (a JSON bundle) is NOT capped by this guard — a large world must import.
+    assert (
+        "/worlds/import"
+        not in __import__("uro_server.app", fromlist=["_PACK_UPLOAD_PATHS"])._PACK_UPLOAD_PATHS
+    )

@@ -16,7 +16,12 @@ import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # annotation-only (from __future__ import annotations) — no runtime import
+    from uro_core.engines.probe import ProbeReport
+    from uro_core.providers.router import ProviderRouter
+    from uro_core.worldpack.models import WorldManifest, WorldPack
 
 from fastapi import (
     Body,
@@ -29,6 +34,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from pydantic import ValidationError
+from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketState
 from uro_core.errors import ExportError
 from uro_core.export import WorldBundle
@@ -46,6 +52,11 @@ def _bearer_token(request: Request) -> str:
 
 
 _MAX_PACK_BYTES = 20 * 1024 * 1024  # 20 MB — an authored world pack is small; cap untrusted input
+
+# The multipart pack-UPLOAD routes. FastAPI spools the whole body during form parsing — BEFORE a
+# handler's operator gate or the `_safe_extract_pack` cap — so an oversized upload is rejected up
+# front by Content-Length (below). NOT `/worlds/import`: that's a JSON bundle, legitimately large.
+_PACK_UPLOAD_PATHS = frozenset({"/worlds/validate", "/worlds/backfill", "/worlds/probe"})
 
 
 def _safe_extract_pack(data: bytes, dest: Path) -> Path:
@@ -129,6 +140,12 @@ class ServerDeps:
     # composition-root lookup (not store-backed), so it's wired here rather than on the store. None
     # → `GET /rulesets` returns 501.
     list_rulesets: Callable[[], list[dict[str, Any]]] | None = None
+    # AI world-authoring stages (BE-7): both wrap the process-bound ProviderRouter, so they're
+    # provider-shaped (not store-backed) and make LIVE, uncapped LLM calls → operator-only (D-44).
+    # `backfill` previews a thin pack's AI gap-fill (augmented pack + human-readable additions);
+    # `probe` returns the model-capability report. None (no provider wired) → the endpoints 501.
+    backfill: Callable[[WorldPack], Awaitable[tuple[WorldPack, list[str]]]] | None = None
+    probe: Callable[[WorldManifest, int], Awaitable[ProbeReport]] | None = None
 
 
 def engine_deps(
@@ -136,6 +153,8 @@ def engine_deps(
     engine: Engine,
     tokens: dict[str, str],
     admin_tokens: set[str] | None = None,
+    *,
+    router: ProviderRouter | None = None,
 ) -> ServerDeps:
     """Production wiring: a connected store + Engine behind the transport port. `tokens` maps a
     bearer token to a participant_id (docs/08 token mode) — ordinary PLAYER credentials; the
@@ -228,6 +247,24 @@ def engine_deps(
             out.append({"id": rs.id, "version": rs.version, "sheet_schema": rs.sheet_schema()})
         return out
 
+    # BE-7: the AI world-authoring stages bind the SAME process router the Engine holds (serve
+    # builds it once, main.py) — one provider per process, exactly like run_beat. Wired only when a
+    # router is supplied; a transport-only deployment leaves them None → the endpoints 501.
+    backfill: Callable[[WorldPack], Awaitable[tuple[WorldPack, list[str]]]] | None = None
+    probe: Callable[[WorldManifest, int], Awaitable[ProbeReport]] | None = None
+    if router is not None:
+        bound_router = router  # narrow for the closures (mypy: no Optional capture)
+
+        async def backfill(pack: WorldPack) -> tuple[WorldPack, list[str]]:
+            from uro_core.worldpack.backfill import backfill_gaps
+
+            return await backfill_gaps(pack, bound_router)
+
+        async def probe(manifest: WorldManifest, tries: int) -> ProbeReport:
+            from uro_core.engines.probe import run_probes
+
+            return await run_probes(manifest, bound_router, tries=tries)
+
     return ServerDeps(
         resolve_participant=registry.resolve,
         campaign_exists=campaign_exists,
@@ -243,6 +280,8 @@ def engine_deps(
         token_campaign=registry.campaign_of,
         hydrate_tokens=registry.hydrate,
         list_rulesets=list_rulesets,
+        backfill=backfill,
+        probe=probe,
     )
 
 
@@ -250,6 +289,21 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
     app = FastAPI(title="Uro Engine server")
     hub = SessionHub()
     arb = arbiter or SoloArbiter()
+
+    @app.middleware("http")
+    async def _cap_pack_uploads(request: Request, call_next: Any) -> Any:
+        """Reject an over-cap multipart pack upload by Content-Length BEFORE FastAPI spools the
+        body (BE-7 hardening): the pack-upload handlers' operator gate + the `_safe_extract_pack`
+        20 MB cap both run only AFTER form parsing, so without this a large body is buffered
+        pre-auth. This runs first (middleware wraps the request), bounds pre-auth buffering to the
+        cap, and is scoped to the pack routes — `/worlds/import` (a large JSON bundle) is untouched.
+        A missing/blank Content-Length falls through to normal handling (chunked bodies are rare
+        here and still hit the post-parse cap)."""
+        if request.method == "POST" and request.url.path in _PACK_UPLOAD_PATHS:
+            cl = request.headers.get("content-length")
+            if cl is not None and cl.isdigit() and int(cl) > _MAX_PACK_BYTES:
+                return JSONResponse({"detail": "pack archive too large"}, status_code=413)
+        return await call_next(request)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -423,6 +477,89 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
                 "ruleset_ok": rid in registry.available(),
                 "gaps": report.gaps,
             }
+
+    @app.post("/worlds/backfill")
+    async def backfill_world_pack(
+        request: Request,
+        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+    ) -> dict[str, Any]:
+        """AI-fill an uploaded thin pack's gaps, PREVIEW-only (BE-7, `uro world backfill`) — return
+        the augmented seeds (each tagged `provenance=ai_backfill`) + before/after grade, committing
+        NOTHING. **OPERATOR-only (D-44):** it makes a live, uncapped LLM call (the engine exposes
+        cost, never caps it — docs/00), so a plain player token can't burn model budget. Like
+        `/worlds/validate` this is pack-UPLOAD-shaped, not `/worlds/{w}/`: backfill needs the pack's
+        manifest/lore (sufficiency gaps), which a stored world doesn't persist. Committing the
+        seeds is `world create --backfill` — it rides the deferred pack-upload CREATE endpoint. The
+        PoC backfill fills only the `conflict` dimension."""
+        _require_operator(request)
+        if deps.backfill is None:
+            raise HTTPException(status_code=501, detail="backfill not enabled (no provider wired)")
+        from uro_core.errors import PackError, ProviderError
+        from uro_core.worldpack.parse import parse_pack
+        from uro_core.worldpack.sufficiency import check_sufficiency
+
+        data = await pack.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _safe_extract_pack(data, Path(tmp))
+            try:
+                parsed = parse_pack(root)
+            except PackError as exc:  # a malformed pack is bad INPUT → 400
+                raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
+            before = check_sufficiency(parsed)
+            try:
+                augmented, added = await deps.backfill(parsed)
+            except ProviderError as exc:  # a live-model failure is upstream, not bad input → 502
+                raise HTTPException(status_code=502, detail=f"provider error: {exc}") from exc
+            after = check_sufficiency(augmented)
+            seeds = [t.model_dump() for t in augmented.threads if t.provenance == "ai_backfill"]
+            return {
+                "name": parsed.manifest.name,
+                "before_grade": before.grade,
+                "after_grade": after.grade,
+                "added": added,
+                "seeds": seeds,  # the ai_backfill ThreadSeeds (preview — nothing committed)
+            }
+
+    @app.post("/worlds/probe")
+    async def probe_world_pack(
+        request: Request,
+        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+    ) -> dict[str, Any]:
+        """Run the model-capability probe suite against an uploaded pack (BE-7, `uro world probe`) →
+        a judge-scored report (structured-output gate + content-rating), **warn-not-fail** (D-24): a
+        weak/refusing model yields `status=warn|fail`, never an error. The report is a `200` and
+        `ok` is the machine verdict. **OPERATOR-only (D-44):** it makes several live LLM calls.
+        `?tries=` (default 3, capped) governs only the structured-output probe. Pack-upload-shaped
+        (probe reads `manifest.content`, not persisted on a stored world)."""
+        _require_operator(request)
+        if deps.probe is None:
+            raise HTTPException(status_code=501, detail="probe not enabled (no provider wired)")
+        try:
+            tries = int(request.query_params.get("tries") or 3)
+        except ValueError as exc:  # ?tries=abc is bad input → 400
+            raise HTTPException(status_code=400, detail="tries must be an integer") from exc
+        if tries < 1 or tries > 10:  # cap the live-call fan-out (operator, but still bounded)
+            raise HTTPException(status_code=400, detail="tries must be between 1 and 10")
+        from uro_core.errors import PackError, ProviderError
+        from uro_core.worldpack.parse import parse_pack
+
+        data = await pack.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _safe_extract_pack(data, Path(tmp))
+            try:
+                parsed = parse_pack(root)
+            except PackError as exc:
+                raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
+            try:
+                report = await deps.probe(parsed.manifest, tries)
+            except ProviderError as exc:
+                raise HTTPException(status_code=502, detail=f"provider error: {exc}") from exc
+            body = report.model_dump()
+            # ok / warnings are @property → not in model_dump(); surface them explicitly as the
+            # machine verdict + human summary (warn-not-fail: a failing probe is still a 200).
+            body["ok"] = report.ok
+            body["warnings"] = report.warnings
+            return body
 
     @app.get("/worlds/{world_id}/branches")
     async def list_world_branches(world_id: str, request: Request) -> dict[str, Any]:

@@ -65,6 +65,22 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   `usage_by_stage` to the `EventStore` port. The world-scoped **`state?branch=&at=`**
   (materialize-at-commit) is deferred to its own slice — it's a new read-only materialize primitive
   (nearest-snapshot + replay), not the head-only `query_across` the campaign `/state` uses.
+- **AI world-authoring stages (backfill + probe) over HTTP (BE-7, #39)** — `POST /worlds/backfill`
+  previews a thin pack's AI gap-fill (the augmented seeds, each tagged `provenance=ai_backfill`, +
+  before/after sufficiency grade; mirrors `uro world backfill` — commits nothing) and `POST
+  /worlds/probe[?tries=]` returns the judge-scored model-capability report (structured-output gate +
+  content-rating). Both are **operator-only** (D-44 — they make live, uncapped LLM calls; the engine
+  exposes cost, never caps it) and **pack-upload-shaped** (multipart `.zip`, like `/worlds/validate`)
+  rather than `/worlds/{w}/`: backfill's gaps read `manifest.generate_population`/`history`/lore and
+  probe reads `manifest.content`, none of which a stored world persists — so the pack is re-supplied.
+  Probe is **warn-not-fail** (D-24): a weak/refusing model yields `status=warn|fail` in a `200`
+  report (`ok` is the machine verdict), never an HTTP error; a provider transport failure → `502`, a
+  malformed pack → `400`, an unwired provider → `501`. `engine_deps` gains an optional `router`
+  (threaded from `serve`, which already builds it) and wires the `ServerDeps.backfill`/`probe`
+  closures over the same process provider the Engine uses. CI never makes live calls — the stub
+  provider drives the deterministic path; the live pass is the operator's. Committing the backfilled
+  seeds (`ai_backfill` `ThreadCreated` at genesis via `create --backfill`) rides the deferred
+  pack-upload create endpoint.
 
 ### Fixed
 - **PyPI publish workflow** — split into one job per package, each in its own GitHub environment

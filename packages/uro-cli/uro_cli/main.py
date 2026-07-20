@@ -530,7 +530,8 @@ def serve(
         tokens[tok] = name if sep else f"operator-{j + 1}"
         admin_tokens.add(tok)
     store = build_store()
-    engine = Engine(store, build_router(provider, model), ruleset=build_ruleset(ruleset))
+    router = build_router(provider, model)
+    engine = Engine(store, router, ruleset=build_ruleset(ruleset))
     # Pick the turn shape (OQ-7, D-31/D-38/D-39). UNSET (--arbiter not given) is AUTO: solo for one
     # token (the dev loop → SoloArbiter), party for >1. Set EXPLICITLY, the shape binds regardless
     # of launch token count, so a player minted+joined at RUNTIME still gets real turns (D-39)
@@ -548,7 +549,7 @@ def serve(
         )
     else:
         arbiter = shapes[arbiter_kind]()
-    deps = engine_deps(store, engine, tokens, admin_tokens)
+    deps = engine_deps(store, engine, tokens, admin_tokens, router=router)
     fastapi_app = create_app(deps, arbiter=arbiter)
 
     @fastapi_app.on_event("startup")
