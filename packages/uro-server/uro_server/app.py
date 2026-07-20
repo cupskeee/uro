@@ -35,6 +35,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketState
@@ -310,10 +311,33 @@ def engine_deps(
     )
 
 
-def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastAPI:
+def create_app(
+    deps: ServerDeps,
+    *,
+    arbiter: TurnArbiter | None = None,
+    cors_origins: list[str] | None = None,
+) -> FastAPI:
     app = FastAPI(title="Uro Engine server")
     hub = SessionHub()
     arb = arbiter or SoloArbiter()
+
+    # A browser SPA (uro-loom) lives on a DIFFERENT origin than the server, so without CORS the
+    # browser blocks every cross-origin call (the request never reaches here — it fails preflight /
+    # is dropped client-side). Off by default (the CLI/embed paths don't need it, and a permissive
+    # default would be an unsafe surprise); a deployment opts in per allowed origin via
+    # `uro serve --cors-origin`. `*` is honored for pure dev (allow-any), but then credentials are
+    # disabled per the CORS spec (a wildcard origin cannot carry credentials). Tokens ride the
+    # Authorization header (not cookies) today, so `allow_credentials` matters only for a future
+    # cookie/BFF deployment (docs/05-bff-design.md) — hence the explicit-origins path keeps it on.
+    if cors_origins:
+        wildcard = "*" in cors_origins
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"] if wildcard else cors_origins,
+            allow_credentials=not wildcard,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.middleware("http")
     async def _cap_pack_uploads(request: Request, call_next: Any) -> Any:

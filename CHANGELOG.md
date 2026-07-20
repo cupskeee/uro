@@ -29,6 +29,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
     beliefs, `caused_by`; never a player read). A new `advance_branch_time` server dep runs the
     fork's `--time-skip-days` via `engine.agenda_tick`.
 
+- **Browser access for the web console — `uro serve --cors-origin` (fix).** The server shipped with
+  no CORS headers, so a browser SPA (uro-loom) on a different origin (e.g. `http://localhost:5173`)
+  had every cross-origin call blocked by the browser — the console reported "Unreachable" / an
+  all-red network log against a perfectly healthy server (`curl` worked; the browser didn't).
+  `create_app` now attaches FastAPI `CORSMiddleware` when one or more `--cors-origin` values are
+  passed (repeatable; `*` = dev allow-any, which drops `allow-credentials` per the CORS spec). Off
+  by default — CLI/embedded use needs none. This settles the "how does a browser reach the server"
+  decision docs/08 had deferred to first real-instance contact.
+
 - **Pack validate over HTTP (BE-6, #38)** — `POST /worlds/validate` accepts a **multipart `.zip`**
   of a world-pack directory, extracts it zip-slip-safely to a temp dir, and returns the sufficiency
   grade + per-dimension detail + gaps + ruleset check (mirrors `uro world validate`). Parse-only —
