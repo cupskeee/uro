@@ -310,3 +310,79 @@ async def test_outcome_endpoint_rejects_a_malformed_bundle(store: PostgresEventS
             json={"participants": [], "v": 2},  # unsupported schema version
         )
         assert badv.status_code == 400
+
+
+def _two_tier(store: PostgresEventStore) -> httpx.AsyncClient:
+    """A real-engine app with an OPERATOR token ('op'→gm) and a PLAYER token ('pleb'→carol) — for
+    the holistic-review authority + epistemic fixes (D-45/D-46)."""
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    app = create_app(engine_deps(store, engine, {"op": "gm", "pleb": "carol"}, admin_tokens={"op"}))
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
+
+
+async def test_holistic_review_authority_and_epistemic_fixes(store: PostgresEventStore) -> None:
+    async with _two_tier(store) as c:
+
+        def op(p: str) -> str:
+            return f"{p}{'&' if '?' in p else '?'}token=op"
+
+        def pl(p: str) -> str:
+            return f"{p}{'&' if '?' in p else '?'}token=pleb"
+
+        # create_world is now OPERATOR-only (D-46): a player token → 403, operator → 200.
+        assert (await c.post(pl("/worlds"), json={"name": "PlebWorld"})).status_code == 403
+        wr = await c.post(op("/worlds"), json={"name": "HRev"})
+        assert wr.status_code == 200
+        wid = wr.json()["world_id"]
+
+        # start_campaign self-or-admin (D-39): a player may name only THEMSELVES.
+        assert (
+            await c.post(
+                pl(f"/worlds/{wid}/campaigns"),
+                json={"participant": "not-carol", "new_pc_name": "B"},
+            )
+        ).status_code == 403
+        cr = await c.post(
+            pl(f"/worlds/{wid}/campaigns"), json={"participant": "carol", "new_pc_name": "Carol PC"}
+        )
+        assert cr.status_code == 200
+        cid = cr.json()["campaign_id"]
+
+        # a non-int seed (JSON array) → 400, not a 500 (TypeError used to escape the catch).
+        assert (
+            await c.post(
+                op(f"/worlds/{wid}/campaigns"),
+                json={"participant": "z", "new_pc_name": "Z", "seed": [1, 2]},
+            )
+        ).status_code == 400
+
+        # D-45 epistemic boundary: a player CANNOT read claims/beliefs; an operator can.
+        assert (await c.get(pl(f"/campaigns/{cid}/state?sections=claims"))).status_code == 403
+        assert (
+            await c.get(pl(f"/campaigns/{cid}/state?sections=actors,beliefs"))
+        ).status_code == 403
+        assert (
+            await c.get(pl(f"/campaigns/{cid}/state?sections=actors,threads,places,factions,pcs"))
+        ).status_code == 200
+        assert (
+            await c.get(op(f"/campaigns/{cid}/state?sections=claims,beliefs"))
+        ).status_code == 200
+
+        # time-skip is now OPERATOR-only (D-46) + a day cap.
+        assert (
+            await c.post(pl(f"/campaigns/{cid}/time-skip"), json={"days": 5})
+        ).status_code == 403
+        assert (
+            await c.post(op(f"/campaigns/{cid}/time-skip"), json={"days": 10**9})
+        ).status_code == 400
+        assert (
+            await c.post(op(f"/campaigns/{cid}/time-skip"), json={"days": 3})
+        ).status_code == 200
+
+        # Campaign.seed (mechanics RNG) is hidden from a player, exposed to an operator.
+        assert "seed" not in (await c.get(pl(f"/campaigns/{cid}"))).json()
+        assert "seed" in (await c.get(op(f"/campaigns/{cid}"))).json()
+
+        # roster on an unknown campaign is 404 (was 200); a negative ?limit is 400 (was a 500).
+        assert (await c.get(op("/campaigns/nope/roster"))).status_code == 404
+        assert (await c.get(op(f"/campaigns/{cid}/chronicle?limit=-1"))).status_code == 400

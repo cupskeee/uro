@@ -83,6 +83,29 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   pack-upload create endpoint.
 
 ### Fixed
+- **BE-1…BE-11 holistic-review hardening (D-46)** — a system-wide cross-phase seam hunt over the
+  merged management surface (the project's phase-end discipline, which the BE epic had not yet had)
+  found and fixed:
+  - **Epistemic leak (HIGH, D-45 now enforced):** `GET /campaigns/{c}/state?sections=claims,beliefs`
+    let a **player** token read claim `truth` values + every NPC's hidden beliefs (also
+    sheets/items/edges/counters) — the omniscient ground truth the engine exists to hide. The read is
+    now restricted to a scene-safe allowlist `{actors,threads,places,factions,pcs}` for a player;
+    omniscient sections require an operator token. D-45's "by construction" claim held only for the
+    *default* sections; it is now enforced against an explicit override.
+  - **Authority consistency (D-46, refines D-44):** `POST /worlds` (create) and `POST
+    /campaigns/{c}/time-skip` were any-authed but are the same structural timeline write as their
+    operator-only siblings (`import` / fork time-skip / `end`) — both are now operator-only; time-skip
+    also caps `days`. `start_campaign` gains the self-or-admin scope check (a player can no longer
+    bind a PC naming another participant); `time-skip`/`dry-run` gain the minted-token campaign-scope
+    check the WS/outcome paths already enforced.
+  - **Error contract:** a negative `?limit` (parsed fine, then `LIMIT -1` → Postgres 500) and a
+    non-int `seed` (a JSON array → `TypeError` escaping the catch → 500) now return `400`; `GET
+    /campaigns/{c}/roster` returns `404` for an unknown campaign (was `200`).
+  - **Resource / disclosure:** pack upload now caps *decompressed* size (a zip-bomb slipped the
+    compressed-byte cap); `beat_failed` broadcasts a generic reason instead of the raw exception
+    string (info disclosure across participants); the mechanics RNG `seed` is stripped from a
+    player-facing campaign read (predictable combat); the Content-Length middleware docstring no
+    longer overclaims (the decompressed cap is the real bound). All covered by new tests.
 - **WS play-channel wire contract reconciled with `docs/08` (BE-11, #43)** — `docs/08` advertised
   server frames the handler never emits (`scene_update`/`mode_change`/`mechanics_result`/
   `suggestions`), client frames it doesn't accept (`encounter_action`/`pin_actor`), and a universal

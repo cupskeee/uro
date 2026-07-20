@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import tempfile
 import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # annotation-only (from __future__ import annotations) — no runtime import
     from uro_core.engines.probe import ProbeReport
     from uro_core.providers.router import ProviderRouter
+    from uro_core.timeline.models import Campaign
     from uro_core.worldpack.models import WorldManifest, WorldPack
 
 from fastapi import (
@@ -44,6 +46,8 @@ from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordi
 
 from uro_server.sessions import SessionHub, TokenRegistry
 
+logger = logging.getLogger("uro_server")
+
 
 def _bearer_token(request: Request) -> str:
     """Extract a bearer token from the Authorization header, or ''."""
@@ -52,6 +56,13 @@ def _bearer_token(request: Request) -> str:
 
 
 _MAX_PACK_BYTES = 20 * 1024 * 1024  # 20 MB — an authored world pack is small; cap untrusted input
+_MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MB — the DECOMPRESSED-size cap (zip-bomb guard)
+
+# The non-omniscient scene projections a PLAYER may read via GET /campaigns/{c}/state (D-45): a
+# player token is restricted to these; `claims` (truth values), `beliefs` (hidden), `sheets`,
+# `items`, `edges`, `counters`, `snapshots` carry GM ground truth → operator-only. The whole
+# epistemic thesis collapses if a player can read the raw truth-tagged log (D-45).
+_PLAYER_SAFE_SECTIONS = frozenset({"actors", "threads", "places", "factions", "pcs"})
 
 # The multipart pack-UPLOAD routes. FastAPI spools the whole body during form parsing — BEFORE a
 # handler's operator gate or the `_safe_extract_pack` cap — so an oversized upload is rejected up
@@ -62,7 +73,10 @@ _PACK_UPLOAD_PATHS = frozenset({"/worlds/validate", "/worlds/backfill", "/worlds
 def _safe_extract_pack(data: bytes, dest: Path) -> Path:
     """Extract an uploaded pack `.zip` into `dest` (ZIP-SLIP-SAFE) and return the pack root — the
     dir holding `world.toml` (the archive root, or a single top-level subdir). Raises
-    HTTPException on a too-large / non-zip / path-escaping / rootless archive (BE-6)."""
+    HTTPException on a too-large / non-zip / path-escaping / zip-bomb / rootless archive (BE-6).
+    The compressed cap alone does NOT bound a zip bomb (a few KB → GBs), so extraction runs
+    member-by-member with a cumulative DECOMPRESSED-byte cap on the bytes actually written (never
+    trusting the central-directory sizes, which are attacker-controlled)."""
     if len(data) > _MAX_PACK_BYTES:
         raise HTTPException(status_code=413, detail="pack archive too large")
     try:
@@ -70,11 +84,22 @@ def _safe_extract_pack(data: bytes, dest: Path) -> Path:
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="upload must be a .zip of the pack") from exc
     dest_root = dest.resolve()
-    for member in zf.namelist():
-        target = (dest / member).resolve()
+    written = 0
+    for member in zf.infolist():
+        target = (dest / member.filename).resolve()
         if not (target == dest_root or dest_root in target.parents):  # zip-slip guard
-            raise HTTPException(status_code=400, detail=f"unsafe path in archive: {member!r}")
-    zf.extractall(dest)
+            raise HTTPException(
+                status_code=400, detail=f"unsafe path in archive: {member.filename!r}"
+            )
+        if member.is_dir():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member) as src, open(target, "wb") as out:
+            while chunk := src.read(65536):
+                written += len(chunk)
+                if written > _MAX_UNCOMPRESSED_BYTES:  # zip-bomb: abort mid-stream, don't fill disk
+                    raise HTTPException(status_code=413, detail="pack expands too large")
+                out.write(chunk)
     if (dest / "world.toml").is_file():
         return dest
     subdirs = [d for d in dest.iterdir() if d.is_dir()]
@@ -292,13 +317,13 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
 
     @app.middleware("http")
     async def _cap_pack_uploads(request: Request, call_next: Any) -> Any:
-        """Reject an over-cap multipart pack upload by Content-Length BEFORE FastAPI spools the
-        body (BE-7 hardening): the pack-upload handlers' operator gate + the `_safe_extract_pack`
-        20 MB cap both run only AFTER form parsing, so without this a large body is buffered
-        pre-auth. This runs first (middleware wraps the request), bounds pre-auth buffering to the
-        cap, and is scoped to the pack routes — `/worlds/import` (a large JSON bundle) is untouched.
-        A missing/blank Content-Length falls through to normal handling (chunked bodies are rare
-        here and still hit the post-parse cap)."""
+        """Best-effort early reject of an over-cap multipart pack upload by Content-Length, BEFORE
+        FastAPI spools the body (BE-7 hardening). This is a fast-path only, NOT the real bound: a
+        chunked or Content-Length-absent upload bypasses it and is still spooled, then caught by the
+        post-parse compressed cap (`_MAX_PACK_BYTES`) and the decompressed zip-bomb cap
+        (`_MAX_UNCOMPRESSED_BYTES` in `_safe_extract_pack`) — those two are the actual guarantees.
+        Scoped to the pack routes; `/worlds/import` (a large JSON bundle) is untouched. In
+        production a reverse proxy should also cap the request body."""
         if request.method == "POST" and request.url.path in _PACK_UPLOAD_PATHS:
             cl = request.headers.get("content-length")
             if cl is not None and cl.isdigit() and int(cl) > _MAX_PACK_BYTES:
@@ -418,9 +443,32 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         if not admin:
             raise HTTPException(status_code=403, detail="operator token required")
 
+    def _reject_foreign_scope(request: Request, campaign_id: str) -> None:
+        """A MINTED token is campaign-scoped (D-39): reject it on a DIFFERENT campaign's mutating /
+        cost-bearing endpoint — else a token authenticates its participant server-wide (holistic
+        review: `time-skip`/`dry-run` left this open, unlike the WS channel + outcome endpoint).
+        Static operator/legacy `--token` creds (`token_campaign` → None) stay server-wide."""
+        token = request.query_params.get("token") or _bearer_token(request)
+        tok_campaign = deps.token_campaign(token) if deps.token_campaign is not None else None
+        if tok_campaign is not None and tok_campaign != campaign_id:
+            raise HTTPException(status_code=403, detail="token not valid for this campaign")
+
+    def _parse_limit(request: Request, default: int) -> int:
+        """Parse `?limit=`: a non-integer OR a NEGATIVE value is bad INPUT → 400 (holistic review: a
+        negative limit reached Postgres as `LIMIT -1` and 500'd). `0` is valid (empty page)."""
+        try:
+            limit = int(request.query_params.get("limit") or default)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
+        if limit < 0:
+            raise HTTPException(status_code=400, detail="limit must not be negative")
+        return limit
+
     @app.post("/worlds")
     async def create_world(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:  # noqa: B008
-        _auth(request)
+        # OPERATOR-only (D-46, refining D-44): create_world instantiates a fresh world + main branch
+        # — the same structural write as `/worlds/import` (operator-only), so it's gated alike.
+        _require_operator(request)
         tone = body.get("tone")
         if isinstance(tone, str):  # allow a bare-string tone from a JSON consumer
             tone = [tone]
@@ -661,10 +709,7 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
         branch = request.query_params.get("branch") or "main"
-        try:
-            limit = int(request.query_params.get("limit") or 20)
-        except ValueError as exc:  # ?limit=abc is bad input → 400, not a 500
-            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
+        limit = _parse_limit(request, 20)
         b = await store.get_branch_by_name(world_id, branch)
         if b is None:
             raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
@@ -686,10 +731,7 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
         branch = request.query_params.get("branch") or "main"
-        try:
-            limit = int(request.query_params.get("limit") or 50)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
+        limit = _parse_limit(request, 50)
         b = await store.get_branch_by_name(world_id, branch)
         if b is None:
             raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
@@ -729,10 +771,7 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         b = await store.get_branch_by_name(world_id, branch)
         if b is None:
             raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
-        try:
-            limit = int(request.query_params.get("limit") or 20)
-        except ValueError as exc:  # ?limit=abc is bad input → 400, not a 500
-            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
+        limit = _parse_limit(request, 20)
         beats = await store.recent_beats(b.branch_id, limit)
         return {"branch": branch, "beats": [bt.model_dump() for bt in beats]}
 
@@ -787,8 +826,21 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         if world is None:
             raise HTTPException(status_code=404, detail="no such world")
         participant = _require(body, "participant")
+        # Self-or-admin (D-39, holistic review): a caller may start a campaign only for THEMSELVES;
+        # only an operator may name another participant — else a player could bind a PCBound naming
+        # someone else on the shared main branch (mirrors the `join` guard).
+        _, caller, admin = _scope(request)
+        if participant != caller and not admin:
+            raise HTTPException(
+                status_code=403,
+                detail="only an operator may start a campaign for another participant",
+            )
         new_pc_name = body.get("new_pc_name")
         adopt_actor_id = body.get("adopt_actor_id")
+        try:  # a non-int seed (e.g. a JSON array) is TypeError — the block below wouldn't catch it
+            seed = int(body.get("seed") or 0)  # docs/18 G-3: reproducible-combat seed
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="seed must be an integer") from exc
         try:
             # Pin the WORLD's declared ruleset + sheet the PC (D-30 + Phase-3), like the CLI `uro
             # campaign new` path — a REST-created PbtA campaign must not silently fall to an empty
@@ -811,25 +863,32 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
                 pc_sheet=pc_sheet,
                 ruleset_id=ruleset_id,
                 ruleset_version=world_rver,
-                seed=int(body.get("seed") or 0),  # docs/18 G-3: reproducible-combat seed
+                seed=seed,
             )
         except (ValueError, KeyError) as exc:  # bad PC choice, or world pins an absent ruleset
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"campaign_id": c.campaign_id, "branch_id": c.branch_id}
 
+    def _campaign_view(c: Campaign, admin: bool) -> dict[str, Any]:
+        # The mechanics RNG `seed` makes deterministic combat predictable (holistic review) — it's
+        # GM data, not a player read. Expose it only to an operator; strip it for a player token.
+        return c.model_dump() if admin else c.model_dump(exclude={"seed"})
+
     @app.get("/campaigns")
     async def list_campaigns(request: Request) -> list[dict[str, Any]]:
         _auth(request)
+        _, _, admin = _scope(request)
         world_id = request.query_params.get("world_id")
-        return [c.model_dump() for c in await _mgmt().list_campaigns(world_id)]
+        return [_campaign_view(c, admin) for c in await _mgmt().list_campaigns(world_id)]
 
     @app.get("/campaigns/{campaign_id}")
     async def get_campaign(campaign_id: str, request: Request) -> dict[str, Any]:
         _auth(request)
+        _, _, admin = _scope(request)
         c = await _mgmt().get_campaign(campaign_id)
         if c is None:
             raise HTTPException(status_code=404, detail="no such campaign")
-        return c.model_dump()
+        return _campaign_view(c, admin)
 
     @app.post("/campaigns/{campaign_id}/join")
     async def join_campaign(
@@ -927,17 +986,32 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
     @app.get("/campaigns/{campaign_id}/roster")
     async def campaign_roster(campaign_id: str, request: Request) -> dict[str, Any]:
         _auth(request)
-        return {"pcs": await _mgmt().campaign_pcs(campaign_id)}
+        store = _mgmt()
+        if await store.get_campaign(campaign_id) is None:  # 404 like every sibling read (was 200)
+            raise HTTPException(status_code=404, detail="no such campaign")
+        return {"pcs": await store.campaign_pcs(campaign_id)}
 
     @app.get("/campaigns/{campaign_id}/state")
     async def campaign_state(campaign_id: str, request: Request) -> dict[str, Any]:
-        _auth(request)
+        _auth(request)  # 401 on a bad/missing token
+        _, _, admin = _scope(request)  # operator tier decides which sections are readable
         store = _mgmt()
         c = await store.get_campaign(campaign_id)
         if c is None:
             raise HTTPException(status_code=404, detail="no such campaign")
         raw = request.query_params.get("sections") or "actors,threads,places,factions"
         sections = raw.split(",")
+        # D-45 epistemic boundary: a PLAYER may read only the non-omniscient scene sections; the
+        # omniscient projections (claims' truth values, hidden beliefs, sheets/items/edges/counters)
+        # are operator-only observability (holistic review — the previous any-authed pass leaked the
+        # raw truth-tagged log, the exact bypass D-45's rider named). Operators read anything.
+        if not admin:
+            forbidden = [s for s in sections if s not in _PLAYER_SAFE_SECTIONS]
+            if forbidden:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"operator token required for: {', '.join(sorted(forbidden))}",
+                )
         try:
             # query_across raises on an unknown section (typo-loud, B5) — a client typo is bad
             # INPUT → 400, matching every mutating endpoint (not a bare 500).
@@ -953,12 +1027,11 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         c = await store.get_campaign(campaign_id)
         if c is None:
             raise HTTPException(status_code=404, detail="no such campaign")
-        try:
-            limit = int(request.query_params.get("limit") or 20)
-        except ValueError as exc:  # ?limit=abc is bad input → 400, not a 500
-            raise HTTPException(status_code=400, detail="limit must be an integer") from exc
+        limit = _parse_limit(request, 20)
         beats = await store.recent_beats(c.branch_id, limit)
         return {"beats": [b.model_dump() for b in beats]}
+
+    _MAX_TIMESKIP_DAYS = 100 * 365  # cap the in-fiction jump (a runaway skip fires N agenda rounds)
 
     @app.post("/campaigns/{campaign_id}/time-skip")
     async def campaign_time_skip(
@@ -966,7 +1039,11 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
     ) -> dict[str, Any]:
-        _auth(request)
+        # OPERATOR-only (D-46, refining D-44): a time-skip commits TimeAdvanced + fires downtime
+        # agenda rules (belief/edge/rumor churn) on the SHARED campaign branch — the same structural
+        # timeline write as the operator-only fork time-skip + end_campaign (holistic review).
+        _require_operator(request)
+        _reject_foreign_scope(request, campaign_id)
         if deps.advance_time is None:
             raise HTTPException(status_code=501, detail="time-skip not enabled")
         try:
@@ -975,6 +1052,8 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
             raise HTTPException(status_code=400, detail="days must be an integer") from exc
         if days <= 0:  # store.time_skip rejects this deeper (a 500); catch it here as bad input
             raise HTTPException(status_code=400, detail="days must be a positive integer")
+        if days > _MAX_TIMESKIP_DAYS:
+            raise HTTPException(status_code=400, detail=f"days must be <= {_MAX_TIMESKIP_DAYS}")
         return await deps.advance_time(campaign_id, days)
 
     @app.post("/campaigns/{campaign_id}/dry-run")
@@ -986,8 +1065,10 @@ def create_app(deps: ServerDeps, *, arbiter: TurnArbiter | None = None) -> FastA
         """Dry-run a beat: run the full pipeline and return the events it WOULD commit, writing
         NOTHING (BE-5, mirrors `uro dry-run`). Any-authed — the non-committing twin of a play beat
         (the WS channel is any-authed too); INTENT-ONLY (no client `plan=`, D-37). Acting PC = the
-        token's participant (solo fallback if unbound)."""
+        token's participant (solo fallback if unbound). A minted token is campaign-scoped (D-39):
+        it can't dry-run a FOREIGN campaign (holistic review — it burns LLM + reads state)."""
         _auth(request)
+        _reject_foreign_scope(request, campaign_id)
         if deps.preview_beat is None:
             raise HTTPException(status_code=501, detail="dry-run not enabled")
         intent = str(_require(body, "intent"))
@@ -1255,17 +1336,20 @@ async def _run_and_broadcast(
                 campaign_id,
                 {"type": "narration_chunk", "participant_id": participant, "text": chunk},
             )
-    except Exception as exc:
+    except Exception:
         # A beat failure (e.g. a ruleset mismatch, a provider error) must NOT crash the WS
         # connection — broadcast a graceful failure and keep the session alive (mirrors the CLI
         # play loop's "beat failed; nothing was saved"). Nothing was committed (pre-commit crash).
+        # The raw exception is logged server-side, NOT fanned out to every client (holistic review:
+        # str(exc) can carry internal detail — an info-disclosure across participants).
+        logger.exception("beat failed for participant %s on campaign %s", participant, campaign_id)
         await hub.publish(
             campaign_id,
             {
                 "type": "beat_failed",
                 "participant_id": participant,
                 "intent": text,
-                "error": str(exc),
+                "error": "beat failed; nothing was saved",
             },
         )
         # A failed turn STILL yields the token (cross-phase review P7xP3): otherwise a
