@@ -13,7 +13,7 @@ from typing import Any
 
 import asyncpg
 
-from uro_core.adapters.crypto import decrypt_secret, encrypt_secret
+from uro_core.adapters.crypto import clean_secret, decrypt_secret, encrypt_secret
 from uro_core.adapters.postgres.projector import (
     _SNAPSHOT_TABLES,
     apply_event,
@@ -1414,6 +1414,12 @@ class PostgresEventStore:
         refresh_token: str | None = None,
         auth_mode: str = "api_key",
     ) -> str:
+        # Reject a control-char (CR/LF) in a secret: never valid in an HTTP header, and if stored it
+        # makes httpx raise `Illegal header value b'Bearer sk-…'` at request-build — whose text
+        # carries the PLAINTEXT KEY into the refresh/test error surfaces (review HIGH). Strip
+        # surrounding whitespace (routine copy-paste) and refuse embedded CR/LF loudly at ingestion.
+        access_token = clean_secret(access_token)
+        refresh_token = clean_secret(refresh_token)
         # Encrypt BEFORE the DB ever sees it (app-level Fernet, env KEK) — no plaintext at rest.
         enc_access = encrypt_secret(access_token) if access_token is not None else None
         enc_refresh = encrypt_secret(refresh_token) if refresh_token is not None else None

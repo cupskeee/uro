@@ -136,8 +136,13 @@ class Engine:
     def rebind_router(self, router: ProviderRouter) -> None:
         """Swap the provider router in place (D-47 slice 4: reload-without-restart). The engine is
         otherwise long-lived; this lets a registry change take effect without bouncing the process.
-        A beat already streaming keeps the router it started with (attribute rebind is atomic; each
-        beat reads `self._router` once at its start)."""
+
+        NOTE (holistic-review MEDIUM, named deferral): a beat reads `self._router` at SEVERAL points
+        (narrator/planner/extractor/embedder), so a reload landing mid-beat can make that beat
+        use a MIX of the old and new routers. Both are complete, valid routers (an incomplete one is
+        refused at build time — see `build_router_from_registry`), so the worst case is a single
+        mixed-provider beat, never a crash or a leak. A true per-beat router snapshot (thread one
+        router through the pipeline helpers) is the clean fix — deferred, low-impact."""
         self._router = router
 
     @property

@@ -15,7 +15,7 @@ import os
 import asyncpg
 import httpx
 
-from uro_core.ports.model_registry import ModelConnection, ModelRegistry
+from uro_core.ports.model_registry import ROLES, ModelConnection, ModelRegistry
 from uro_core.providers.adapters.anthropic import AnthropicProvider
 from uro_core.providers.adapters.openai_compat import OpenAICompatProvider
 from uro_core.providers.adapters.stub import StubProvider
@@ -98,8 +98,20 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
             default = provider
         else:
             bindings[rb.role] = provider
-    if default is None and not bindings:
-        return None
+    if default is None:
+        if not bindings:
+            return None  # truly empty (or all bindings skipped) → seed fallback
+        # Bindings but no `default`: any UNBOUND engine role would hit ProviderRouter._provider_for
+        # → KeyError → the beat crashes mid-run (extractor/planner). Fail LOUD at build time (serve
+        # startup / reload) with an actionable message rather than a latent per-beat crash
+        # (holistic-review HIGH). If every role is bound, no default is needed and this is fine.
+        unbound = sorted((ROLES - {"default"}) - set(bindings))
+        if unbound:
+            raise ValueError(
+                f"model-connection registry binds {sorted(bindings)} but no 'default' role, and "
+                f"roles {unbound} are unbound — they would crash mid-beat. Bind the default role: "
+                "`uro provider bind default <connection> <model>`."
+            )
     return ProviderRouter(bindings=bindings, default=default)
 
 

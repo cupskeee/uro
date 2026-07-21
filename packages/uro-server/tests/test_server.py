@@ -15,7 +15,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-from uro_core.adapters.crypto import SecretsUnavailable
+from uro_core.adapters.crypto import SecretsUnavailable, clean_secret
 from uro_core.domain.events import BeatResolvedPayload
 from uro_core.export import (
     BundleBranch,
@@ -1865,6 +1865,7 @@ class _FakeRegistryStore:
     ):  # type: ignore[no-untyped-def]
         if self._no_kek:
             raise SecretsUnavailable("URO_SECRET_KEY is not set")
+        clean_secret(access_token)  # mirror the real store: reject an embedded CR/LF → ValueError
         cid = self._id("cred")
         self._creds[cid] = ProviderCredential(
             id=cid,
@@ -2042,3 +2043,25 @@ def test_refresh_501_when_discovery_unwired() -> None:
     client = _reg_client()
     assert client.post("/providers/conn_1/refresh?token=tok-a").status_code == 501
     assert client.post("/providers/reload?token=tok-a").status_code == 501
+
+
+# --- holistic-review hardening: credential 400 + empty-model 400 ---------------------------------
+
+
+def test_create_credential_rejects_a_control_char_key() -> None:
+    # An embedded CR/LF in the key → 400 at ingestion (root-cause fix for the leak), not a 500.
+    client = _reg_client()
+    resp = client.post(
+        "/providers/credentials?token=tok-a",
+        json={"provider": "openai", "access_token": "sk-leak\nmore"},
+    )
+    assert resp.status_code == 400
+
+
+def test_set_role_rejects_an_empty_model() -> None:
+    client = _reg_client()
+    cid = client.post("/providers?token=tok-a", json={"name": "s", "provider": "stub"}).json()["id"]
+    resp = client.put(
+        "/providers/roles/narrator?token=tok-a", json={"connection_id": cid, "model": "  "}
+    )
+    assert resp.status_code == 400

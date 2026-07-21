@@ -9,6 +9,21 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Fixed
+- **D-47 pre-release holistic-review hardening (2 HIGH + 3 more).** A system-wide adversarial review
+  of the whole model-connection registry (slices 1–4 + Loom) found: **(HIGH) a plaintext key could
+  leak** — a stored credential with an embedded CR/LF makes httpx raise `Illegal header value
+  b'Bearer sk-…'`, whose text was interpolated into the `refresh` 502 detail and the `test` 200 body
+  (rendered in the browser); now credentials are sanitized at ingestion (surrounding whitespace
+  stripped, an embedded CR/LF → 400) and the refresh/test error surfaces report only the exception
+  *type*, never raw provider text. **(HIGH) a defaultless router crashed every beat** — binding a
+  role but not `default` built a router with `default=None`, so any unbound engine role hit a
+  `KeyError` mid-beat; now `build_router_from_registry` refuses it loudly (`uro serve` won't start,
+  `reload` returns `reloaded:false` with an actionable message, dry-run maps the residual to a 400).
+  Also: `PUT /providers/roles` rejects an empty model (400); the `uro provider add` hint now steers
+  to `default`; the reload-race docstring is corrected (the per-beat router snapshot is a named,
+  low-impact deferral). +6 tests; live-verified.
+
 ### Added
 - **Model-connection registry — slice 1 (D-47, docs/20).** LLM provider config can now live in the
   DB as an instance-level registry, resolved into the provider router at `uro serve` startup: three
