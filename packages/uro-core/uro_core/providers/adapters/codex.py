@@ -22,7 +22,7 @@ import httpx
 
 from uro_core.errors import ProviderError
 from uro_core.providers.base import CompletionRequest
-from uro_core.providers.codex_auth import CODEX_BASE_URL, codex_inference_headers
+from uro_core.providers.codex_auth import CODEX_BASE_URL, CodexAuthError, codex_inference_headers
 
 # force_refresh -> a valid access token (refreshed+persisted by the caller if it wired that in).
 TokenProvider = Callable[[bool], Awaitable[str]]
@@ -77,7 +77,14 @@ class CodexResponsesProvider:
         # FINAL attempt reaches raise_for_status → the HTTPStatusError handler renders it as a clean
         # "reconnect" (the token is dead, not merely stale) rather than a raw httpx message.
         for attempt in range(2):
-            token = await self._token_provider(attempt == 1)
+            # Obtaining the token can itself fail (a dead/rate-limited refresh) — surface it as a
+            # ProviderError like every other adapter, so the pipeline's `except ProviderError`
+            # graceful-degradation path catches it instead of a raw CodexAuthError crashing the beat
+            # (review). The CodexAuthError messages are status-code based and carry no token.
+            try:
+                token = await self._token_provider(attempt == 1)
+            except CodexAuthError as exc:
+                raise ProviderError(f"codex auth failed: {exc}") from exc
             headers = codex_inference_headers(token)
             try:
                 async with (
@@ -98,7 +105,10 @@ class CodexResponsesProvider:
                 )
                 raise ProviderError(f"codex request failed: {detail}") from exc
             except httpx.HTTPError as exc:
-                raise ProviderError(f"codex request failed: {exc}") from exc
+                # Report only the exception TYPE, never the raw text: a malformed-header error
+                # (httpx.LocalProtocolError ⊂ HTTPError) can embed the `Authorization: Bearer <tok>`
+                # value → a token leak (review; mirrors the D-47 refresh/test hardening).
+                raise ProviderError(f"codex request failed: {type(exc).__name__}") from exc
 
     async def complete(self, req: CompletionRequest) -> str:
         # The Responses path always streams; the extractor/planner just want the whole text.

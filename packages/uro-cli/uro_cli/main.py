@@ -1253,13 +1253,24 @@ def provider_bind(
     """Bind an engine role to a connection + model. `default` backs any unbound role."""
 
     async def _run() -> None:
+        from uro_core.providers.registry import classify_modality
+
         if role not in _ROLES:
             raise ValueError(f"unknown role {role!r}; one of: {', '.join(_ROLES)}")
         store = build_store()
         await connect_store(store)
         try:
-            if await store.get_connection(connection_id) is None:
+            conn = await store.get_connection(connection_id)
+            if conn is None:
                 raise ValueError(f"no such connection: {connection_id}")
+            # Match the server's embedder-modality guard (D-47): the embedder needs an EMBEDDING
+            # model, so reject a chat model here too — else the binding fails only at runtime, and a
+            # codex/anthropic model (always "chat") could silently break semantic memory (review).
+            if role == "embedder" and classify_modality(conn.provider, model) == "chat":
+                raise ValueError(
+                    f"the embedder role needs an embedding model, not {model!r} "
+                    f"(a chat model on provider {conn.provider!r})"
+                )
             await store.set_role_binding(role, connection_id, model)
         finally:
             await store.close()

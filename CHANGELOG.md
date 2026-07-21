@@ -48,8 +48,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   OAuth login over the API: `POST /providers/codex/start` (optional `{name}`) mints a device code
   and returns `{login_id, user_code, verification_uri, interval, expires_in}` to display; `POST
   /providers/codex/poll {login_id}` returns `{status:"pending"}` until the user approves, then
-  exchanges the grant and atomically creates a codex credential (`auth_mode=oauth_device`) +
-  connection (with discovered models), returning `{status:"connected", connection_id, ...}`. Pending
+  exchanges the grant and creates a codex credential (`auth_mode=oauth_device`) + connection (with
+  discovered models; a failed connection insert rolls the credential back), returning
+  `{status:"connected", connection_id, ...}`. Pending
   logins live in an in-memory store keyed by an unguessable handle (single-process; a multi-worker
   deploy would need shared state). No token is ever returned to the client.
 - **Codex provider — `uro provider codex-login` CLI (D-47).** Connects a Codex provider from the
