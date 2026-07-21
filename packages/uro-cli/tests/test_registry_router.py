@@ -99,3 +99,25 @@ async def test_openai_compat_without_base_url_is_an_error() -> None:
     )
     with pytest.raises(ValueError):
         await build_router_from_registry(reg)
+
+
+async def test_bindings_without_default_is_refused() -> None:
+    # A role bound but no `default` → any unbound role would KeyError mid-beat; refuse at build.
+    reg = FakeRegistry(
+        connections=[ModelConnection(id="c1", name="stub", provider="stub")],
+        bindings=[RoleBinding(role="narrator", connection_id="c1", model="stub")],
+    )
+    with pytest.raises(ValueError):
+        await build_router_from_registry(reg)
+
+
+async def test_all_roles_bound_without_default_is_ok() -> None:
+    # Every non-default role bound → no default needed → a valid router (no crash path).
+    roles = ["narrator", "extractor", "planner", "embedder", "dialogue", "judge"]
+    reg = FakeRegistry(
+        connections=[ModelConnection(id="c1", name="stub", provider="stub")],
+        bindings=[RoleBinding(role=r, connection_id="c1", model="stub") for r in roles],
+    )
+    router = await build_router_from_registry(reg)
+    assert router is not None
+    assert isinstance(router._provider_for("narrator"), StubProvider)

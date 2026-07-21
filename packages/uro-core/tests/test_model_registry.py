@@ -176,3 +176,28 @@ async def test_set_connection_models_persists_cached_models(store: PostgresEvent
         assert await store.set_connection_models("nope", models) is False
     finally:
         await store.delete_connection(cid)
+
+
+# --- holistic-review hardening: secret sanitization + defaultless-router refusal -----------------
+
+from uro_core.adapters.crypto import clean_secret  # noqa: E402
+
+
+def test_clean_secret_strips_and_rejects_control_chars() -> None:
+    # Surrounding whitespace/newlines (routine copy-paste) are stripped → stored clean, no leak.
+    assert clean_secret("  sk-x  ") == "sk-x"
+    assert clean_secret("sk-x\n") == "sk-x"
+    assert clean_secret(None) is None
+    # An EMBEDDED CR/LF (which strip can't remove) is refused — else httpx builds an "Illegal header
+    # value b'Bearer sk-…'" whose text carries the plaintext key into the refresh/test surfaces.
+    for bad in ("sk\ry", "sk\nmore", "a\rb"):
+        with pytest.raises(ValueError):
+            clean_secret(bad)
+
+
+async def test_add_credential_rejects_an_embedded_newline_key(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("URO_SECRET_KEY", Fernet.generate_key().decode())
+    with pytest.raises(ValueError):
+        await store.add_credential(provider="openai", access_token="sk-leak\nmore")

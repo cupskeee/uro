@@ -1173,7 +1173,9 @@ def provider_add(
         typer.echo(f"connection: {cid}  ({name} → {provider})")
         if auth_id:
             typer.echo(f"credential: {auth_id}  (encrypted at rest)")
-        typer.echo(f"\nbind a role:  uro provider bind narrator {cid} <model>")
+        # Steer toward binding `default` FIRST — a registry with role bindings but no `default`
+        # is refused at serve/reload (unbound roles would crash a beat; holistic review).
+        typer.echo(f"\nbind the default role:  uro provider bind default {cid} <model>")
 
     _run_async(_run)
 

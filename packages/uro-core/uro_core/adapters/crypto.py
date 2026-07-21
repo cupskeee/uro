@@ -40,6 +40,19 @@ def _cipher() -> Fernet:
         ) from exc
 
 
+def clean_secret(secret: str | None) -> str | None:
+    """Normalize a credential at ingestion: strip surrounding whitespace (a routine copy-paste
+    artifact) and REJECT an embedded CR/LF. A newline in a key is never valid in an HTTP header, and
+    if stored it makes httpx raise an `Illegal header value b'…'` error whose text carries the
+    plaintext key into the refresh/test error surfaces (holistic-review HIGH). Fail loud here."""
+    if secret is None:
+        return None
+    secret = secret.strip()
+    if "\r" in secret or "\n" in secret:
+        raise ValueError("credential contains an illegal control character (CR/LF)")
+    return secret
+
+
 def encrypt_secret(plaintext: str) -> str:
     """Encrypt a credential for storage. Raises SecretsUnavailable if no valid KEK is configured."""
     return _cipher().encrypt(plaintext.encode()).decode()

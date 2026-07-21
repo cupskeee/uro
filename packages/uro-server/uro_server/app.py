@@ -347,13 +347,25 @@ def engine_deps(
                     )
                 )
         except Exception as exc:
-            return {"ok": False, "detail": str(exc)}
+            # NEVER echo the raw provider/httpx exception text: it can carry the plaintext key (e.g.
+            # "Illegal header value b'Bearer sk-…'"). Report only the exception TYPE (review).
+            logger.warning("provider test failed for %s: %s", conn.provider, type(exc).__name__)
+            return {
+                "ok": False,
+                "detail": f"{conn.provider}:{probe_model} failed ({type(exc).__name__})",
+            }
         return {"ok": True, "detail": f"{conn.provider}:{probe_model} responded"}
 
     async def reload_router() -> dict[str, Any]:
         from uro_core.providers.registry import build_router_from_registry
 
-        new_router = await build_router_from_registry(store)
+        try:
+            new_router = await build_router_from_registry(store)
+        except ValueError as exc:  # incomplete registry (bindings but no default) — don't 500 or
+            return {
+                "reloaded": False,
+                "detail": str(exc),
+            }  # rebind; leave the running router intact
         if new_router is None:
             return {"reloaded": False, "detail": "registry has no bindings; router unchanged"}
         engine.rebind_router(new_router)
@@ -537,6 +549,8 @@ def create_app(
             )
         except SecretsUnavailable as exc:  # no/invalid URO_SECRET_KEY → credential storage disabled
             raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except ValueError as exc:  # a control char (CR/LF) in the key → clean 400 at ingestion
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": cred_id}
 
     @app.delete("/providers/credentials/{credential_id}")
@@ -563,7 +577,9 @@ def create_app(
         conn = await store.get_connection(connection_id)
         if conn is None:
             raise HTTPException(status_code=400, detail=f"no such connection: {connection_id}")
-        model = str(_require(body, "model"))
+        model = str(_require(body, "model")).strip()
+        if not model:  # a non-browser client could send "" → a silently-broken binding (review)
+            raise HTTPException(status_code=400, detail="model must not be empty")
         # The embedder role needs an EMBEDDING model (slice 3). Classify by the provider's naming;
         # reject a chat model, but allow "unknown" (an unclassifiable provider — a live `test` is
         # the definitive check) so we never hard-block a valid but unrecognized endpoint.
@@ -597,7 +613,9 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="no such connection") from exc
         except (httpx.HTTPError, OSError, ValueError) as exc:
-            raise HTTPException(status_code=502, detail=f"model discovery failed: {exc}") from exc
+            # Generic detail — the exception text can carry the plaintext key (holistic HIGH).
+            logger.warning("model discovery failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="model discovery failed") from exc
 
     @app.post("/providers/{connection_id}/test")
     async def test_provider(
@@ -1334,9 +1352,9 @@ def create_app(
         _, participant, _ = _scope(request)  # token → acting participant (non-None past _auth)
         try:
             events = await deps.preview_beat(campaign_id, participant or "", intent)
-        except (
-            ValueError
-        ) as exc:  # e.g. the campaign is pinned to a different ruleset (one/process)
+        except (ValueError, KeyError) as exc:
+            # ValueError: a different-ruleset pin (one ruleset/process). KeyError: an unbound router
+            # role (a residual incomplete-registry gap) → clean 400, not a raw 500.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"events": events}
 
