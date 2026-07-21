@@ -2005,6 +2005,36 @@ def test_embedder_role_requires_an_embedding_model() -> None:
     )
 
 
+def test_default_probe_model_skips_the_sorted_discovery_head() -> None:
+    # The connection-level test canary must NOT be cached_models[0]: discovery returns a SORTED
+    # list, so OpenAI's leads with the legacy `babbage-002` the chat-probe can't call (the bug).
+    from uro_core.ports.model_registry import ModelConnection
+    from uro_server.app import _default_probe_model
+
+    oai = ModelConnection(
+        id="c1",
+        name="oai",
+        provider="openai",
+        cached_models=[{"id": "babbage-002"}, {"id": "gpt-4o"}],
+    )
+    assert _default_probe_model(oai) == "gpt-4o-mini"  # the known-good default, not babbage-002
+    # local/openai_compat have no reliable pinned chat model → probe their OWN first discovered one
+    loc = ModelConnection(
+        id="c2", name="ollama", provider="local", cached_models=[{"id": "llama3.2"}]
+    )
+    assert _default_probe_model(loc) == "llama3.2"
+    compat = ModelConnection(
+        id="c3",
+        name="vllm",
+        provider="openai_compat",
+        base_url="http://x/v1",
+        cached_models=[{"id": "mixtral"}],
+    )
+    assert _default_probe_model(compat) == "mixtral"
+    # local with nothing discovered yet → the pinned llama3.1 fallback (better than an empty probe)
+    assert _default_probe_model(ModelConnection(id="c4", name="ll", provider="local")) == "llama3.1"
+
+
 def _reg_client_with_ops() -> TestClient:
     deps = _fake_deps()
     deps.store = _FakeRegistryStore()  # type: ignore[assignment]

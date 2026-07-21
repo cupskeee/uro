@@ -69,14 +69,34 @@ _MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MB — the DECOMPRESSED-size 
 # epistemic thesis collapses if a player can read the raw truth-tagged log (D-45).
 _PLAYER_SAFE_SECTIONS = frozenset({"actors", "threads", "places", "factions", "pcs"})
 
-# A sensible model to probe when `test` is called without one (D-47 slice 3). openai_compat has no
-# universal default, so its probe requires the caller to pass a model.
+# A known-good CHAT model to probe when `test` is called without one (D-47 slice 3). See
+# `_default_probe_model` — for local/openai_compat the connection's own discovered models are a
+# better canary than any pinned default.
 _DEFAULT_PROBE_MODEL = {
     "openai": "gpt-4o-mini",
     "anthropic": "claude-sonnet-5",
     "local": "llama3.1",
     "stub": "stub-chat",
 }
+
+
+def _default_probe_model(conn: Any) -> str:
+    """Pick a canary model for a connection-level liveness probe when the caller passes none.
+
+    Prefer the provider's known-good chat default — NOT `cached_models[0]`: `discover_models`
+    returns the list SORTED, so OpenAI's leads with `babbage-002`, a legacy base-completion model
+    the chat-probe can't call → a false ✗ (the reported bug). For `local`/`openai_compat` (where
+    there is no reliable pinned chat default — the local one may not even be pulled) fall back to
+    the connection's OWN first discovered model, which `classify_modality` then routes correctly to
+    embed-vs-complete. A precise per-MODEL check lives on each role binding instead.
+    """
+    if conn.provider in ("local", "openai_compat"):
+        for m in conn.cached_models or []:
+            mid = m.get("id")
+            if mid:
+                return str(mid)
+    return _DEFAULT_PROBE_MODEL.get(conn.provider, "")
+
 
 # The multipart pack-UPLOAD routes. FastAPI spools the whole body during form parsing — BEFORE a
 # handler's operator gate or the `_safe_extract_pack` cap — so an oversized upload is rejected up
@@ -333,7 +353,7 @@ def engine_deps(
         from uro_core.providers.registry import classify_modality, provider_from_connection
 
         conn, access = await _conn_secret(connection_id)
-        probe_model = model or _DEFAULT_PROBE_MODEL.get(conn.provider, "")
+        probe_model = model or _default_probe_model(conn)
         provider = provider_from_connection(conn, probe_model, access)
         try:
             if classify_modality(conn.provider, probe_model) == "embedding":
