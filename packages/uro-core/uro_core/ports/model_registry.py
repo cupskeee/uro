@@ -78,6 +78,13 @@ class ModelRegistry(Protocol):
         credential id is unknown. Wiring-layer use only — the secret is held transiently."""
         ...
 
+    async def update_credential_tokens(
+        self, credential_id: str, *, access_token: str, refresh_token: str | None = None
+    ) -> None:
+        """Rotate a credential's tokens after an OAuth refresh (encrypted before persistence) and
+        stamp `last_refresh`. Used by the codex token source; a no-op if the id is unknown."""
+        ...
+
     # --- connections ---
     async def add_connection(
         self,

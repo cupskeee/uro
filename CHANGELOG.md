@@ -10,6 +10,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Codex (ChatGPT-subscription) provider — engine (D-47).** A new `codex` provider kind that
+  authenticates via OpenAI's OAuth **device-authorization** flow (a consumer ChatGPT login, not an
+  API key) and does inference against the ChatGPT backend's **Responses API**
+  (`chatgpt.com/backend-api/codex`). `providers/codex_auth.py` implements the device-code request →
+  poll → token exchange → refresh lifecycle (PKCE is server-managed; the verifier returns from the
+  poll); `providers/adapters/codex.py` translates uro's message list into the Responses
+  `instructions`+`input` shape and parses its SSE, with a forced-refresh retry on 401. The registry
+  gains a refresh-capable `CodexTokenSource` (persists rotated tokens via a new
+  `update_credential_tokens`) for the router path. Codex can back chat roles (narrator/planner/
+  extractor/default) but NOT the embedder (the backend has no embedding endpoint). ⚠️ Unofficial:
+  this uses Codex's public client id against a consumer subscription and may breach OpenAI's terms;
+  endpoints/client-id/User-Agents are env-overridable (`URO_CODEX_*`). Server device-flow endpoints,
+  the CLI login, and the Loom authorize-modal UI follow in later slices.
 - **`.env` support.** The `uro` CLI auto-loads a `.env` from the working directory at startup
   (via `python-dotenv`, `usecwd=True`), so `URO_SECRET_KEY` / provider keys / `URO_DATABASE_URL`
   need only live in `.env` rather than be exported by hand. An already-exported env var still wins
