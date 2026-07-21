@@ -34,6 +34,12 @@ services:
 
 No SQLite mode (D-13): local *is* Postgres, identical to live.
 
+**The test suite runs against a DEDICATED `uro_test` database** (auto-created on the same server),
+NEVER the `uro` DB your `uro serve` / uro-loom use — so `just test` can't pollute the worlds you
+browse. (The DB tests create worlds/campaigns and don't roll back; keeping them in a throwaway DB is
+the isolation. Set `URO_DATABASE_URL` to override — CI points it at its own service container.)
+Reset the test DB any time with `dropdb -h localhost -p 5433 -U uro uro_test`.
+
 ## Database access & migrations
 
 - **asyncpg + hand-written SQL, no ORM** (D-18). The queries are simple (append events, load snapshots+replay, projection upserts, recursive CTEs) and the DDL in `07` is the real interface.
