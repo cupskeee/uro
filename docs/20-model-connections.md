@@ -1,11 +1,11 @@
 # 20 — Model connections (DB-backed, instance-level)
 
-> **Status: accepted (D-47); slices 1–2 shipped** · Decision: [`D-47`](decisions.md) · Engine
+> **Status: accepted (D-47); slices 1–4 shipped (complete)** · Decision: [`D-47`](decisions.md) · Engine
 > change: new operational tables (migration 020) + a registry adapter + a server/CLI surface; the
 > core ring is **untouched**. Built: the registry substrate + encrypted-credential store +
 > `build_router_from_registry` + `serve` resolution + the `uro provider` CLI (slice 1); the
-> operator-only `/providers` HTTP surface so uro-loom/any client configures it (slice 2). Slices 3–4
-> (model discovery/validation, reload-without-restart) follow.
+> operator-only `/providers` HTTP surface so uro-loom/any client configures it (slice 2). Slices 3–4 (model discovery/validation via `refresh`/`test`, reload-without-restart) are
+> also built.
 
 Move LLM provider configuration out of the deployment file (`uro.toml [llm.roles]` + `--provider`
 flag + env keys) and into the **database**, as an **instance-level** registry configurable over the
@@ -189,6 +189,6 @@ instead of static (read file), but the seam the core sees is identical.
    uro-loom / any client configures the registry. Credentials arrive as plaintext over the
    operator-only wire and are encrypted at rest; no read returns a secret. (`uro provider …`
    retargeting to a running server — like `uro token` — is a deferred nicety; the CLI stays direct-DB.)
-3. **Discovery + validation:** `refresh` (per-adapter model listing + modality), `test` (live probe),
+3. ✅ **Discovery + validation — SHIPPED:** `refresh` (per-adapter model listing + modality), `test` (live probe),
    embedder write-time validation.
-4. **Reload-without-restart:** rebuild the single instance router on a registry change.
+4. ✅ **Reload-without-restart — SHIPPED:** rebuild the single instance router on a registry change.

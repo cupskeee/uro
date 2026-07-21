@@ -19,11 +19,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.ports.model_registry import ModelConnection, ModelRegistry
 from uro_core.providers.adapters.anthropic import AnthropicProvider
 from uro_core.providers.adapters.openai_compat import OpenAICompatProvider
 from uro_core.providers.adapters.stub import StubProvider
 from uro_core.providers.base import LLMProvider
+from uro_core.providers.registry import build_router_from_registry as build_router_from_registry
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
 from uro_core.rulesets.base import Ruleset
@@ -195,76 +195,4 @@ def build_router(
     for role, spec in (role_models or {}).items():
         full = spec if ":" in spec else f"{kind}:{spec}"
         bindings[role] = provider_from_spec(full)
-    return ProviderRouter(bindings=bindings, default=default)
-
-
-async def _provider_from_connection(
-    store: ModelRegistry, conn: ModelConnection, model: str
-) -> LLMProvider:
-    """Construct a provider from a registry connection row + its (decrypted) credential (D-47)."""
-    access: str | None = None
-    if conn.auth_id is not None:
-        secret = await store.get_secret(conn.auth_id)
-        if secret is not None:
-            access = secret[0]
-    kind = conn.provider
-    if kind == "stub":
-        return StubProvider()
-    if kind == "openai":
-        return OpenAICompatProvider(
-            model=model, api_key=access, base_url=conn.base_url or "https://api.openai.com/v1"
-        )
-    if kind == "local":
-        return OpenAICompatProvider(
-            model=model,
-            api_key=access,
-            base_url=conn.base_url
-            or os.environ.get("URO_LOCAL_BASE_URL", "http://localhost:11434/v1"),
-        )
-    if kind == "openai_compat":
-        if not conn.base_url:
-            raise ValueError(f"connection {conn.name!r} (openai_compat) requires a base_url")
-        return OpenAICompatProvider(model=model, api_key=access, base_url=conn.base_url)
-    if kind == "anthropic":
-        return AnthropicProvider(
-            model=model, api_key=access or "", base_url=conn.base_url or "https://api.anthropic.com"
-        )
-    raise ValueError(f"connection {conn.name!r} has unknown provider kind {kind!r}")
-
-
-async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | None:
-    """Build a `ProviderRouter` from the DB-backed model-connection registry (D-47, docs/20).
-
-    Returns None when the registry has no usable bindings (empty, or its tables are not migrated
-    yet) so the caller falls back to the `uro.toml`/`--provider` seed. The reserved `default` role
-    becomes the router default; a binding to a missing/disabled connection is skipped (that role
-    then falls back to `default`). A CONFIGURED binding whose provider can't be built (bad KEK,
-    missing credential) raises — the operator asked for it, so failing loudly beats silently
-    serving the stub.
-    """
-    try:
-        role_bindings = await store.list_role_bindings()
-    except asyncpg.UndefinedTableError:
-        return None  # registry tables absent (pre-D47 / unmigrated DB) → use the seed
-    if not role_bindings:
-        return None
-    connections = {c.id: c for c in await store.list_connections()}
-    bindings: dict[str, LLMProvider] = {}
-    default: LLMProvider | None = None
-    for rb in role_bindings:
-        conn = connections.get(rb.connection_id)
-        if conn is None or not conn.is_enabled:
-            logger.warning(
-                "role %r → connection %r missing/disabled; falling back to default",
-                rb.role,
-                rb.connection_id,
-            )
-            continue
-        provider = await _provider_from_connection(store, conn, rb.model)
-        if rb.role == "default":
-            default = provider
-        else:
-            bindings[rb.role] = provider
-    if default is None and not bindings:
-        return None
     return ProviderRouter(bindings=bindings, default=default)

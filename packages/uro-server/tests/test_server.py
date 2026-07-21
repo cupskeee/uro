@@ -1973,3 +1973,72 @@ def test_create_credential_501_without_a_kek() -> None:
         "/providers/credentials?token=tok-a", json={"provider": "openai", "access_token": "sk"}
     )
     assert resp.status_code == 501  # credential storage disabled (no URO_SECRET_KEY)
+
+
+# --- slice 3/4: embedder validation + refresh/test/reload endpoints ------------------------------
+
+
+def test_embedder_role_requires_an_embedding_model() -> None:
+    client = _reg_client()
+    cid = client.post("/providers?token=tok-a", json={"name": "oai", "provider": "openai"}).json()[
+        "id"
+    ]
+    # embedder ← a CHAT model → 400 (slice 3 modality validation)
+    bad = client.put(
+        "/providers/roles/embedder?token=tok-a", json={"connection_id": cid, "model": "gpt-4o"}
+    )
+    assert bad.status_code == 400
+    # embedder ← an embedding model → ok
+    ok = client.put(
+        "/providers/roles/embedder?token=tok-a",
+        json={"connection_id": cid, "model": "text-embedding-3-small"},
+    )
+    assert ok.status_code == 200
+    # a non-embedder role accepts a chat model fine
+    assert (
+        client.put(
+            "/providers/roles/narrator?token=tok-a",
+            json={"connection_id": cid, "model": "gpt-4o"},
+        ).status_code
+        == 200
+    )
+
+
+def _reg_client_with_ops() -> TestClient:
+    deps = _fake_deps()
+    deps.store = _FakeRegistryStore()  # type: ignore[assignment]
+    deps.is_admin = lambda t: t == "tok-a"
+
+    async def _refresh(cid: str) -> list[dict[str, str]]:
+        return [{"id": "gpt-4o", "modality": "chat"}]
+
+    async def _test(cid: str, model: str) -> dict[str, object]:
+        return {"ok": True, "detail": "pong"}
+
+    async def _reload() -> dict[str, object]:
+        return {"reloaded": True}
+
+    deps.refresh_models = _refresh  # type: ignore[assignment]
+    deps.test_connection = _test  # type: ignore[assignment]
+    deps.reload_router = _reload  # type: ignore[assignment]
+    return TestClient(create_app(deps))
+
+
+def test_refresh_test_reload_happy_path_and_operator_only() -> None:
+    client = _reg_client_with_ops()
+    assert (
+        client.post("/providers/conn_1/refresh?token=tok-a").json()["models"][0]["id"] == "gpt-4o"
+    )
+    assert client.post("/providers/conn_1/test?token=tok-a", json={"model": "gpt-4o"}).json()["ok"]
+    assert client.post("/providers/reload?token=tok-a").json()["reloaded"] is True
+    # operator-only (a player token → 403)
+    assert client.post("/providers/conn_1/refresh?token=tok-b").status_code == 403
+    assert client.post("/providers/conn_1/test?token=tok-b", json={}).status_code == 403
+    assert client.post("/providers/reload?token=tok-b").status_code == 403
+
+
+def test_refresh_501_when_discovery_unwired() -> None:
+    # _reg_client leaves refresh_models=None (transport-only deployment) → 501, not a 500.
+    client = _reg_client()
+    assert client.post("/providers/conn_1/refresh?token=tok-a").status_code == 501
+    assert client.post("/providers/reload?token=tok-a").status_code == 501
