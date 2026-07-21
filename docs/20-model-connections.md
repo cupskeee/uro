@@ -1,10 +1,11 @@
 # 20 — Model connections (DB-backed, instance-level)
 
-> **Status: accepted (D-47); slice 1 shipped** · Decision: [`D-47`](decisions.md) · Engine change:
-> new operational tables (migration 020) + a registry adapter + a server/CLI surface; the core ring
-> is **untouched**. Built: the registry substrate, the encrypted-credential store,
-> `build_router_from_registry`, `serve` resolution, and the `uro provider` CLI (slice 1). Slices 2–4
-> (server API, model discovery/validation, reload-without-restart) follow.
+> **Status: accepted (D-47); slices 1–2 shipped** · Decision: [`D-47`](decisions.md) · Engine
+> change: new operational tables (migration 020) + a registry adapter + a server/CLI surface; the
+> core ring is **untouched**. Built: the registry substrate + encrypted-credential store +
+> `build_router_from_registry` + `serve` resolution + the `uro provider` CLI (slice 1); the
+> operator-only `/providers` HTTP surface so uro-loom/any client configures it (slice 2). Slices 3–4
+> (model discovery/validation, reload-without-restart) follow.
 
 Move LLM provider configuration out of the deployment file (`uro.toml [llm.roles]` + `--provider`
 flag + env keys) and into the **database**, as an **instance-level** registry configurable over the
@@ -182,8 +183,12 @@ instead of static (read file), but the seam the core sees is identical.
    from env); a `ModelConnectionStore` port + Postgres adapter; `build_router_from_registry()` in the
    adapter layer; `serve` resolves the router from the DB with the file/flag/stub seed fallback; CLI
    `uro provider add/list/rm/bind`. Core untouched.
-2. **Server API:** the operator-only (D-44) connections/credentials/bindings CRUD, so Loom and
-   third-parties drive it. `uro provider …` retargets to a running server's API (like `uro token`).
+2. ✅ **Server API — SHIPPED:** the operator-only (D-44) `/providers` connections/credentials/bindings
+   CRUD (`GET /providers` snapshot; `POST`/`PATCH`/`DELETE /providers[/{id}]`;
+   `POST`/`DELETE /providers/credentials[/{id}]`; `PUT`/`DELETE /providers/roles/{role}`), so
+   uro-loom / any client configures the registry. Credentials arrive as plaintext over the
+   operator-only wire and are encrypted at rest; no read returns a secret. (`uro provider …`
+   retargeting to a running server — like `uro token` — is a deferred nicety; the CLI stays direct-DB.)
 3. **Discovery + validation:** `refresh` (per-adapter model listing + modality), `test` (live probe),
    embedder write-time validation.
 4. **Reload-without-restart:** rebuild the single instance router on a registry change.

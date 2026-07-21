@@ -17,6 +17,10 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
+# The engine roles a connection can back (resolved by the ProviderRouter). `default` is the
+# fallback for any unbound role. Single source of truth for the CLI + server validation.
+ROLES = frozenset({"default", "narrator", "extractor", "planner", "embedder", "dialogue", "judge"})
+
 
 class ProviderCredential(BaseModel):
     """Credential METADATA — the plaintext token is never carried on this model (secrets leave the
