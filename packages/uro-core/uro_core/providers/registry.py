@@ -9,14 +9,18 @@ live in `uro_cli`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
 import asyncpg
 import httpx
 
+from uro_core.errors import ProviderError
 from uro_core.ports.model_registry import ROLES, ModelConnection, ModelRegistry
+from uro_core.providers import codex_auth
 from uro_core.providers.adapters.anthropic import AnthropicProvider
+from uro_core.providers.adapters.codex import CodexResponsesProvider
 from uro_core.providers.adapters.openai_compat import OpenAICompatProvider
 from uro_core.providers.adapters.stub import StubProvider
 from uro_core.providers.base import LLMProvider
@@ -55,7 +59,65 @@ def provider_from_connection(
             api_key=access_token or "",
             base_url=conn.base_url or "https://api.anthropic.com",
         )
+    if kind == "codex":
+        # The PURE path (one-shot probe): a static token, NO auto-refresh. The router path uses
+        # `build_codex_provider` (a refresh-capable CodexTokenSource) instead. An expired token here
+        # just 401s → the probe reports "reconnect", which is the right signal.
+        async def _static_token(force_refresh: bool = False) -> str:
+            if access_token is None:
+                raise ProviderError(f"codex connection {conn.name!r} has no credential — reconnect")
+            return access_token
+
+        return CodexResponsesProvider(
+            model=model,
+            token_provider=_static_token,
+            base_url=conn.base_url or codex_auth.CODEX_BASE_URL,
+        )
     raise ValueError(f"connection {conn.name!r} has unknown provider kind {kind!r}")
+
+
+class CodexTokenSource:
+    """A refresh-capable token callable for the ROUTER path: reads the connection's stored codex
+    tokens and, on expiry (or a forced 401-retry), refreshes via the OAuth endpoint and PERSISTS the
+    rotation. One instance per connection; an `asyncio.Lock` serializes concurrent beats so two
+    don't refresh the same grant at once."""
+
+    def __init__(self, store: ModelRegistry, auth_id: str | None) -> None:
+        self._store = store
+        self._auth_id = auth_id
+        self._lock = asyncio.Lock()
+
+    async def __call__(self, force_refresh: bool = False) -> str:
+        if self._auth_id is None:
+            raise ProviderError("codex connection has no linked credential — reconnect")
+        async with self._lock:
+            secret = await self._store.get_secret(self._auth_id)
+            access = secret[0] if secret is not None else None
+            refresh = secret[1] if secret is not None else None
+            if access is None:
+                raise ProviderError("codex credential is missing its token — reconnect")
+            if force_refresh or codex_auth.token_is_expiring(access):
+                if refresh is None:
+                    raise ProviderError("codex token expired and no refresh token — reconnect")
+                data = await codex_auth.refresh_access_token(refresh)
+                access = str(data["access_token"])
+                await self._store.update_credential_tokens(
+                    self._auth_id,
+                    access_token=access,
+                    refresh_token=str(data.get("refresh_token") or refresh),
+                )
+            return access
+
+
+def build_codex_provider(
+    store: ModelRegistry, conn: ModelConnection, model: str
+) -> CodexResponsesProvider:
+    """Router-path codex provider: a refresh-capable token source bound to the credential."""
+    return CodexResponsesProvider(
+        model=model,
+        token_provider=CodexTokenSource(store, conn.auth_id),
+        base_url=conn.base_url or codex_auth.CODEX_BASE_URL,
+    )
 
 
 async def _access_token(store: ModelRegistry, conn: ModelConnection) -> str | None:
@@ -93,7 +155,11 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
                 rb.connection_id,
             )
             continue
-        provider = provider_from_connection(conn, rb.model, await _access_token(store, conn))
+        provider: LLMProvider
+        if conn.provider == "codex":
+            provider = build_codex_provider(store, conn, rb.model)
+        else:
+            provider = provider_from_connection(conn, rb.model, await _access_token(store, conn))
         if rb.role == "default":
             default = provider
         else:
@@ -123,8 +189,8 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
 # "unknown" (the binding is allowed with a warning; a live `test` is the definitive check).
 def classify_modality(provider: str, model_id: str) -> str:
     m = model_id.lower()
-    if provider == "anthropic":
-        return "chat"  # Anthropic ships no embedding models
+    if provider in ("anthropic", "codex"):
+        return "chat"  # Anthropic ships no embedding models; the codex backend serves only chat
     if provider in ("openai", "openai_compat", "local", "stub"):
         return "embedding" if "embed" in m else "chat"
     return "unknown"
@@ -145,6 +211,12 @@ async def discover_models(
             {"id": "stub-chat", "modality": "chat"},
             {"id": "stub-embed", "modality": "embedding"},
         ]
+    if conn.provider == "codex":
+        return await codex_auth.discover_codex_models(
+            access_token or "",
+            base_url=conn.base_url or codex_auth.CODEX_BASE_URL,
+            transport=transport,
+        )
     headers: dict[str, str] = {}
     if conn.provider == "anthropic":
         base = (conn.base_url or "https://api.anthropic.com").rstrip("/")

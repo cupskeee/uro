@@ -1474,6 +1474,25 @@ class PostgresEventStore:
         refresh = decrypt_secret(row["refresh_token"]) if row["refresh_token"] is not None else None
         return access, refresh
 
+    async def update_credential_tokens(
+        self, credential_id: str, *, access_token: str, refresh_token: str | None = None
+    ) -> None:
+        # Same ingestion hygiene as add_credential: refuse embedded CR/LF, strip surrounding
+        # whitespace, then Fernet-encrypt before the DB sees the rotated tokens.
+        access_token = clean_secret(access_token) or ""
+        cleaned_refresh = clean_secret(refresh_token)
+        enc_access = encrypt_secret(access_token)
+        enc_refresh = encrypt_secret(cleaned_refresh) if cleaned_refresh is not None else None
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE provider_credentials SET access_token = $2, "
+                "refresh_token = COALESCE($3, refresh_token), last_refresh = now(), "
+                "updated_at = now() WHERE id = $1",
+                credential_id,
+                enc_access,
+                enc_refresh,
+            )
+
     @staticmethod
     def _connection_row(r: asyncpg.Record) -> ModelConnection:
         return ModelConnection(
