@@ -69,6 +69,12 @@ _MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MB — the DECOMPRESSED-size 
 # epistemic thesis collapses if a player can read the raw truth-tagged log (D-45).
 _PLAYER_SAFE_SECTIONS = frozenset({"actors", "threads", "places", "factions", "pcs"})
 
+# The `test`-probe output ceiling. Small enough to be ~free on a chat model (it stops after a
+# one-word reply anyway) but large enough that an o-series reasoning model — which spends the budget
+# on hidden reasoning tokens BEFORE any output — clears its minimum and can 200 rather than failing
+# the very probe this is meant to make pass.
+_PROBE_MAX_TOKENS = 256
+
 # A known-good CHAT model to probe when `test` is called without one (D-47 slice 3). See
 # `_default_probe_model` — for local/openai_compat the connection's own discovered models are a
 # better canary than any pinned default.
@@ -363,7 +369,9 @@ def engine_deps(
                     CompletionRequest(
                         messages=[Message(role="user", content="ping")],
                         stage_tag="test",
-                        max_tokens=1,
+                        # A ceiling, not a target (see _PROBE_MAX_TOKENS): ~free on a chat model,
+                        # but gives a reasoning model room past its hidden-reasoning spend.
+                        max_tokens=_PROBE_MAX_TOKENS,
                     )
                 )
         except Exception as exc:

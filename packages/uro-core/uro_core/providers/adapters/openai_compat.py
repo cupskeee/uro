@@ -7,12 +7,32 @@ Streams via SSE `chat/completions`. API key optional (local endpoints need none)
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 
 import httpx
 
 from uro_core.errors import ProviderError
 from uro_core.providers.base import CompletionRequest
+
+# OpenAI o-series reasoning models (o1 / o3 / o3-mini / o4-mini / …) speak a slightly different
+# Chat Completions dialect: they REJECT `max_tokens` (require `max_completion_tokens` instead) and
+# accept ONLY the default `temperature` (1) — sending either legacy field is a hard 400, so a plain
+# `test` probe or beat fails on a perfectly valid key. Detected by the `o<digit>` naming convention
+# (these ship on OpenAI + compatible proxies that emulate them). gpt-5 reasoning variants may share
+# this contract but their chat variants share the name, so they're NOT matched here (unverified).
+# We remediate only the temperature + token-field axis; the OLDEST o1-preview/o1-mini additionally
+# reject the `system` role and json-mode `response_format` — that axis is an unhandled deferral
+# (docs/CHANGELOG), so an o1-mini binding on the extractor/planner (json + system prompt) can still
+# 400. The current common reasoning models (o3-mini, o4-mini) accept both.
+_REASONING_MODEL_RE = re.compile(r"^o\d")
+
+
+def _is_reasoning_model(model: str) -> bool:
+    # Test the FINAL path segment so a gateway-namespaced id (OpenRouter `openai/o4-mini`, an Azure
+    # `foo/o3-mini`, …) is still recognised — the anchored regex would otherwise miss exactly the
+    # "compatible proxy" surface this adapter targets, sending the legacy fields → the same 400.
+    return bool(_REASONING_MODEL_RE.match(model.lower().rsplit("/", 1)[-1]))
 
 
 class OpenAICompatProvider:
@@ -31,6 +51,19 @@ class OpenAICompatProvider:
         self._timeout = timeout
         self._transport = transport  # test seam; None = real network transport
 
+    def _apply_sampling(self, body: dict[str, object], req: CompletionRequest) -> None:
+        """Add the temperature + token-cap fields to `body`, dialect-aware. o-series reasoning
+        models take `max_completion_tokens` (not `max_tokens`) and reject a non-default
+        `temperature`, so both legacy fields are omitted for them."""
+        if _is_reasoning_model(self._model):
+            if req.max_tokens is not None:
+                body["max_completion_tokens"] = req.max_tokens
+            # temperature intentionally omitted: reasoning models allow only the default (1)
+        else:
+            body["temperature"] = req.temperature
+            if req.max_tokens is not None:
+                body["max_tokens"] = req.max_tokens
+
     async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
@@ -38,11 +71,9 @@ class OpenAICompatProvider:
         body: dict[str, object] = {
             "model": self._model,
             "messages": [m.model_dump() for m in req.messages],
-            "temperature": req.temperature,
             "stream": True,
         }
-        if req.max_tokens is not None:
-            body["max_tokens"] = req.max_tokens
+        self._apply_sampling(body, req)
 
         try:
             async with (
@@ -85,13 +116,11 @@ class OpenAICompatProvider:
         body: dict[str, object] = {
             "model": self._model,
             "messages": [m.model_dump() for m in req.messages],
-            "temperature": req.temperature,
             "stream": False,
         }
         if req.json_mode:
             body["response_format"] = {"type": "json_object"}
-        if req.max_tokens is not None:
-            body["max_tokens"] = req.max_tokens
+        self._apply_sampling(body, req)
 
         try:
             async with httpx.AsyncClient(
