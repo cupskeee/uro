@@ -308,3 +308,43 @@ async def test_token_source_forces_refresh_on_401_retry(monkeypatch) -> None:  #
     good = _jwt(int(time.time()) + 3600)  # NOT expiring, but force_refresh should still refresh
     src = CodexTokenSource(_FakeStore(access=good, refresh="RT"), "a1")  # type: ignore[arg-type]
     assert await src(force_refresh=True) == "FORCED"
+
+
+async def test_stream_maps_token_provider_auth_error_to_provider_error() -> None:
+    # A dead/rate-limited refresh raises CodexAuthError from the token provider; the adapter must
+    # surface it as ProviderError so the pipeline's graceful-degradation path catches it (review).
+    async def bad_token(force_refresh: bool = False) -> str:
+        raise codex_auth.CodexReauthRequired("token request failed (400)")
+
+    prov = CodexResponsesProvider(model="gpt-5", token_provider=bad_token)
+    with pytest.raises(ProviderError, match="codex auth failed"):
+        async for _ in prov.stream(_req()):
+            pass
+
+
+async def test_router_shares_one_token_source_across_roles_on_one_codex_connection() -> None:
+    # Two roles bound to the SAME codex connection must share ONE CodexTokenSource (hence one lock),
+    # else concurrent refreshes race the same credential row (review).
+    from uro_core.ports.model_registry import RoleBinding
+    from uro_core.providers.registry import build_router_from_registry
+
+    conn = ModelConnection(id="c1", name="cx", provider="codex", auth_id="a1")
+
+    class _Store:
+        async def list_role_bindings(self) -> list[RoleBinding]:
+            return [
+                RoleBinding(role="default", connection_id="c1", model="gpt-5"),
+                RoleBinding(role="narrator", connection_id="c1", model="gpt-5-codex"),
+            ]
+
+        async def list_connections(self) -> list[ModelConnection]:
+            return [conn]
+
+        async def get_secret(self, cid: str) -> tuple[str | None, str | None]:
+            return ("tok", "rt")
+
+    router = await build_router_from_registry(_Store())  # type: ignore[arg-type]
+    assert router is not None
+    default_src = router._default._token_provider  # type: ignore[union-attr,attr-defined]
+    narrator_src = router._bindings["narrator"]._token_provider  # type: ignore[attr-defined]
+    assert default_src is narrator_src  # SAME instance → SAME lock

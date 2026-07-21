@@ -44,6 +44,20 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   temperature since the role temperature can't be honored; and the oldest o1-preview/o1-mini also
   reject the `system` role and json-mode `response_format`, which is not yet remediated (so those
   two on the extractor/planner can still 400 — o3-mini/o4-mini accept both).
+- **Codex provider — server device-flow endpoints (D-47).** Two operator-only routes drive the
+  OAuth login over the API: `POST /providers/codex/start` (optional `{name}`) mints a device code
+  and returns `{login_id, user_code, verification_uri, interval, expires_in}` to display; `POST
+  /providers/codex/poll {login_id}` returns `{status:"pending"}` until the user approves, then
+  exchanges the grant and creates a codex credential (`auth_mode=oauth_device`) + connection (with
+  discovered models; a failed connection insert rolls the credential back), returning
+  `{status:"connected", connection_id, ...}`. Pending
+  logins live in an in-memory store keyed by an unguessable handle (single-process; a multi-worker
+  deploy would need shared state). No token is ever returned to the client.
+- **Codex provider — `uro provider codex-login` CLI (D-47).** Connects a Codex provider from the
+  command line via the OAuth device flow: prints the code to enter on the authorization page (and
+  opens it in a browser unless `--no-browser`), polls until you approve, then stores the encrypted
+  credential + a `codex` connection (with discovered models) directly in the registry — no running
+  server needed. `--name` labels the connection.
 - **Provider `test` picked a bad canary model (D-47).** The connection-level `POST /providers/{id}/test`
   probe, when given no model, no longer implicitly uses the head of the discovered list — that list
   is returned SORTED, so an OpenAI connection led with `babbage-002`, a legacy base-completion model

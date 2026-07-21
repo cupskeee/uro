@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import secrets
 import tempfile
+import time
 import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -83,6 +85,7 @@ _DEFAULT_PROBE_MODEL = {
     "anthropic": "claude-sonnet-5",
     "local": "llama3.1",
     "stub": "stub-chat",
+    "codex": "gpt-5",  # fallback if a codex connection's models weren't discovered (review)
 }
 
 
@@ -96,7 +99,7 @@ def _default_probe_model(conn: Any) -> str:
     the connection's OWN first discovered model, which `classify_modality` then routes correctly to
     embed-vs-complete. A precise per-MODEL check lives on each role binding instead.
     """
-    if conn.provider in ("local", "openai_compat"):
+    if conn.provider in ("local", "openai_compat", "codex"):
         for m in conn.cached_models or []:
             mid = m.get("id")
             if mid:
@@ -170,6 +173,32 @@ def _resolve_ruleset_id(ruleset_id: str, version: str) -> str:
     return _resolve(ruleset_id, version).id
 
 
+class _CodexPendingStore:
+    """In-memory pending Codex logins: `login_id -> {device_auth_id, user_code, name, expires_at}`.
+
+    Single-process (the server runs one process; a multi-worker deploy would need shared state, like
+    nano-abi's note). Holds only the poll handles between `start` and `poll` — never a token — and
+    prunes expired entries lazily. `login_id` is an unguessable random handle."""
+
+    def __init__(self) -> None:
+        self._items: dict[str, dict[str, Any]] = {}
+
+    def put(self, data: dict[str, Any]) -> str:
+        login_id = secrets.token_urlsafe(18)
+        self._items[login_id] = data
+        return login_id
+
+    def get(self, login_id: str) -> dict[str, Any] | None:
+        item = self._items.get(login_id)
+        if item is not None and item.get("expires_at", 0.0) < time.time():
+            self._items.pop(login_id, None)
+            return None
+        return item
+
+    def pop(self, login_id: str) -> None:
+        self._items.pop(login_id, None)
+
+
 @dataclass
 class ServerDeps:
     """The seam between the transport shell and the engine (docs/01: server sees only ports)."""
@@ -217,6 +246,10 @@ class ServerDeps:
     refresh_models: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None
     test_connection: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
     reload_router: Callable[[], Awaitable[dict[str, Any]]] | None = None
+    # Codex (ChatGPT-subscription) OAuth device flow (D-47): `start` mints a device code to display;
+    # `poll` completes the login (token exchange → a codex credential + connection). None → 501.
+    codex_start: Callable[[str], Awaitable[dict[str, Any]]] | None = None
+    codex_poll: Callable[[str], Awaitable[dict[str, Any]]] | None = None
 
 
 def engine_deps(
@@ -399,6 +432,72 @@ def engine_deps(
         engine.rebind_router(new_router)
         return {"reloaded": True}
 
+    codex_pending = _CodexPendingStore()
+
+    async def codex_start(name: str) -> dict[str, Any]:
+        from uro_core.providers.codex_auth import request_device_code
+
+        dc = await request_device_code()
+        login_id = codex_pending.put(
+            {
+                "device_auth_id": dc["device_auth_id"],
+                "user_code": dc["user_code"],
+                "name": name,
+                "expires_at": time.time() + dc["expires_in"],
+            }
+        )
+        return {
+            "login_id": login_id,
+            "user_code": dc["user_code"],
+            "verification_uri": dc["verification_uri"],
+            "interval": dc["interval"],
+            "expires_in": dc["expires_in"],
+        }
+
+    async def codex_poll(login_id: str) -> dict[str, Any]:
+        from uro_core.providers.codex_auth import exchange_code, poll_device_auth
+        from uro_core.providers.registry import discover_models
+
+        pending = codex_pending.get(login_id)
+        if pending is None:
+            raise KeyError(login_id)  # unknown or expired → the endpoint maps to 404
+        payload = await poll_device_auth(pending["device_auth_id"], pending["user_code"])
+        if payload is None:
+            return {"status": "pending"}
+        # Approved → exchange for tokens and materialize a codex credential + connection (a codex
+        # connection has no API key — the OAuth login IS how it comes to exist). The two writes
+        # aren't one transaction, so if the connection insert fails, delete the just-created
+        # credential rather than leave it orphaned (review).
+        tokens = await exchange_code(payload["authorization_code"], payload["code_verifier"])
+        cred_id = await store.add_credential(
+            provider="codex",
+            access_token=tokens["access_token"],
+            refresh_token=tokens.get("refresh_token"),
+            auth_mode="oauth_device",
+        )
+        try:
+            conn_id = await store.add_connection(
+                name=pending["name"], provider="codex", auth_id=cred_id
+            )
+        except Exception:
+            await store.delete_credential(cred_id)  # no orphaned credential
+            raise
+        models: list[dict[str, str]] = []
+        try:  # discovery is best-effort — a connected login shouldn't fail on a models hiccup
+            conn = await store.get_connection(conn_id)
+            if conn is not None:
+                models = await discover_models(conn, tokens["access_token"])
+                await store.set_connection_models(conn_id, models)
+        except Exception as exc:
+            logger.warning("codex model discovery failed post-connect: %s", type(exc).__name__)
+        codex_pending.pop(login_id)
+        return {
+            "status": "connected",
+            "connection_id": conn_id,
+            "credential_id": cred_id,
+            "models": models,
+        }
+
     return ServerDeps(
         resolve_participant=registry.resolve,
         campaign_exists=campaign_exists,
@@ -419,6 +518,8 @@ def engine_deps(
         refresh_models=refresh_models,
         test_connection=test_connection,
         reload_router=reload_router,
+        codex_start=codex_start,
+        codex_poll=codex_poll,
     )
 
 
@@ -669,6 +770,60 @@ def create_app(
         if deps.reload_router is None:
             raise HTTPException(status_code=501, detail="router reload not enabled")
         return await deps.reload_router()
+
+    @app.post("/providers/codex/start")
+    async def codex_start_ep(
+        request: Request,
+        body: dict[str, Any] = Body(default={}),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Begin a Codex (ChatGPT-subscription) OAuth device login. Returns the short `user_code`
+        to display + a `login_id` to poll. Optional `{name}` names the resulting connection.
+        Operator-only (D-44); no credential exists yet, so nothing is stored."""
+        from uro_core.providers.codex_auth import CodexAuthError
+
+        _require_operator(request)
+        if deps.codex_start is None:
+            raise HTTPException(status_code=501, detail="codex login not enabled")
+        name = str(body.get("name") or "").strip() or "codex"
+        try:
+            return await deps.codex_start(name)
+        except CodexAuthError as exc:
+            logger.warning("codex device-code request failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="codex device-code request failed") from exc
+
+    @app.post("/providers/codex/poll")
+    async def codex_poll_ep(
+        request: Request,
+        body: dict[str, Any] = Body(default={}),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Poll a pending Codex login by `{login_id}`. Returns `{status:"pending"}` until the user
+        approves, then `{status:"connected", connection_id, credential_id, models}` once tokens are
+        exchanged and a codex connection is created. Operator-only (D-44)."""
+        from uro_core.providers.codex_auth import (
+            CodexAuthError,
+            CodexRateLimited,
+            CodexReauthRequired,
+        )
+
+        _require_operator(request)
+        if deps.codex_poll is None:
+            raise HTTPException(status_code=501, detail="codex login not enabled")
+        login_id = str(body.get("login_id") or "")
+        if not login_id:
+            raise HTTPException(status_code=400, detail="login_id is required")
+        try:
+            return await deps.codex_poll(login_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="unknown or expired login") from exc
+        except CodexRateLimited as exc:
+            raise HTTPException(status_code=429, detail="rate-limited; retry shortly") from exc
+        except CodexReauthRequired as exc:
+            raise HTTPException(
+                status_code=400, detail="authorization expired or denied — restart the login"
+            ) from exc
+        except CodexAuthError as exc:
+            logger.warning("codex poll failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="codex authorization failed") from exc
 
     @app.post("/campaigns/{campaign_id}/encounters/{encounter_id}/outcome")
     async def report_outcome(
