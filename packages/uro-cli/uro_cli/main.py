@@ -10,6 +10,7 @@ import sys
 from typing import Any
 
 import typer
+from dotenv import find_dotenv, load_dotenv
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.pipeline.engine import Engine
 from uro_core.ports.model_registry import ROLES
@@ -26,6 +27,13 @@ from uro_cli.wiring import (
     connect_store,
     parse_role_models,
 )
+
+# Load a local `.env` (found from the CURRENT WORKING DIR, walking up) into the environment before
+# any command reads it — so `URO_SECRET_KEY` / provider keys / `URO_DATABASE_URL` need only live in
+# `.env`, not be exported by hand. `usecwd=True` so it finds the `.env` where you RUN `uro`, not the
+# installed package dir. Precedence preserved: an exported env var wins (dotenv never overrides). No
+# `.env` → find_dotenv returns "" → a harmless no-op.
+load_dotenv(find_dotenv(usecwd=True))
 
 app = typer.Typer(no_args_is_help=True, help="Uro Engine — reference client.")
 db_app = typer.Typer(no_args_is_help=True, help="Database management.")

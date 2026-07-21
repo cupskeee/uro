@@ -1124,6 +1124,7 @@ name = "uro-cli"
 version = "0.3.0"
 source = { editable = "packages/uro-cli" }
 dependencies = [
+    { name = "python-dotenv" },
     { name = "rich" },
     { name = "typer" },
     { name = "uro-core", extra = ["llm", "postgres"] },
@@ -1133,6 +1134,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "rich", specifier = ">=13.9" },
     { name = "typer", specifier = ">=0.27.0" },
     { name = "uro-core", extras = ["postgres", "llm"], editable = "packages/uro-core" },
