@@ -6,7 +6,10 @@ Phase 0 subset: version, db migrate, world new, play.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
+import time
+import webbrowser
 from typing import Any
 
 import typer
@@ -1277,5 +1280,69 @@ def provider_unbind(role: str = typer.Argument(..., help="the role to unbind")) 
         finally:
             await store.close()
         typer.echo("unbound" if ok else f"no binding for role: {role}")
+
+    _run_async(_run)
+
+
+@provider_app.command("codex-login")
+def provider_codex_login(
+    name: str = typer.Option("codex", "--name", help="a display label for the connection"),
+    no_browser: bool = typer.Option(
+        False, "--no-browser", help="don't try to open the authorization page automatically"
+    ),
+) -> None:
+    """Connect a Codex (ChatGPT-subscription) provider via OpenAI's OAuth device login. Prints a
+    code to enter on the authorization page, then polls until you approve — no API key. UNOFFICIAL:
+    uses a consumer ChatGPT subscription; may breach OpenAI's terms (needs URO_SECRET_KEY)."""
+
+    async def _run() -> None:
+        from uro_core.providers import codex_auth
+
+        try:
+            dc = await codex_auth.request_device_code()
+            typer.echo(f"\n  Enter this code on the OpenAI authorization page:  {dc['user_code']}")
+            typer.echo(f"  Authorization page:  {dc['verification_uri']}\n")
+            if not no_browser:
+                with contextlib.suppress(Exception):  # opening a browser is best-effort
+                    webbrowser.open(dc["verification_uri"])
+            typer.echo("Waiting for you to authorize with OpenAI… (Ctrl-C to cancel)")
+
+            deadline = time.monotonic() + dc["expires_in"]
+            payload = None
+            while time.monotonic() < deadline:
+                await asyncio.sleep(dc["interval"])
+                payload = await codex_auth.poll_device_auth(dc["device_auth_id"], dc["user_code"])
+                if payload is not None:
+                    break
+            if payload is None:
+                raise ValueError("the login timed out before you approved the code — try again")
+            tokens = await codex_auth.exchange_code(
+                payload["authorization_code"], payload["code_verifier"]
+            )
+        except codex_auth.CodexAuthError as exc:
+            raise ValueError(f"codex login failed: {exc}") from exc
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            cred_id = await store.add_credential(
+                provider="codex",
+                access_token=tokens["access_token"],
+                refresh_token=tokens.get("refresh_token"),
+                auth_mode="oauth_device",
+            )
+            conn_id = await store.add_connection(name=name, provider="codex", auth_id=cred_id)
+            models: list[dict[str, str]] = []
+            try:
+                models = await codex_auth.discover_codex_models(tokens["access_token"])
+                await store.set_connection_models(conn_id, models)
+            except Exception:
+                pass
+        finally:
+            await store.close()
+        typer.echo(f"\nconnected: {conn_id}  ({name} → codex)")
+        if models:
+            typer.echo("models: " + ", ".join(m["id"] for m in models))
+        typer.echo(f"\nbind the default role:  uro provider bind default {conn_id} <model>")
 
     _run_async(_run)
