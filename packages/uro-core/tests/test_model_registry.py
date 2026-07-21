@@ -110,3 +110,69 @@ async def test_delete_connection_cascades_its_bindings(store: PostgresEventStore
     await store.set_role_binding("narrator", conn_id, "n/a")
     assert await store.delete_connection(conn_id) is True  # cascade removes the binding + cleans up
     assert "narrator" not in {b.role for b in await store.list_role_bindings()}
+
+
+# --- slice 3: model discovery + modality + provider construction ------------------
+
+from uro_core.ports.model_registry import ModelConnection  # noqa: E402
+from uro_core.providers.adapters.anthropic import AnthropicProvider  # noqa: E402
+from uro_core.providers.adapters.openai_compat import OpenAICompatProvider  # noqa: E402
+from uro_core.providers.adapters.stub import StubProvider  # noqa: E402
+from uro_core.providers.registry import (  # noqa: E402
+    classify_modality,
+    discover_models,
+    provider_from_connection,
+)
+
+
+def test_classify_modality() -> None:
+    assert classify_modality("openai", "text-embedding-3-small") == "embedding"
+    assert classify_modality("openai", "gpt-4o") == "chat"
+    assert classify_modality("local", "nomic-embed-text") == "embedding"
+    assert classify_modality("anthropic", "claude-sonnet-5") == "chat"  # no embedding models
+    assert classify_modality("mystery", "whatever") == "unknown"  # unclassifiable provider
+
+
+async def test_discover_models_stub_is_canned() -> None:
+    conn = ModelConnection(id="c", name="stub", provider="stub")
+    models = await discover_models(conn, None)
+    assert {m["id"]: m["modality"] for m in models} == {
+        "stub-chat": "chat",
+        "stub-embed": "embedding",
+    }
+
+
+def test_provider_from_connection_injects_creds_and_base_url() -> None:
+    oai = provider_from_connection(
+        ModelConnection(id="c1", name="o", provider="openai"), "gpt-4o", "sk-x"
+    )
+    assert isinstance(oai, OpenAICompatProvider) and oai._api_key == "sk-x"
+    ant = provider_from_connection(
+        ModelConnection(id="c2", name="a", provider="anthropic", base_url="https://p"),
+        "claude-sonnet-5",
+        "sk-y",
+    )
+    assert isinstance(ant, AnthropicProvider) and ant._base_url == "https://p"
+    assert isinstance(
+        provider_from_connection(ModelConnection(id="c3", name="s", provider="stub"), "m", None),
+        StubProvider,
+    )
+    with pytest.raises(ValueError):  # openai_compat needs a base_url
+        provider_from_connection(
+            ModelConnection(id="c4", name="x", provider="openai_compat"), "m", None
+        )
+
+
+async def test_set_connection_models_persists_cached_models(store: PostgresEventStore) -> None:
+    cid = await store.add_connection(name="oai", provider="openai")
+    try:
+        models = [
+            {"id": "gpt-4o", "modality": "chat"},
+            {"id": "text-embedding-3", "modality": "embedding"},
+        ]
+        assert await store.set_connection_models(cid, models) is True
+        got = await store.get_connection(cid)
+        assert got is not None and got.cached_models == models  # jsonb round-trips
+        assert await store.set_connection_models("nope", models) is False
+    finally:
+        await store.delete_connection(cid)

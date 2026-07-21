@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 if TYPE_CHECKING:  # annotation-only (from __future__ import annotations) — no runtime import
     from uro_core.engines.probe import ProbeReport
     from uro_core.providers.router import ProviderRouter
@@ -66,6 +68,15 @@ _MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MB — the DECOMPRESSED-size 
 # `items`, `edges`, `counters`, `snapshots` carry GM ground truth → operator-only. The whole
 # epistemic thesis collapses if a player can read the raw truth-tagged log (D-45).
 _PLAYER_SAFE_SECTIONS = frozenset({"actors", "threads", "places", "factions", "pcs"})
+
+# A sensible model to probe when `test` is called without one (D-47 slice 3). openai_compat has no
+# universal default, so its probe requires the caller to pass a model.
+_DEFAULT_PROBE_MODEL = {
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-sonnet-5",
+    "local": "llama3.1",
+    "stub": "stub-chat",
+}
 
 # The multipart pack-UPLOAD routes. FastAPI spools the whole body during form parsing — BEFORE a
 # handler's operator gate or the `_safe_extract_pack` cap — so an oversized upload is rejected up
@@ -174,6 +185,12 @@ class ServerDeps:
     # `probe` returns the model-capability report. None (no provider wired) → the endpoints 501.
     backfill: Callable[[WorldPack], Awaitable[tuple[WorldPack, list[str]]]] | None = None
     probe: Callable[[WorldManifest, int], Awaitable[ProbeReport]] | None = None
+    # Model-connection registry slice 3/4 (D-47): discover a connection's models (live), probe a
+    # connection (a 1-token call), and rebuild the instance router from the registry without a
+    # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
+    refresh_models: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None
+    test_connection: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
+    reload_router: Callable[[], Awaitable[dict[str, Any]]] | None = None
 
 
 def engine_deps(
@@ -293,6 +310,55 @@ def engine_deps(
 
             return await run_probes(manifest, bound_router, tries=tries)
 
+    async def _conn_secret(connection_id: str) -> tuple[Any, str | None]:
+        conn = await store.get_connection(connection_id)
+        if conn is None:
+            raise KeyError(connection_id)  # the endpoint maps this to a 404
+        access: str | None = None
+        if conn.auth_id is not None:
+            secret = await store.get_secret(conn.auth_id)
+            access = secret[0] if secret is not None else None
+        return conn, access
+
+    async def refresh_models(connection_id: str) -> list[dict[str, str]]:
+        from uro_core.providers.registry import discover_models
+
+        conn, access = await _conn_secret(connection_id)
+        models = await discover_models(conn, access)
+        await store.set_connection_models(connection_id, models)
+        return models
+
+    async def test_connection(connection_id: str, model: str) -> dict[str, Any]:
+        from uro_core.providers.base import CompletionRequest, Message
+        from uro_core.providers.registry import classify_modality, provider_from_connection
+
+        conn, access = await _conn_secret(connection_id)
+        probe_model = model or _DEFAULT_PROBE_MODEL.get(conn.provider, "")
+        provider = provider_from_connection(conn, probe_model, access)
+        try:
+            if classify_modality(conn.provider, probe_model) == "embedding":
+                await provider.embed(["ping"])
+            else:
+                await provider.complete(
+                    CompletionRequest(
+                        messages=[Message(role="user", content="ping")],
+                        stage_tag="test",
+                        max_tokens=1,
+                    )
+                )
+        except Exception as exc:
+            return {"ok": False, "detail": str(exc)}
+        return {"ok": True, "detail": f"{conn.provider}:{probe_model} responded"}
+
+    async def reload_router() -> dict[str, Any]:
+        from uro_core.providers.registry import build_router_from_registry
+
+        new_router = await build_router_from_registry(store)
+        if new_router is None:
+            return {"reloaded": False, "detail": "registry has no bindings; router unchanged"}
+        engine.rebind_router(new_router)
+        return {"reloaded": True}
+
     return ServerDeps(
         resolve_participant=registry.resolve,
         campaign_exists=campaign_exists,
@@ -310,6 +376,9 @@ def engine_deps(
         list_rulesets=list_rulesets,
         backfill=backfill,
         probe=probe,
+        refresh_models=refresh_models,
+        test_connection=test_connection,
+        reload_router=reload_router,
     )
 
 
@@ -491,9 +560,23 @@ def create_app(
             )
         store = _mgmt()
         connection_id = str(_require(body, "connection_id"))
-        if await store.get_connection(connection_id) is None:
+        conn = await store.get_connection(connection_id)
+        if conn is None:
             raise HTTPException(status_code=400, detail=f"no such connection: {connection_id}")
-        await store.set_role_binding(role, connection_id, str(_require(body, "model")))
+        model = str(_require(body, "model"))
+        # The embedder role needs an EMBEDDING model (slice 3). Classify by the provider's naming;
+        # reject a chat model, but allow "unknown" (an unclassifiable provider — a live `test` is
+        # the definitive check) so we never hard-block a valid but unrecognized endpoint.
+        if role == "embedder":
+            from uro_core.providers.registry import classify_modality
+
+            if classify_modality(conn.provider, model) == "chat":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"the embedder role needs an embedding model, not {model!r} "
+                    f"(a chat model on provider {conn.provider!r})",
+                )
+        await store.set_role_binding(role, connection_id, model)
         return {"role": role, "connection_id": connection_id}
 
     @app.delete("/providers/roles/{role}")
@@ -501,6 +584,45 @@ def create_app(
         """Remove a role binding (that role falls back to `default`). Operator-only."""
         _require_operator(request)
         return {"deleted": await _mgmt().delete_role_binding(role)}
+
+    @app.post("/providers/{connection_id}/refresh")
+    async def refresh_provider(request: Request, connection_id: str) -> dict[str, Any]:
+        """Discover the connection's models (a LIVE call to the provider) and cache them with their
+        modality (slice 3). Operator-only; 502 on a provider/network failure, 404 if unknown."""
+        _require_operator(request)
+        if deps.refresh_models is None:
+            raise HTTPException(status_code=501, detail="model discovery not enabled")
+        try:
+            return {"models": await deps.refresh_models(connection_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such connection") from exc
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=f"model discovery failed: {exc}") from exc
+
+    @app.post("/providers/{connection_id}/test")
+    async def test_provider(
+        request: Request,
+        connection_id: str,
+        body: dict[str, Any] = Body(default={}),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Probe a connection with a 1-token call (slice 3). Optional `{model}`; returns
+        `{ok, detail}` — a provider failure is `ok:false`, not an HTTP error. Operator-only."""
+        _require_operator(request)
+        if deps.test_connection is None:
+            raise HTTPException(status_code=501, detail="connection test not enabled")
+        try:
+            return await deps.test_connection(connection_id, str(body.get("model") or ""))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such connection") from exc
+
+    @app.post("/providers/reload")
+    async def reload_providers(request: Request) -> dict[str, Any]:
+        """Rebuild this instance's provider router from the registry — no restart (slice 4).
+        Operator-only. An empty registry leaves the seed router in place (`reloaded:false`)."""
+        _require_operator(request)
+        if deps.reload_router is None:
+            raise HTTPException(status_code=501, detail="router reload not enabled")
+        return await deps.reload_router()
 
     @app.post("/campaigns/{campaign_id}/encounters/{encounter_id}/outcome")
     async def report_outcome(

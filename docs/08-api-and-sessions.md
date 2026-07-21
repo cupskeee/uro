@@ -73,8 +73,11 @@ PATCH  /providers/{id}           {is_enabled}                     enable/disable
 DELETE /providers/{id}                                            delete a connection (bindings cascade) (OPERATOR-only)
 POST /providers/credentials      {provider, access_token, auth_mode?}    store a credential, encrypted at rest (OPERATOR-only; 501 w/o URO_SECRET_KEY)
 DELETE /providers/credentials/{id}                                delete a credential (linked connections unlinked) (OPERATOR-only)
-PUT  /providers/roles/{role}     {connection_id, model}           bind an engine role → connection+model (OPERATOR-only, D-47)
+PUT  /providers/roles/{role}     {connection_id, model}           bind an engine role → connection+model (OPERATOR-only, D-47); embedder needs an embedding model
 DELETE /providers/roles/{role}                                    unbind a role (OPERATOR-only)
+POST /providers/{id}/refresh                                      discover a connection's models → cached_models w/ modality (LIVE call; OPERATOR-only, D-47)
+POST /providers/{id}/test        {model?}                         probe a connection with a 1-token call → {ok, detail} (OPERATOR-only)
+POST /providers/reload                                            rebuild the instance router from the registry, no restart (OPERATOR-only)
 ```
 
 **Model-connection registry (D-47, `docs/20`).** The `/providers` surface configures the

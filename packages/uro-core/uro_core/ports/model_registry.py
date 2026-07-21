@@ -96,6 +96,10 @@ class ModelRegistry(Protocol):
 
     async def set_connection_enabled(self, connection_id: str, enabled: bool) -> bool: ...
 
+    async def set_connection_models(self, connection_id: str, models: list[dict[str, str]]) -> bool:
+        """Replace a connection's discovered `cached_models` (D-47 slice 3 `refresh`)."""
+        ...
+
     async def delete_connection(self, connection_id: str) -> bool:
         """Delete a connection; its role bindings cascade (those roles fall back to `default`)."""
         ...

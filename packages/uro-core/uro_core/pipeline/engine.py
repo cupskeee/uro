@@ -133,6 +133,13 @@ class Engine:
         # Cross-PROCESS serialization stays the named P7 `expected_head` deferral.
         self._react_locks: dict[str, asyncio.Lock] = {}
 
+    def rebind_router(self, router: ProviderRouter) -> None:
+        """Swap the provider router in place (D-47 slice 4: reload-without-restart). The engine is
+        otherwise long-lived; this lets a registry change take effect without bouncing the process.
+        A beat already streaming keeps the router it started with (attribute rebind is atomic; each
+        beat reads `self._router` once at its start)."""
+        self._router = router
+
     @property
     def ruleset_id(self) -> str:
         """The id of the bound ruleset ('' if none). Lets a caller (e.g. the server) detect a

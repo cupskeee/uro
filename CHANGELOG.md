@@ -25,8 +25,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   `DELETE /providers[/{id}]`, `POST`/`DELETE /providers/credentials[/{id}]`, `PUT`/`DELETE
   /providers/roles/{role}`. A credential's key arrives as plaintext over the operator-only wire and
   is encrypted at rest; **no read returns a secret**. `EngineStore` gains the `ModelRegistry` port;
-  the role vocabulary is a shared `ROLES` constant. Model discovery/validation + reload-without-
-  restart are following slices.
+  the role vocabulary is a shared `ROLES` constant.
+- **Model-connection registry — slices 3 + 4 (D-47): discovery, validation, reload.** `POST
+  /providers/{id}/refresh` lists a connection's models (a live provider call) and caches them with
+  their **modality**; binding the **`embedder`** role now **validates** the model is an embedding
+  model (rejects a chat model, allows an unclassifiable one). `POST /providers/{id}/test` probes a
+  connection with a 1-token call → `{ok, detail}`. `POST /providers/reload` rebuilds the instance
+  provider router **without a restart** (new `Engine.rebind_router`). All operator-only. The
+  provider-building + `build_router_from_registry` + discovery logic moved to
+  `uro_core.providers.registry` (adapter layer) so the server and CLI share it.
 - **Timeline + inspection HTTP surface (BE-1…BE-5, #33–#37)** — the branch-graph, event-log, and
   dry-run/consistency endpoints, epic #44:
   - `GET /worlds/{w}/branches` (BE-1) — branch tree + markers + each branch's in-fiction day.

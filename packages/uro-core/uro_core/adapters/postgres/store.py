@@ -1528,6 +1528,16 @@ class PostgresEventStore:
             )
         return row is not None
 
+    async def set_connection_models(self, connection_id: str, models: list[dict[str, str]]) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE model_connections SET cached_models = $2, updated_at = now() "
+                "WHERE id = $1 RETURNING id",
+                connection_id,
+                models,  # jsonb codec encodes the list of {id, modality} dicts
+            )
+        return row is not None
+
     async def delete_connection(self, connection_id: str) -> bool:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
