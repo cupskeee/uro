@@ -17,6 +17,20 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   one-liner for `URO_SECRET_KEY`).
 
 ### Fixed
+- **OpenAI o-series reasoning models (o1/o3/o4-mini/…) were rejected by the adapter.** The
+  `openai_compat` adapter hardcoded `temperature` and `max_tokens` in every request, but o-series
+  reasoning models 400 on both (they require `max_completion_tokens` and accept only the default
+  temperature). Binding e.g. `default → o4-mini` failed its `test` probe — and would have failed
+  real beats — on a perfectly valid key. The adapter now detects reasoning models by the `o<digit>`
+  naming convention (including gateway-namespaced ids like `openai/o4-mini`) and, for them, sends
+  `max_completion_tokens` and omits `temperature`; ordinary chat models (gpt-4o, local, etc.) are
+  unchanged. The `test` probe's output cap is also raised from 1 to 256 (a ceiling — free on a chat
+  model, but a reasoning model spends the budget on hidden reasoning before any output). Caveats:
+  gpt-5 variants are not matched (their chat variants share the name; contract unverified); a
+  reasoning model bound to a low-temperature role (extractor/planner) runs at the model's default
+  temperature since the role temperature can't be honored; and the oldest o1-preview/o1-mini also
+  reject the `system` role and json-mode `response_format`, which is not yet remediated (so those
+  two on the extractor/planner can still 400 — o3-mini/o4-mini accept both).
 - **Provider `test` picked a bad canary model (D-47).** The connection-level `POST /providers/{id}/test`
   probe, when given no model, no longer implicitly uses the head of the discovered list — that list
   is returned SORTED, so an OpenAI connection led with `babbage-002`, a legacy base-completion model
