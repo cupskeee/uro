@@ -1854,6 +1854,13 @@ class _FakeRegistryStore:
         self._conns[connection_id] = c.model_copy(update={"is_enabled": enabled})
         return True
 
+    async def set_connection_models(self, connection_id, models):  # type: ignore[no-untyped-def]
+        c = self._conns.get(connection_id)
+        if c is None:
+            return False
+        self._conns[connection_id] = c.model_copy(update={"cached_models": models})
+        return True
+
     async def delete_connection(self, connection_id):  # type: ignore[no-untyped-def]
         existed = self._conns.pop(connection_id, None) is not None
         for role in [r for r, b in self._roles.items() if b.connection_id == connection_id]:
@@ -2095,3 +2102,113 @@ def test_set_role_rejects_an_empty_model() -> None:
         "/providers/roles/narrator?token=tok-a", json={"connection_id": cid, "model": "  "}
     )
     assert resp.status_code == 400
+
+
+# --- codex (ChatGPT-subscription) OAuth device flow (D-47 slice 2) -------------------------------
+
+
+def test_codex_pending_store_put_get_pop_and_expiry() -> None:
+    import time
+
+    from uro_server.app import _CodexPendingStore
+
+    s = _CodexPendingStore()
+    lid = s.put({"device_auth_id": "d", "user_code": "u", "expires_at": time.time() + 100})
+    got = s.get(lid)
+    assert got is not None and got["device_auth_id"] == "d"
+    s.pop(lid)
+    assert s.get(lid) is None
+    expired = s.put({"expires_at": time.time() - 1})  # already past → pruned on read
+    assert s.get(expired) is None
+
+
+def test_codex_endpoints_are_operator_only_and_501_when_unwired() -> None:
+    client = _reg_client()  # _fake_deps leaves codex_start/codex_poll = None
+    # operator (tok-a) but unwired → 501
+    assert client.post("/providers/codex/start?token=tok-a", json={}).status_code == 501
+    assert (
+        client.post("/providers/codex/poll?token=tok-a", json={"login_id": "x"}).status_code == 501
+    )
+    # a player token (tok-b) → 403 before the 501 (the operator gate fires first)
+    assert client.post("/providers/codex/start?token=tok-b", json={}).status_code == 403
+    assert (
+        client.post("/providers/codex/poll?token=tok-b", json={"login_id": "x"}).status_code == 403
+    )
+
+
+def _codex_client() -> TestClient:
+    """A client whose codex_start/codex_poll are the REAL engine_deps closures over a fake store."""
+    from uro_core.pipeline.engine import Engine
+    from uro_core.providers.adapters.stub import StubProvider
+    from uro_core.providers.router import ProviderRouter
+    from uro_core.rulesets.uro_basic import UroBasic
+    from uro_server.app import engine_deps
+
+    store = _FakeRegistryStore()
+    engine = Engine(store, ProviderRouter(bindings={}, default=StubProvider()), ruleset=UroBasic())
+    deps = engine_deps(store, engine, {"tok-a": "op"}, admin_tokens={"tok-a"})  # type: ignore[arg-type]
+    return TestClient(create_app(deps))
+
+
+def test_codex_login_flow_creates_a_connection(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from uro_core.providers import codex_auth
+
+    client = _codex_client()
+
+    async def fake_device_code(**kw: object) -> dict[str, object]:
+        return {
+            "device_auth_id": "dev1",
+            "user_code": "J7DE-8NXJS",
+            "verification_uri": "https://auth.openai.com/codex/device",
+            "interval": 5,
+            "expires_in": 900,
+        }
+
+    monkeypatch.setattr(codex_auth, "request_device_code", fake_device_code)
+    start = client.post("/providers/codex/start?token=tok-a", json={"name": "my-codex"})
+    assert start.status_code == 200
+    body = start.json()
+    assert body["user_code"] == "J7DE-8NXJS"
+    login_id = body["login_id"]
+
+    # a missing login_id is a 400
+    assert client.post("/providers/codex/poll?token=tok-a", json={}).status_code == 400
+
+    # first poll: the user hasn't approved yet → pending
+    async def poll_pending(dev: str, code: str, **kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(codex_auth, "poll_device_auth", poll_pending)
+    assert client.post("/providers/codex/poll?token=tok-a", json={"login_id": login_id}).json() == {
+        "status": "pending"
+    }
+
+    # second poll: approved → exchange + discover → a codex connection is created
+    async def poll_done(dev: str, code: str, **kw: object) -> dict[str, str]:
+        return {"authorization_code": "AC", "code_verifier": "V"}
+
+    async def fake_exchange(code: str, verifier: str, **kw: object) -> dict[str, str]:
+        return {"access_token": "AT", "refresh_token": "RT"}
+
+    async def fake_discover(token: str, **kw: object) -> list[dict[str, str]]:
+        return [{"id": "gpt-5-codex", "modality": "chat"}]
+
+    monkeypatch.setattr(codex_auth, "poll_device_auth", poll_done)
+    monkeypatch.setattr(codex_auth, "exchange_code", fake_exchange)
+    monkeypatch.setattr(codex_auth, "discover_codex_models", fake_discover)
+    done = client.post("/providers/codex/poll?token=tok-a", json={"login_id": login_id}).json()
+    assert done["status"] == "connected"
+    assert done["models"] == [{"id": "gpt-5-codex", "modality": "chat"}]
+
+    # the connection now exists: a codex kind, named, linked to a credential
+    conns = client.get("/providers?token=tok-a").json()["connections"]
+    assert len(conns) == 1
+    assert conns[0]["provider"] == "codex"
+    assert conns[0]["name"] == "my-codex"
+    assert conns[0]["auth_id"]
+
+    # the login is consumed → a further poll is a 404
+    assert (
+        client.post("/providers/codex/poll?token=tok-a", json={"login_id": login_id}).status_code
+        == 404
+    )
