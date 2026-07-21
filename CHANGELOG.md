@@ -16,6 +16,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   (dotenv never overrides). A committed `.env.example` documents the vars (incl. the Fernet-key
   one-liner for `URO_SECRET_KEY`).
 
+### Fixed
+- **Provider `test` picked a bad canary model (D-47).** The connection-level `POST /providers/{id}/test`
+  probe, when given no model, no longer implicitly uses the head of the discovered list — that list
+  is returned SORTED, so an OpenAI connection led with `babbage-002`, a legacy base-completion model
+  the chat-probe can't call, giving a spurious `✗ failed (ProviderError)` on a perfectly good key.
+  A new `_default_probe_model` prefers the provider's known-good chat default (`gpt-4o-mini` etc.);
+  `local`/`openai_compat` (no reliable pinned default) fall back to their own first discovered model.
+
 ## [0.3.0] - 2026-07-21
 
 ### Fixed
