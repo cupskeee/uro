@@ -85,6 +85,7 @@ _DEFAULT_PROBE_MODEL = {
     "anthropic": "claude-sonnet-5",
     "local": "llama3.1",
     "stub": "stub-chat",
+    "codex": "gpt-5",  # fallback if a codex connection's models weren't discovered (review)
 }
 
 
@@ -463,8 +464,10 @@ def engine_deps(
         payload = await poll_device_auth(pending["device_auth_id"], pending["user_code"])
         if payload is None:
             return {"status": "pending"}
-        # Approved → exchange for tokens and materialize a codex credential + connection atomically
-        # (a codex connection has no API key — the OAuth login IS how it comes to exist).
+        # Approved → exchange for tokens and materialize a codex credential + connection (a codex
+        # connection has no API key — the OAuth login IS how it comes to exist). The two writes
+        # aren't one transaction, so if the connection insert fails, delete the just-created
+        # credential rather than leave it orphaned (review).
         tokens = await exchange_code(payload["authorization_code"], payload["code_verifier"])
         cred_id = await store.add_credential(
             provider="codex",
@@ -472,9 +475,13 @@ def engine_deps(
             refresh_token=tokens.get("refresh_token"),
             auth_mode="oauth_device",
         )
-        conn_id = await store.add_connection(
-            name=pending["name"], provider="codex", auth_id=cred_id
-        )
+        try:
+            conn_id = await store.add_connection(
+                name=pending["name"], provider="codex", auth_id=cred_id
+            )
+        except Exception:
+            await store.delete_credential(cred_id)  # no orphaned credential
+            raise
         models: list[dict[str, str]] = []
         try:  # discovery is best-effort — a connected login shouldn't fail on a models hiccup
             conn = await store.get_connection(conn_id)

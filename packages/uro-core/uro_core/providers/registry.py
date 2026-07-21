@@ -79,8 +79,9 @@ def provider_from_connection(
 class CodexTokenSource:
     """A refresh-capable token callable for the ROUTER path: reads the connection's stored codex
     tokens and, on expiry (or a forced 401-retry), refreshes via the OAuth endpoint and PERSISTS the
-    rotation. One instance per connection; an `asyncio.Lock` serializes concurrent beats so two
-    don't refresh the same grant at once."""
+    rotation. `build_router_from_registry` SHARES one instance across every role bound to the same
+    credential (cached by `auth_id`), so its `asyncio.Lock` actually serializes concurrent beats —
+    two roles on one ChatGPT subscription can't race a refresh of the same grant (review)."""
 
     def __init__(self, store: ModelRegistry, auth_id: str | None) -> None:
         self._store = store
@@ -110,12 +111,17 @@ class CodexTokenSource:
 
 
 def build_codex_provider(
-    store: ModelRegistry, conn: ModelConnection, model: str
+    store: ModelRegistry,
+    conn: ModelConnection,
+    model: str,
+    *,
+    source: CodexTokenSource | None = None,
 ) -> CodexResponsesProvider:
-    """Router-path codex provider: a refresh-capable token source bound to the credential."""
+    """Router-path codex provider. Pass a SHARED `source` so all roles on one credential reuse a
+    single token source + lock (review); omitted → a fresh (unshared) one for a lone binding."""
     return CodexResponsesProvider(
         model=model,
-        token_provider=CodexTokenSource(store, conn.auth_id),
+        token_provider=source or CodexTokenSource(store, conn.auth_id),
         base_url=conn.base_url or codex_auth.CODEX_BASE_URL,
     )
 
@@ -146,6 +152,9 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
     connections = {c.id: c for c in await store.list_connections()}
     bindings: dict[str, LLMProvider] = {}
     default: LLMProvider | None = None
+    # One CodexTokenSource per credential, SHARED across every role bound to it (review): the lock
+    # only serializes refreshes if the roles hold the SAME instance.
+    codex_sources: dict[str, CodexTokenSource] = {}
     for rb in role_bindings:
         conn = connections.get(rb.connection_id)
         if conn is None or not conn.is_enabled:
@@ -157,7 +166,9 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
             continue
         provider: LLMProvider
         if conn.provider == "codex":
-            provider = build_codex_provider(store, conn, rb.model)
+            key = conn.auth_id or conn.id
+            source = codex_sources.setdefault(key, CodexTokenSource(store, conn.auth_id))
+            provider = build_codex_provider(store, conn, rb.model, source=source)
         else:
             provider = provider_from_connection(conn, rb.model, await _access_token(store, conn))
         if rb.role == "default":

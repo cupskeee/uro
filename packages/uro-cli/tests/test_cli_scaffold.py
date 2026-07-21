@@ -61,3 +61,29 @@ def test_provider_codex_login(monkeypatch) -> None:  # type: ignore[no-untyped-d
     assert "J7DE-8NXJS" in result.output  # the displayed device code
     assert "connected: conn-1" in result.output
     assert "gpt-5-codex" in result.output  # discovered model listed
+
+
+def test_provider_bind_rejects_a_chat_model_for_the_embedder(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """CLI parity with the server's embedder-modality guard (review): a chat model (codex is always
+    chat) can't back the embedder role."""
+    from uro_cli import main
+    from uro_core.ports.model_registry import ModelConnection
+
+    class _Store:
+        async def get_connection(self, cid: str) -> ModelConnection:
+            return ModelConnection(id=cid, name="cx", provider="codex", auth_id="a1")
+
+        async def set_role_binding(self, *a: object, **kw: object) -> None:
+            raise AssertionError("should not bind — the guard must reject first")
+
+        async def close(self) -> None:
+            pass
+
+    async def _noop(store: object) -> None:
+        return None
+
+    monkeypatch.setattr(main, "build_store", lambda: _Store())
+    monkeypatch.setattr(main, "connect_store", _noop)
+    result = CliRunner().invoke(app, ["provider", "bind", "embedder", "conn-1", "gpt-5-codex"])
+    assert result.exit_code == 1
+    assert "embedding model" in result.output
