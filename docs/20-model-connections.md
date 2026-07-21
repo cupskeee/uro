@@ -1,7 +1,10 @@
 # 20 — Model connections (DB-backed, instance-level)
 
-> **Status: proposed** · Decision: [`D-47`](decisions.md) · Engine change: new operational tables
-> (migration 020) + a registry adapter + a server/CLI surface; the core ring is **untouched**.
+> **Status: accepted (D-47); slice 1 shipped** · Decision: [`D-47`](decisions.md) · Engine change:
+> new operational tables (migration 020) + a registry adapter + a server/CLI surface; the core ring
+> is **untouched**. Built: the registry substrate, the encrypted-credential store,
+> `build_router_from_registry`, `serve` resolution, and the `uro provider` CLI (slice 1). Slices 2–4
+> (server API, model discovery/validation, reload-without-restart) follow.
 
 Move LLM provider configuration out of the deployment file (`uro.toml [llm.roles]` + `--provider`
 flag + env keys) and into the **database**, as an **instance-level** registry configurable over the
@@ -175,7 +178,7 @@ instead of static (read file), but the seam the core sees is identical.
 
 ## Build plan (slices, each `just test`-green + committed)
 
-1. **Registry substrate (engine):** migration 020; the `provider_credentials` adapter (Fernet, KEK
+1. ✅ **Registry substrate (engine) — SHIPPED:** migration 020; the `provider_credentials` adapter (Fernet, KEK
    from env); a `ModelConnectionStore` port + Postgres adapter; `build_router_from_registry()` in the
    adapter layer; `serve` resolves the router from the DB with the file/flag/stub seed fallback; CLI
    `uro provider add/list/rm/bind`. Core untouched.

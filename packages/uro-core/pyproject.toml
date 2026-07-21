@@ -20,8 +20,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The bundled EventStore/VectorIndex adapter (uro_core.adapters.postgres).
-postgres = ["asyncpg>=0.30", "pgvector>=0.5.0"]
+# The bundled EventStore/VectorIndex adapter (uro_core.adapters.postgres). `cryptography` backs the
+# at-rest encryption of provider credentials in the model-connection registry (D-47).
+postgres = ["asyncpg>=0.30", "pgvector>=0.5.0", "cryptography>=43"]
 # The bundled LLM provider adapters (uro_core.providers.adapters — OpenAI-compatible + Anthropic).
 llm = ["httpx>=0.27"]
 # Everything the reference deployment uses.

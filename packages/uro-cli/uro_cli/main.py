@@ -12,13 +12,14 @@ from typing import Any
 import typer
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.pipeline.engine import Engine
+from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets.base import CharSpec
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import World
 
 from uro_cli.wiring import (
-    DatabaseUnavailable,
     build_router,
+    build_router_from_registry,
     build_ruleset,
     build_store,
     connect_store,
@@ -36,12 +37,21 @@ codex_app = typer.Typer(
 token_app = typer.Typer(
     no_args_is_help=True, help="Runtime session tokens against a running server (docs/18 B10)."
 )
+provider_app = typer.Typer(
+    no_args_is_help=True,
+    help="Model connections — the DB-backed LLM provider registry (D-47, docs/20).",
+)
 app.add_typer(db_app, name="db")
 app.add_typer(world_app, name="world")
 app.add_typer(branch_app, name="branch")
 app.add_typer(campaign_app, name="campaign")
 app.add_typer(codex_app, name="codex")
 app.add_typer(token_app, name="token")
+app.add_typer(provider_app, name="provider")
+
+# The engine roles a connection can back (wiring.build_router_from_registry). `default` is the
+# ProviderRouter fallback for any unbound role.
+_ROLES = ("default", "narrator", "extractor", "planner", "embedder", "dialogue", "judge")
 
 PARTICIPANT = "player-1"  # Phase 0 is single-player; participants arrive in Phase 5.
 
@@ -53,6 +63,25 @@ def _run_async(coro_factory) -> None:  # type: ignore[no-untyped-def]
     except (RuntimeError, ValueError, KeyError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
+
+
+def _resolve_router(store: PostgresEventStore, provider: str, model: str | None):  # type: ignore[no-untyped-def]
+    """Resolve the ProviderRouter for `serve`: the DB model-connection registry (D-47) wins if it
+    has usable bindings, else the `--provider`/`uro.toml` seed. This first DB touch also serves as
+    the preflight. Returns (router, source_label). Raises DatabaseUnavailable if the DB is down and
+    RuntimeError/ValueError if a CONFIGURED registry can't be built (bad KEK, missing key)."""
+
+    async def _read() -> ProviderRouter | None:
+        await connect_store(store)
+        try:
+            return await build_router_from_registry(store)
+        finally:
+            await store.close()
+
+    registry_router = asyncio.run(_read())
+    if registry_router is not None:
+        return registry_router, "DB model-connection registry (D-47)"
+    return build_router(provider, model), f"seed (provider={provider})"
 
 
 async def _world_or_exit(store: PostgresEventStore, ident: str) -> World:
@@ -538,7 +567,15 @@ def serve(
         tokens[tok] = name if sep else f"operator-{j + 1}"
         admin_tokens.add(tok)
     store = build_store()
-    router = build_router(provider, model)
+    # Resolve the ProviderRouter: the DB model-connection registry (D-47) wins if it has usable
+    # bindings, else the --provider/uro.toml seed. This first DB touch doubles as the preflight (a
+    # down DB → the clean docker-first hint, not a uvicorn startup traceback). A CONFIGURED-but-
+    # broken registry (bad KEK, missing key) fails LOUDLY rather than silently serving the stub.
+    try:
+        router, llm_source = _resolve_router(store, provider, model)
+    except (RuntimeError, ValueError) as exc:  # incl. DatabaseUnavailable (a RuntimeError subclass)
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
     engine = Engine(store, router, ruleset=build_ruleset(ruleset))
     # Pick the turn shape (OQ-7, D-31/D-38/D-39). UNSET (--arbiter not given) is AUTO: solo for one
     # token (the dev loop → SoloArbiter), party for >1. Set EXPLICITLY, the shape binds regardless
@@ -570,25 +607,15 @@ def serve(
     async def _shutdown() -> None:
         await store.close()
 
-    # Preflight the DB here so a down database gets the same clean docker-first hint every other
-    # command gives (via connect_store), instead of a uvicorn "Application startup failed"
-    # traceback. The live pool is (re)opened by the startup hook on uvicorn's own event loop — an
-    # asyncpg pool is bound to the loop that created it, so this throwaway probe is closed at once.
-    async def _preflight() -> None:
-        await connect_store(store)
-        await store.close()
-
-    try:
-        asyncio.run(_preflight())
-    except DatabaseUnavailable as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1) from exc
-
+    # (The DB preflight is folded into _resolve_router above — its connect_store gives the same
+    # clean docker-first hint on a down DB, and the pool it opens is closed before uvicorn starts;
+    # the startup hook re-opens one on uvicorn's own loop.)
     shape = type(arbiter).__name__ if arbiter is not None else "solo"
     typer.echo(
         f"uro server on ws://{host}:{port}  "
         f"({len(tokens)} token(s), provider={provider}, arbiter={shape})"
     )
+    typer.echo(f"  LLM: {llm_source}")
     for t, p in tokens.items():
         typer.echo(f"  token {t!r} → {p}")
     if cors_origin:
@@ -1097,5 +1124,148 @@ def codex_list(
                 else (f"  (on: {', '.join(n.entity_refs)})" if n.entity_refs else "")
             )
             typer.echo(f"- {n.text}{tag}")
+
+    _run_async(_run)
+
+
+# --- Model-connection registry (D-47, docs/20) — direct-DB config of the LLM provider registry.
+# A server API mirror (for uro-loom / remote clients) lands in the next slice; today these edit the
+# instance's DB directly (operator with DB access), like `uro world`/`uro campaign`.
+
+
+@provider_app.command("add")
+def provider_add(
+    name: str = typer.Argument(..., help="a display label for this connection"),
+    provider: str = typer.Option(
+        ..., "--provider", help="provider kind: openai | anthropic | openai_compat | local | stub"
+    ),
+    base_url: str = typer.Option(None, "--base-url", help="per-connection endpoint override"),
+    api_key: str = typer.Option(
+        None,
+        "--api-key",
+        help="an API key to store ENCRYPTED (needs URO_SECRET_KEY) — creates + links a credential",
+    ),
+    credential: str = typer.Option(
+        None, "--credential", help="reuse an EXISTING credential id instead of --api-key"
+    ),
+) -> None:
+    """Register a model connection (a provider endpoint). With --api-key it also stores an encrypted
+    credential and links it; a keyless provider (local/stub) needs neither."""
+
+    async def _run() -> None:
+        if api_key and credential:
+            raise ValueError("pass either --api-key or --credential, not both")
+        store = build_store()
+        await connect_store(store)
+        try:
+            auth_id: str | None = None
+            if api_key:
+                auth_id = await store.add_credential(provider=provider, access_token=api_key)
+            elif credential:
+                if all(c.id != credential for c in await store.list_credentials()):
+                    raise ValueError(f"no such credential: {credential}")
+                auth_id = credential
+            cid = await store.add_connection(
+                name=name, provider=provider, base_url=base_url or None, auth_id=auth_id
+            )
+        finally:
+            await store.close()
+        typer.echo(f"connection: {cid}  ({name} → {provider})")
+        if auth_id:
+            typer.echo(f"credential: {auth_id}  (encrypted at rest)")
+        typer.echo(f"\nbind a role:  uro provider bind narrator {cid} <model>")
+
+    _run_async(_run)
+
+
+@provider_app.command("list")
+def provider_list() -> None:
+    """Show the registry: connections, role bindings, and credential metadata (never secrets)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            connections = await store.list_connections()
+            bindings = await store.list_role_bindings()
+            credentials = await store.list_credentials()
+        finally:
+            await store.close()
+        typer.echo("connections:")
+        if not connections:
+            typer.echo("  (none — add one with `uro provider add`)")
+        for c in connections:
+            base = f" @{c.base_url}" if c.base_url else ""
+            auth = f" auth={c.auth_id}" if c.auth_id else " (keyless)"
+            disabled = "" if c.is_enabled else " [disabled]"
+            typer.echo(f"  {c.id}  {c.name} → {c.provider}{base}{auth}{disabled}")
+        typer.echo("role bindings:")
+        if not bindings:
+            typer.echo("  (none — the server falls back to the --provider/uro.toml seed)")
+        for b in bindings:
+            typer.echo(f"  {b.role:<9} → {b.connection_id} : {b.model}")
+        if credentials:
+            typer.echo("credentials:")
+            for cr in credentials:
+                has = "  (access_token set)" if cr.has_access_token else ""
+                typer.echo(f"  {cr.id}  {cr.provider}  {cr.auth_mode}{has}")
+
+    _run_async(_run)
+
+
+@provider_app.command("rm")
+def provider_rm(
+    connection_id: str = typer.Argument(..., help="the connection id to delete"),
+) -> None:
+    """Delete a connection (its role bindings cascade → those roles fall back to `default`)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            ok = await store.delete_connection(connection_id)
+        finally:
+            await store.close()
+        typer.echo("deleted" if ok else f"no such connection: {connection_id}")
+
+    _run_async(_run)
+
+
+@provider_app.command("bind")
+def provider_bind(
+    role: str = typer.Argument(..., help=f"one of: {', '.join(_ROLES)}"),
+    connection_id: str = typer.Argument(...),
+    model: str = typer.Argument(..., help="a model id offered by the connection's provider"),
+) -> None:
+    """Bind an engine role to a connection + model. `default` backs any unbound role."""
+
+    async def _run() -> None:
+        if role not in _ROLES:
+            raise ValueError(f"unknown role {role!r}; one of: {', '.join(_ROLES)}")
+        store = build_store()
+        await connect_store(store)
+        try:
+            if await store.get_connection(connection_id) is None:
+                raise ValueError(f"no such connection: {connection_id}")
+            await store.set_role_binding(role, connection_id, model)
+        finally:
+            await store.close()
+        typer.echo(f"bound {role} → {connection_id} : {model}")
+
+    _run_async(_run)
+
+
+@provider_app.command("unbind")
+def provider_unbind(role: str = typer.Argument(..., help="the role to unbind")) -> None:
+    """Remove a role binding (that role falls back to `default`)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            ok = await store.delete_role_binding(role)
+        finally:
+            await store.close()
+        typer.echo("unbound" if ok else f"no binding for role: {role}")
 
     _run_async(_run)

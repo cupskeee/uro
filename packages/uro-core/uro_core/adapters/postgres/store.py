@@ -13,6 +13,7 @@ from typing import Any
 
 import asyncpg
 
+from uro_core.adapters.crypto import decrypt_secret, encrypt_secret
 from uro_core.adapters.postgres.projector import (
     _SNAPSHOT_TABLES,
     apply_event,
@@ -50,6 +51,7 @@ from uro_core.export import (
     verify_bundle,
 )
 from uro_core.metering import LLMCall
+from uro_core.ports.model_registry import ModelConnection, ProviderCredential, RoleBinding
 from uro_core.timeline.models import (
     ActorView,
     BeliefView,
@@ -1401,6 +1403,165 @@ class PostgresEventStore:
                 "FROM session_tokens WHERE NOT revoked"
             )
         return [(r["token_hash"], r["participant_id"], r["campaign_id"]) for r in rows]
+
+    # --- Model-connection registry (D-47, docs/20) — instance-level, OFF THE BRANCH/EVENT AXIS ---
+
+    async def add_credential(
+        self,
+        *,
+        provider: str,
+        access_token: str | None,
+        refresh_token: str | None = None,
+        auth_mode: str = "api_key",
+    ) -> str:
+        # Encrypt BEFORE the DB ever sees it (app-level Fernet, env KEK) — no plaintext at rest.
+        enc_access = encrypt_secret(access_token) if access_token is not None else None
+        enc_refresh = encrypt_secret(refresh_token) if refresh_token is not None else None
+        cid = new_id()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO provider_credentials (id, provider, access_token, refresh_token, "
+                "auth_mode) VALUES ($1, $2, $3, $4, $5)",
+                cid,
+                provider,
+                enc_access,
+                enc_refresh,
+                auth_mode,
+            )
+        return cid
+
+    async def list_credentials(self) -> list[ProviderCredential]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, provider, auth_mode, last_refresh, "
+                "access_token IS NOT NULL AS has_access, refresh_token IS NOT NULL AS has_refresh "
+                "FROM provider_credentials ORDER BY created_at"
+            )
+        return [
+            ProviderCredential(
+                id=r["id"],
+                provider=r["provider"],
+                auth_mode=r["auth_mode"],
+                has_access_token=r["has_access"],
+                has_refresh_token=r["has_refresh"],
+                last_refresh=r["last_refresh"],
+            )
+            for r in rows
+        ]
+
+    async def delete_credential(self, credential_id: str) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "DELETE FROM provider_credentials WHERE id = $1 RETURNING id", credential_id
+            )
+        return row is not None
+
+    async def get_secret(self, credential_id: str) -> tuple[str | None, str | None] | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT access_token, refresh_token FROM provider_credentials WHERE id = $1",
+                credential_id,
+            )
+        if row is None:
+            return None
+        access = decrypt_secret(row["access_token"]) if row["access_token"] is not None else None
+        refresh = decrypt_secret(row["refresh_token"]) if row["refresh_token"] is not None else None
+        return access, refresh
+
+    @staticmethod
+    def _connection_row(r: asyncpg.Record) -> ModelConnection:
+        return ModelConnection(
+            id=r["id"],
+            name=r["name"],
+            provider=r["provider"],
+            base_url=r["base_url"],
+            auth_id=r["auth_id"],
+            is_enabled=r["is_enabled"],
+            cached_models=r["cached_models"],  # jsonb codec → a list (or None)
+        )
+
+    async def add_connection(
+        self,
+        *,
+        name: str,
+        provider: str,
+        base_url: str | None = None,
+        auth_id: str | None = None,
+    ) -> str:
+        cid = new_id()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO model_connections (id, name, provider, base_url, auth_id) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                cid,
+                name,
+                provider,
+                base_url,
+                auth_id,
+            )
+        return cid
+
+    async def list_connections(self) -> list[ModelConnection]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, name, provider, base_url, auth_id, is_enabled, cached_models "
+                "FROM model_connections ORDER BY created_at"
+            )
+        return [self._connection_row(r) for r in rows]
+
+    async def get_connection(self, connection_id: str) -> ModelConnection | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, name, provider, base_url, auth_id, is_enabled, cached_models "
+                "FROM model_connections WHERE id = $1",
+                connection_id,
+            )
+        return self._connection_row(row) if row is not None else None
+
+    async def set_connection_enabled(self, connection_id: str, enabled: bool) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE model_connections SET is_enabled = $2, updated_at = now() "
+                "WHERE id = $1 RETURNING id",
+                connection_id,
+                enabled,
+            )
+        return row is not None
+
+    async def delete_connection(self, connection_id: str) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "DELETE FROM model_connections WHERE id = $1 RETURNING id", connection_id
+            )
+        return row is not None
+
+    async def set_role_binding(self, role: str, connection_id: str, model: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO role_bindings (role, connection_id, model) VALUES ($1, $2, $3) "
+                "ON CONFLICT (role) DO UPDATE SET connection_id = EXCLUDED.connection_id, "
+                "model = EXCLUDED.model, updated_at = now()",
+                role,
+                connection_id,
+                model,
+            )
+
+    async def list_role_bindings(self) -> list[RoleBinding]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT role, connection_id, model FROM role_bindings ORDER BY role"
+            )
+        return [
+            RoleBinding(role=r["role"], connection_id=r["connection_id"], model=r["model"])
+            for r in rows
+        ]
+
+    async def delete_role_binding(self, role: str) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "DELETE FROM role_bindings WHERE role = $1 RETURNING role", role
+            )
+        return row is not None
 
     async def query_across(
         self, branch_ids: list[str], sections: list[str]

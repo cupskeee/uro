@@ -10,6 +10,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Model-connection registry — slice 1 (D-47, docs/20).** LLM provider config can now live in the
+  DB as an instance-level registry, resolved into the provider router at `uro serve` startup: three
+  operational tables (migration 020, off the event/branch axis) — `model_connections`,
+  `provider_credentials` (API keys **encrypted at rest** with Fernet under an env KEK `URO_SECRET_KEY`
+  that must live outside the DB), and `role_bindings` (role → connection+model; the `default` role is
+  the router fallback). New `uro provider add | list | rm | bind | unbind` CLI. `uro serve` resolves
+  the router from the registry when it has bindings, else falls back to the existing
+  `uro.toml`/`--provider`/stub seed (so nothing existing changes). Adds `cryptography` to the
+  `uro-core[postgres]` extra. The server API surface (for uro-loom) is a following slice.
 - **Timeline + inspection HTTP surface (BE-1…BE-5, #33–#37)** — the branch-graph, event-log, and
   dry-run/consistency endpoints, epic #44:
   - `GET /worlds/{w}/branches` (BE-1) — branch tree + markers + each branch's in-fiction day.
