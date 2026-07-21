@@ -1,6 +1,6 @@
 [project]
 name = "uro-cli"
-version = "0.2.0"
+version = "0.3.0"
 description = "Uro Engine reference client — play, dry-run, and dev tools against the engine"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -13,8 +13,8 @@ requires-python = ">=3.12"
 # pair a new uro-cli with an old uro-core; `just release` bumps all three together, and the
 # `{workspace = true}` sources make a drifted pin fail `uv sync` locally.
 dependencies = [
-    "uro-core[postgres,llm]==0.2.0",
-    "uro-server==0.2.0",
+    "uro-core[postgres,llm]==0.3.0",
+    "uro-server==0.3.0",
     "typer>=0.27.0",
     "rich>=13.9",
     "websockets>=16.1",
