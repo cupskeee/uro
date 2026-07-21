@@ -12,6 +12,7 @@ from typing import Any
 import typer
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.pipeline.engine import Engine
+from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets.base import CharSpec
 from uro_core.rulesets.rng import Rng
@@ -49,9 +50,8 @@ app.add_typer(codex_app, name="codex")
 app.add_typer(token_app, name="token")
 app.add_typer(provider_app, name="provider")
 
-# The engine roles a connection can back (wiring.build_router_from_registry). `default` is the
-# ProviderRouter fallback for any unbound role.
-_ROLES = ("default", "narrator", "extractor", "planner", "embedder", "dialogue", "judge")
+# The engine roles a connection can back (resolved by the ProviderRouter) — shared with the server.
+_ROLES = tuple(sorted(ROLES))
 
 PARTICIPANT = "player-1"  # Phase 0 is single-player; participants arrive in Phase 5.
 

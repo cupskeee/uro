@@ -67,7 +67,24 @@ GET  /campaigns/{c}/codex         [?participant=]                  a participant
 POST /campaigns/{c}/codex        {text, participant?, key?, pinned?, refs?}   add a note (self/admin, D-39) (BE-9)
 GET  /usage                      [?stage=]                        LLM-call telemetry by stage (OPERATOR-only, D-44) (BE-10)
 GET  /rulesets                                                    registry: id@version + sheet shape (any-authed) (BE-10)
+GET  /providers                                                   model-connection registry snapshot: connections+roles+credential-metadata (OPERATOR-only, D-47)
+POST /providers                  {name, provider, base_url?, auth_id?}   register a connection (OPERATOR-only, D-47)
+PATCH  /providers/{id}           {is_enabled}                     enable/disable a connection (OPERATOR-only)
+DELETE /providers/{id}                                            delete a connection (bindings cascade) (OPERATOR-only)
+POST /providers/credentials      {provider, access_token, auth_mode?}    store a credential, encrypted at rest (OPERATOR-only; 501 w/o URO_SECRET_KEY)
+DELETE /providers/credentials/{id}                                delete a credential (linked connections unlinked) (OPERATOR-only)
+PUT  /providers/roles/{role}     {connection_id, model}           bind an engine role → connection+model (OPERATOR-only, D-47)
+DELETE /providers/roles/{role}                                    unbind a role (OPERATOR-only)
 ```
+
+**Model-connection registry (D-47, `docs/20`).** The `/providers` surface configures the
+instance-level LLM provider registry over HTTP (so `uro-loom` / any client drives it; `uro provider …`
+edits the DB directly). All of it is **operator-only** (D-44 — provider config is a cost/structural
+concern). A credential's `access_token` arrives as **plaintext over the (operator-only, TLS-in-prod)
+wire** and is **encrypted at rest** under `URO_SECRET_KEY`; **no read ever returns a secret**
+(`GET /providers` lists credential *metadata* — `has_access_token`, never the value). At `uro serve`
+startup the router is built from the registry when it has bindings, else the `uro.toml`/`--provider`
+seed. Per-end-user credentials / org isolation stay a platform/BFF concern (out of scope here).
 
 The shipped `state`/`chronicle` reads are **campaign-scoped** (they resolve the campaign's branch)
 rather than the aspirational `world`-scoped `?branch=&at=` form. A REST-created campaign **pins the

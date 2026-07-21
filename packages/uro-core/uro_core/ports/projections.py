@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from uro_core.ports.event_store import EventStore
+from uro_core.ports.model_registry import ModelRegistry
 from uro_core.ports.participant import ParticipantMemory
 from uro_core.ports.tokens import SessionTokenStore
 from uro_core.ports.vector import VectorIndex
@@ -149,9 +150,15 @@ class ProjectionQueries(Protocol):
 
 
 class EngineStore(
-    EventStore, ProjectionQueries, VectorIndex, ParticipantMemory, SessionTokenStore, Protocol
+    EventStore,
+    ProjectionQueries,
+    VectorIndex,
+    ParticipantMemory,
+    SessionTokenStore,
+    ModelRegistry,
+    Protocol,
 ):
     """The read+write surface the engine needs: timeline (EventStore) + projection
     queries + semantic memory (VectorIndex) + participant memory (docs/18 B8) +
-    session tokens (docs/18 B10). The Postgres store satisfies it structurally;
-    Phase 1 has one store."""
+    session tokens (docs/18 B10) + the model-connection registry (D-47). The Postgres
+    store satisfies it structurally; Phase 1 has one store."""

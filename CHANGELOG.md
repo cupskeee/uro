@@ -18,7 +18,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   the router fallback). New `uro provider add | list | rm | bind | unbind` CLI. `uro serve` resolves
   the router from the registry when it has bindings, else falls back to the existing
   `uro.toml`/`--provider`/stub seed (so nothing existing changes). Adds `cryptography` to the
-  `uro-core[postgres]` extra. The server API surface (for uro-loom) is a following slice.
+  `uro-core[postgres]` extra.
+- **Model-connection registry — slice 2 (D-47, docs/20): the `/providers` HTTP surface.** The
+  registry is now configurable over the API (so uro-loom / any client drives it), **operator-only**
+  (D-44): `GET /providers` (snapshot — connections + roles + credential *metadata*), `POST`/`PATCH`/
+  `DELETE /providers[/{id}]`, `POST`/`DELETE /providers/credentials[/{id}]`, `PUT`/`DELETE
+  /providers/roles/{role}`. A credential's key arrives as plaintext over the operator-only wire and
+  is encrypted at rest; **no read returns a secret**. `EngineStore` gains the `ModelRegistry` port;
+  the role vocabulary is a shared `ROLES` constant. Model discovery/validation + reload-without-
+  restart are following slices.
 - **Timeline + inspection HTTP surface (BE-1…BE-5, #33–#37)** — the branch-graph, event-log, and
   dry-run/consistency endpoints, epic #44:
   - `GET /worlds/{w}/branches` (BE-1) — branch tree + markers + each branch's in-fiction day.

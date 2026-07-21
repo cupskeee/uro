@@ -39,9 +39,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketState
+from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.errors import ExportError
 from uro_core.export import WorldBundle
 from uro_core.pipeline.engine import Engine
+from uro_core.ports.model_registry import ROLES
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
 
@@ -390,6 +392,115 @@ def create_app(
         if deps.list_rulesets is None:
             raise HTTPException(status_code=501, detail="ruleset registry not enabled")
         return {"rulesets": deps.list_rulesets()}
+
+    # --- Model-connection registry (D-47, docs/20 — slice 2). The instance-level LLM provider
+    # registry over HTTP, so uro-loom / any client configures it (uro-cli edits the DB directly).
+    # ALL endpoints are OPERATOR-only (D-44 — provider config is a cost/structural concern), and no
+    # read ever returns a secret (list_credentials is metadata; the plaintext leaves only via the
+    # wiring layer's get_secret at serve startup). A credential's key arrives as plaintext over the
+    # (operator-only, TLS-in-prod) wire and is encrypted at rest under URO_SECRET_KEY.
+
+    @app.get("/providers")
+    async def list_providers(request: Request) -> dict[str, Any]:
+        """The full registry snapshot — connections, role bindings, and credential METADATA (never
+        secrets). Operator-only (D-47)."""
+        _require_operator(request)
+        store = _mgmt()
+        return {
+            "connections": [c.model_dump() for c in await store.list_connections()],
+            "roles": [b.model_dump() for b in await store.list_role_bindings()],
+            "credentials": [c.model_dump() for c in await store.list_credentials()],
+        }
+
+    @app.post("/providers")
+    async def create_provider(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:  # noqa: B008
+        """Register a model connection. Optional `auth_id` links an existing credential (validated).
+        Operator-only."""
+        _require_operator(request)
+        store = _mgmt()
+        auth_id = body.get("auth_id")
+        if auth_id is not None and all(c.id != auth_id for c in await store.list_credentials()):
+            raise HTTPException(status_code=400, detail=f"no such credential: {auth_id}")
+        cid = await store.add_connection(
+            name=str(_require(body, "name")),
+            provider=str(_require(body, "provider")),
+            base_url=body.get("base_url") or None,
+            auth_id=auth_id,
+        )
+        return {"id": cid}
+
+    @app.patch("/providers/{connection_id}")
+    async def update_provider(
+        connection_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Enable/disable a connection (`{is_enabled: bool}`). Operator-only."""
+        _require_operator(request)
+        if "is_enabled" not in body:
+            raise HTTPException(status_code=400, detail="nothing to update (expected is_enabled)")
+        ok = await _mgmt().set_connection_enabled(connection_id, bool(body["is_enabled"]))
+        if not ok:
+            raise HTTPException(status_code=404, detail="no such connection")
+        return {"updated": True}
+
+    @app.delete("/providers/{connection_id}")
+    async def delete_provider(request: Request, connection_id: str) -> dict[str, Any]:
+        """Delete a connection (its role bindings cascade → those roles fall back to `default`).
+        Operator-only."""
+        _require_operator(request)
+        return {"deleted": await _mgmt().delete_connection(connection_id)}
+
+    @app.post("/providers/credentials")
+    async def create_credential(
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Store a provider credential — the `access_token` arrives as PLAINTEXT and is encrypted
+        at rest (URO_SECRET_KEY). Operator-only; 501 if the server has no KEK configured."""
+        _require_operator(request)
+        try:
+            cred_id = await _mgmt().add_credential(
+                provider=str(_require(body, "provider")),
+                access_token=body.get("access_token"),
+                refresh_token=body.get("refresh_token"),
+                auth_mode=str(body.get("auth_mode") or "api_key"),
+            )
+        except SecretsUnavailable as exc:  # no/invalid URO_SECRET_KEY → credential storage disabled
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        return {"id": cred_id}
+
+    @app.delete("/providers/credentials/{credential_id}")
+    async def delete_credential(request: Request, credential_id: str) -> dict[str, Any]:
+        """Delete a credential; linked connections are UNLINKED (auth_id→NULL), not deleted.
+        Operator-only."""
+        _require_operator(request)
+        return {"deleted": await _mgmt().delete_credential(credential_id)}
+
+    @app.put("/providers/roles/{role}")
+    async def set_role(
+        role: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Bind an engine role to a connection+model. `default` backs any unbound role. Operator."""
+        _require_operator(request)
+        if role not in ROLES:
+            raise HTTPException(
+                status_code=400, detail=f"unknown role {role!r}; one of {sorted(ROLES)}"
+            )
+        store = _mgmt()
+        connection_id = str(_require(body, "connection_id"))
+        if await store.get_connection(connection_id) is None:
+            raise HTTPException(status_code=400, detail=f"no such connection: {connection_id}")
+        await store.set_role_binding(role, connection_id, str(_require(body, "model")))
+        return {"role": role, "connection_id": connection_id}
+
+    @app.delete("/providers/roles/{role}")
+    async def delete_role(request: Request, role: str) -> dict[str, Any]:
+        """Remove a role binding (that role falls back to `default`). Operator-only."""
+        _require_operator(request)
+        return {"deleted": await _mgmt().delete_role_binding(role)}
 
     @app.post("/campaigns/{campaign_id}/encounters/{encounter_id}/outcome")
     async def report_outcome(

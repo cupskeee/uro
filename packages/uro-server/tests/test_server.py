@@ -15,6 +15,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.domain.events import BeatResolvedPayload
 from uro_core.export import (
     BundleBranch,
@@ -24,6 +25,7 @@ from uro_core.export import (
     stamp_chain,
     verify_bundle,
 )
+from uro_core.ports.model_registry import ModelConnection, ProviderCredential, RoleBinding
 from uro_core.timeline.models import (
     Branch,
     BranchInfo,
@@ -1811,3 +1813,163 @@ def test_cors_wildcard_drops_credentials() -> None:
     resp = client.get("/healthz", headers={"Origin": "http://anything.example"})
     assert resp.headers.get("access-control-allow-origin") == "*"
     assert "access-control-allow-credentials" not in resp.headers
+
+
+# --- Model-connection registry over HTTP (D-47, docs/20 — slice 2; operator-only) ---------------
+
+
+class _FakeRegistryStore:
+    """In-memory ModelRegistry stand-in for the /providers endpoint tests (no DB, no real crypto —
+    the encryption itself is covered in uro-core). `no_kek=True` makes add_credential raise, to
+    exercise the 501-when-unconfigured path."""
+
+    def __init__(self, *, no_kek: bool = False) -> None:
+        self._conns: dict[str, ModelConnection] = {}
+        self._creds: dict[str, ProviderCredential] = {}
+        self._roles: dict[str, RoleBinding] = {}
+        self._no_kek = no_kek
+        self._n = 0
+
+    def _id(self, prefix: str) -> str:
+        self._n += 1
+        return f"{prefix}-{self._n}"
+
+    async def add_connection(self, *, name, provider, base_url=None, auth_id=None):  # type: ignore[no-untyped-def]
+        cid = self._id("conn")
+        self._conns[cid] = ModelConnection(
+            id=cid, name=name, provider=provider, base_url=base_url, auth_id=auth_id
+        )
+        return cid
+
+    async def list_connections(self):  # type: ignore[no-untyped-def]
+        return list(self._conns.values())
+
+    async def get_connection(self, connection_id):  # type: ignore[no-untyped-def]
+        return self._conns.get(connection_id)
+
+    async def set_connection_enabled(self, connection_id, enabled):  # type: ignore[no-untyped-def]
+        c = self._conns.get(connection_id)
+        if c is None:
+            return False
+        self._conns[connection_id] = c.model_copy(update={"is_enabled": enabled})
+        return True
+
+    async def delete_connection(self, connection_id):  # type: ignore[no-untyped-def]
+        existed = self._conns.pop(connection_id, None) is not None
+        for role in [r for r, b in self._roles.items() if b.connection_id == connection_id]:
+            del self._roles[role]  # cascade
+        return existed
+
+    async def add_credential(
+        self, *, provider, access_token, refresh_token=None, auth_mode="api_key"
+    ):  # type: ignore[no-untyped-def]
+        if self._no_kek:
+            raise SecretsUnavailable("URO_SECRET_KEY is not set")
+        cid = self._id("cred")
+        self._creds[cid] = ProviderCredential(
+            id=cid,
+            provider=provider,
+            auth_mode=auth_mode,
+            has_access_token=access_token is not None,
+            has_refresh_token=refresh_token is not None,
+        )
+        return cid
+
+    async def list_credentials(self):  # type: ignore[no-untyped-def]
+        return list(self._creds.values())
+
+    async def delete_credential(self, credential_id):  # type: ignore[no-untyped-def]
+        existed = self._creds.pop(credential_id, None) is not None
+        for cid, c in self._conns.items():
+            if c.auth_id == credential_id:
+                self._conns[cid] = c.model_copy(update={"auth_id": None})  # ON DELETE SET NULL
+        return existed
+
+    async def set_role_binding(self, role, connection_id, model):  # type: ignore[no-untyped-def]
+        self._roles[role] = RoleBinding(role=role, connection_id=connection_id, model=model)
+
+    async def list_role_bindings(self):  # type: ignore[no-untyped-def]
+        return list(self._roles.values())
+
+    async def delete_role_binding(self, role):  # type: ignore[no-untyped-def]
+        return self._roles.pop(role, None) is not None
+
+
+def _reg_client(store: object = None) -> TestClient:
+    deps = _fake_deps()
+    deps.store = store or _FakeRegistryStore()  # type: ignore[assignment]
+    deps.is_admin = lambda t: t == "tok-a"  # tok-a operator, tok-b player
+    return TestClient(create_app(deps))
+
+
+def test_providers_crud_roundtrip_operator() -> None:
+    client = _reg_client()
+    cred_id = client.post(
+        "/providers/credentials?token=tok-a",
+        json={"provider": "openai", "access_token": "sk-super-secret"},
+    ).json()["id"]
+    conn_id = client.post(
+        "/providers?token=tok-a",
+        json={"name": "oai", "provider": "openai", "auth_id": cred_id},
+    ).json()["id"]
+    assert (
+        client.put(
+            "/providers/roles/narrator?token=tok-a",
+            json={"connection_id": conn_id, "model": "gpt-4o"},
+        ).status_code
+        == 200
+    )
+
+    snap = client.get("/providers?token=tok-a")
+    body = snap.json()
+    assert any(c["id"] == conn_id for c in body["connections"])
+    assert any(c["id"] == cred_id and c["has_access_token"] for c in body["credentials"])
+    assert body["roles"][0]["role"] == "narrator"
+    assert "sk-super-secret" not in snap.text  # the secret NEVER leaves the server
+
+    assert client.patch(f"/providers/{conn_id}?token=tok-a", json={"is_enabled": False}).json()[
+        "updated"
+    ]
+    assert client.delete("/providers/roles/narrator?token=tok-a").json()["deleted"]
+    assert client.delete(f"/providers/{conn_id}?token=tok-a").json()["deleted"]
+
+
+def test_providers_are_operator_only() -> None:
+    client = _reg_client()
+    cases = [
+        ("get", "/providers", None),
+        ("post", "/providers", {"name": "x", "provider": "stub"}),
+        ("post", "/providers/credentials", {"provider": "openai", "access_token": "sk"}),
+        ("put", "/providers/roles/narrator", {"connection_id": "c", "model": "m"}),
+        ("delete", "/providers/roles/narrator", None),
+    ]
+    for method, path, payload in cases:
+        assert client.request(method, f"{path}?token=tok-b", json=payload).status_code == 403, (
+            f"{method} {path} should be operator-only (player→403)"
+        )
+        assert client.request(method, path, json=payload).status_code == 401, f"{method} {path}"
+
+
+def test_bind_validates_role_and_connection() -> None:
+    client = _reg_client()
+    assert (
+        client.put(
+            "/providers/roles/bogus?token=tok-a", json={"connection_id": "c", "model": "m"}
+        ).status_code
+        == 400
+    )  # unknown role
+    assert (
+        client.put(
+            "/providers/roles/narrator?token=tok-a",
+            json={"connection_id": "ghost", "model": "m"},
+        ).status_code
+        == 400
+    )  # unknown connection
+
+
+def test_create_credential_501_without_a_kek() -> None:
+    client = _reg_client(store=_FakeRegistryStore(no_kek=True))
+    resp = client.post(
+        "/providers/credentials?token=tok-a", json={"provider": "openai", "access_token": "sk"}
+    )
+    assert resp.status_code == 501  # credential storage disabled (no URO_SECRET_KEY)
