@@ -9,6 +9,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **`.env` support.** The `uro` CLI auto-loads a `.env` from the working directory at startup
+  (via `python-dotenv`, `usecwd=True`), so `URO_SECRET_KEY` / provider keys / `URO_DATABASE_URL`
+  need only live in `.env` rather than be exported by hand. An already-exported env var still wins
+  (dotenv never overrides). A committed `.env.example` documents the vars (incl. the Fernet-key
+  one-liner for `URO_SECRET_KEY`).
+
 ## [0.3.0] - 2026-07-21
 
 ### Fixed
