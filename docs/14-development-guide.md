@@ -65,6 +65,12 @@ extractor = "local:qwen3-14b"
 
 Secrets resolve via env or OS keychain (`04`); `uro.toml` holds *references*, exports never include either.
 
+> **Proposed (D-47, [docs/20](20-model-connections.md)):** move LLM provider config into an
+> instance-level, DB-backed registry configurable over the `uro-server` API (from `uro-cli` /
+> `uro-loom`), demoting `uro.toml [llm.roles]` + `--provider` to a bootstrap seed. Only `[llm.roles]`
+> is wired today — the `[database]`/`[server]`/`[llm.providers.*]` sections above are aspirational and
+> get reconciled when D-47 lands.
+
 ## Testing strategy
 
 The pyramid, and what "assert on events, not prose" means in practice:
