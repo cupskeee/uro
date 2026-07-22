@@ -16,9 +16,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   places and within the beat — exactly like emergent actors. Previously places only came from an
   authored world pack, so a blank `uro world new` world left `proj_places` empty even as the fiction
   named locations. The whitelist stays structural (actors/places/claims only — no damage/death); a
-  place is a benign `site` creation. (A per-category **extraction policy** — toggle whether play can
-  create actors/places/threads/factions, with a Claims/Beliefs disclaimer — follows in later slices;
-  threads/factions stay authored-only for now.)
+  place is a benign `site` creation.
+- **Per-category extraction policy (D-49).** An instance-level, DB-backed policy (migration 021,
+  off the event/branch axis; operator-only `GET`/`PATCH /extraction-policy`) gates which EMERGENT
+  categories play may create — **Actors / Places / Claims** — default all-on (a pre-existing instance
+  is unchanged). The gauntlet enforces it structurally: a disabled category commits nothing even if
+  the model proposes it. Disabling `extract_claims` also drops beliefs and degrades recall (the
+  engine relies on them) — the forthcoming Loom toggle UI disclaims this. Threads/Factions remain
+  authored-only (from world packs); no emergent extractor, so no toggle.
 
 ### Fixed
 - **Codex inference: drop parameters the restricted backend rejects (D-47).** The live test surfaced

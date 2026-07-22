@@ -45,6 +45,7 @@ from uro_core.domain.events import (
     claim_recorded,
     place_created,
 )
+from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
@@ -142,9 +143,16 @@ def _slice_json_object(text: str) -> str | None:
 
 
 async def run_gauntlet(
-    store: ProjectionQueries, branch_id: str, extraction: Extraction
+    store: ProjectionQueries,
+    branch_id: str,
+    extraction: Extraction,
+    *,
+    policy: ExtractionPolicy | None = None,
 ) -> list[DomainEvent]:
-    """Validate proposals into committable events (docs/13). Downgrade-or-drop only."""
+    """Validate proposals into committable events (docs/13). Downgrade-or-drop only. `policy`
+    gates which EMERGENT categories may be created (D-49): a disabled category is silently skipped
+    here (structural — the extractor may still propose it, but nothing commits)."""
+    policy = policy or ExtractionPolicy()
     events: list[DomainEvent] = []
     name_to_ref: dict[str, str] = {}
 
@@ -158,8 +166,8 @@ async def run_gauntlet(
         if existing is not None:  # entity resolution: link, never duplicate
             name_to_ref[key] = existing.actor_id
             return existing.actor_id
-        if not create:
-            return None
+        if not create or not policy.extract_actors:
+            return None  # policy off → never MINT a new actor (an existing one still links above)
         ref = f"a:{new_id()}"
         events.append(actor_created(actor_id=ref, name=name.strip(), tier=1, role=role.strip()))
         name_to_ref[key] = ref
@@ -172,20 +180,26 @@ async def run_gauntlet(
     # Place entity — like actors emerge from play. Dedup by canonical name against existing places
     # and within the beat, so a location revisited across beats resolves to ONE place, not a
     # duplicate. Places are independent of the actor/claim graph; kind defaults to 'site'.
-    existing_places = {
-        canonical_name(p.name): p.place_id for p in await store.list_places(branch_id)
-    }
-    seen_places: set[str] = set()
-    for pp in extraction.places:
-        pkey = canonical_name(pp.name)
-        if not pkey or pkey in existing_places or pkey in seen_places:
-            continue
-        seen_places.add(pkey)
-        events.append(
-            place_created(
-                place_id=f"p:{new_id()}", name=pp.name.strip(), description=pp.description.strip()
+    if policy.extract_places:
+        existing_places = {
+            canonical_name(p.name): p.place_id for p in await store.list_places(branch_id)
+        }
+        seen_places: set[str] = set()
+        for pp in extraction.places:
+            pkey = canonical_name(pp.name)
+            if not pkey or pkey in existing_places or pkey in seen_places:
+                continue
+            seen_places.add(pkey)
+            events.append(
+                place_created(
+                    place_id=f"p:{new_id()}",
+                    name=pp.name.strip(),
+                    description=pp.description.strip(),
+                )
             )
-        )
+
+    if not policy.extract_claims:
+        return events  # claims/beliefs disabled → actors+places only (the engine disclaims recall)
 
     # Pre-mint dialogue speakers so a claim *about* a speaker (resolved create=False
     # below) links to the same actor_id the belief uses, not a divergent name-token.

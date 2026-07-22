@@ -837,7 +837,8 @@ class Engine:
             await self._meter("extractor", messages, started)
             extraction = parse_extraction(raw)
             if extraction is not None:
-                return await run_gauntlet(self._store, branch_id, extraction)
+                policy = await self._store.get_extraction_policy()
+                return await run_gauntlet(self._store, branch_id, extraction, policy=policy)
             messages = [
                 *messages,
                 Message(

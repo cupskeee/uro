@@ -1861,6 +1861,14 @@ class _FakeRegistryStore:
         self._conns[connection_id] = c.model_copy(update={"cached_models": models})
         return True
 
+    async def get_extraction_policy(self):  # type: ignore[no-untyped-def]
+        from uro_core.domain.extraction_policy import ExtractionPolicy
+
+        return getattr(self, "_policy", None) or ExtractionPolicy()
+
+    async def set_extraction_policy(self, policy):  # type: ignore[no-untyped-def]
+        self._policy = policy
+
     async def delete_connection(self, connection_id):  # type: ignore[no-untyped-def]
         existed = self._conns.pop(connection_id, None) is not None
         for role in [r for r, b in self._roles.items() if b.connection_id == connection_id]:
@@ -2212,3 +2220,24 @@ def test_codex_login_flow_creates_a_connection(monkeypatch) -> None:  # type: ig
         client.post("/providers/codex/poll?token=tok-a", json={"login_id": login_id}).status_code
         == 404
     )
+
+
+# --- extraction policy (D-49) --------------------------------------------------------------------
+
+
+def test_extraction_policy_get_patch_and_operator_only() -> None:
+    client = _reg_client()  # tok-a operator, tok-b player
+    assert client.get("/extraction-policy?token=tok-a").json() == {
+        "extract_actors": True,
+        "extract_places": True,
+        "extract_claims": True,
+    }
+    # PATCH a subset — the rest are preserved
+    patched = client.patch("/extraction-policy?token=tok-a", json={"extract_places": False}).json()
+    assert patched["extract_places"] is False and patched["extract_actors"] is True
+    assert (
+        client.get("/extraction-policy?token=tok-a").json()["extract_places"] is False
+    )  # persisted
+    # operator-only (D-44)
+    assert client.get("/extraction-policy?token=tok-b").status_code == 403
+    assert client.patch("/extraction-policy?token=tok-b", json={}).status_code == 403
