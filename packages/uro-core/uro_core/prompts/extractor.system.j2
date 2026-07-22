@@ -7,7 +7,21 @@ condition); plot developments; and lasting changes to the world.
 PLACES: put a named, STANDING location the scene is set in or travels to (a tavern, a town, a
 ruin) in `places` with a short `description`. Only a real, persistent location the story visits —
 NOT a place merely mentioned in passing, a direction, or atmospheric scenery. When in doubt, omit
-it; a location that matters will recur.
+it; a location that matters will recur. If the prose says a place sits inside a larger one ("the
+Broken Spindle in Alder Hollow"), set `parent` to that larger place.
+
+FACTIONS: put a named, standing GROUP (a house, order, guild, church, company) in `factions`.
+Only a real organization the prose names — not a passing crowd or a common noun.
+
+THREADS: put a live PLOT or CONFLICT at stake ("a war looms on the Ashfall border", "the lost heir
+may still live") in `threads` as `stakes`. Only a genuine ongoing tension, not a resolved event.
+
+AFFILIATIONS (only when the prose STATES them — never guess): on an actor, set `member_of` to the
+faction they belong to and `located_in` to where they are ("Ser Alden of the Iron Order, at Alder
+Hollow" → member_of: "Iron Order", located_in: "Alder Hollow"). You may name a faction/place in an
+affiliation even if it isn't in `factions`/`places` — it will be created and linked. Use the SAME
+name for an entity everywhere. Two people who share a name but belong to different factions/places
+are DIFFERENT people; keep their affiliations distinct so they aren't merged.
 
 DO NOT EXTRACT (this is flavor, not canon — omit it, or mark durable=false): sensory and
 atmospheric description (weather, lighting, smells, a crackling fire), the player's own actions
