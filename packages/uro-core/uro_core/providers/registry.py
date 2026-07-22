@@ -28,6 +28,29 @@ from uro_core.providers.router import ProviderRouter
 
 logger = logging.getLogger(__name__)
 
+# Provider kinds that expose an embeddings endpoint. anthropic + codex serve only chat, so an
+# `embedder` role resolving to one means semantic memory is OFF (embeddings raise every beat).
+_EMBED_CAPABLE = frozenset({"openai", "local", "openai_compat", "stub"})
+
+
+def _warn_if_embedder_cannot_embed(role_kind: dict[str, str]) -> None:
+    """Announce whether semantic memory is on. The `embedder` role needs an embedding-capable
+    provider; if it (directly, or via the `default` fallback) resolves to a chat-only kind, embeds
+    fail silently every beat and long-range recall is dead — so warn LOUDLY at build (serve start /
+    reload) rather than degrade quietly (review: the codex-embedder silent-off case)."""
+    kind = role_kind.get("embedder") or role_kind.get("default")
+    if kind is None:
+        return  # nothing resolves the embedder yet (no default, no binding) — not our warning here
+    if kind in _EMBED_CAPABLE:
+        logger.info("semantic memory enabled (embedder → %s)", kind)
+    else:
+        logger.warning(
+            "semantic memory is OFF: the 'embedder' role resolves to a %r provider, which has no "
+            "embedding endpoint — long-range recall will silently do nothing. Bind embedder to an "
+            "openai/local connection: `uro provider bind embedder <connection> <embedding-model>`.",
+            kind,
+        )
+
 
 def provider_from_connection(
     conn: ModelConnection, model: str, access_token: str | None
@@ -152,6 +175,7 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
     connections = {c.id: c for c in await store.list_connections()}
     bindings: dict[str, LLMProvider] = {}
     default: LLMProvider | None = None
+    role_kind: dict[str, str] = {}  # role → its connection's provider kind (for the embedder guard)
     # One CodexTokenSource per credential, SHARED across every role bound to it (review): the lock
     # only serializes refreshes if the roles hold the SAME instance.
     codex_sources: dict[str, CodexTokenSource] = {}
@@ -171,10 +195,12 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
             provider = build_codex_provider(store, conn, rb.model, source=source)
         else:
             provider = provider_from_connection(conn, rb.model, await _access_token(store, conn))
+        role_kind[rb.role] = conn.provider
         if rb.role == "default":
             default = provider
         else:
             bindings[rb.role] = provider
+    _warn_if_embedder_cannot_embed(role_kind)
     if default is None:
         if not bindings:
             return None  # truly empty (or all bindings skipped) → seed fallback

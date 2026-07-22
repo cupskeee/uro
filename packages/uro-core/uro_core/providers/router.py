@@ -25,6 +25,11 @@ class ProviderRouter:
             raise KeyError(f"no provider bound for role {role!r} and no default set")
         return provider
 
+    def has_role(self, role: str) -> bool:
+        """True if `role` is EXPLICITLY bound (not merely resolvable via the default). Used to make
+        an optional role (e.g. `dialogue` speech-routing) opt-in: bound → on, unbound → off."""
+        return role in self._bindings
+
     async def stream(
         self,
         role: str,
