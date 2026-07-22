@@ -192,9 +192,14 @@ async def run_gauntlet(
     factions_by_key = {
         canonical_name(f.name): f.faction_id for f in await store.list_factions(branch_id)
     }
-    actors_by_key: dict[str, list[str]] = {}  # canonical name → actor ids (may be several now)
+    actors_by_key: dict[str, list[str]] = {}  # canonical name OR alias → actor ids (may be several)
     for a in await store.list_actors(branch_id):
-        actors_by_key.setdefault(canonical_name(a.name), []).append(a.actor_id)
+        # Index by name AND aliases — a pack-authored "Mera" [alias "the barkeep"] must resolve when
+        # later mentioned only by the alias, or she'd split into a duplicate (review HIGH; the
+        # relational rewrite dropped find_actor_by_name, which matched aliases).
+        for k in {canonical_name(a.name), *(canonical_name(al) for al in a.aliases)}:
+            if k:
+                actors_by_key.setdefault(k, []).append(a.actor_id)
     aff: dict[str, dict[str, str]] = {}  # actor_id → {"member_of"|"located_in": dst id}
     for e in await store.list_edges(branch_id):
         if e.rel_type in ("member_of", "located_in"):
@@ -247,8 +252,13 @@ async def run_gauntlet(
         key = canonical_name(name)
         if not key:
             return None
-        fid = resolve_faction(member_of) if member_of.strip() else None
-        pid = resolve_place(located_in) if located_in.strip() else None
+        # Gate affiliation resolution by the target policy AT THE CALL SITE, so a disabled
+        # category wires NO edge even to a PRE-EXISTING faction/place (resolve_* returns an existing
+        # id before its own gate; without this, factions-off still member_of'd an authored — C1).
+        fid = (
+            resolve_faction(member_of) if (member_of.strip() and policy.extract_factions) else None
+        )
+        pid = resolve_place(located_in) if (located_in.strip() and policy.extract_places) else None
         # Relationship-aware dedup: link to a same-name actor whose affiliations DON'T CONFLICT
         # (None = unknown = compatible); a same-name actor of a different house/place is DISTINCT.
         for cand in actors_by_key.get(key, []):

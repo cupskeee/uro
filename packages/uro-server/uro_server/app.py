@@ -779,8 +779,9 @@ def create_app(
 
     @app.get("/extraction-policy")
     async def get_extraction_policy_ep(request: Request) -> dict[str, Any]:
-        """The instance's emergent-extraction policy (D-49): which categories play may create —
-        `{extract_actors, extract_places, extract_claims}`. Operator-only (D-44)."""
+        """The instance's emergent-extraction policy (D-49/D-50): which categories play may create —
+        `{extract_actors, extract_places, extract_factions, extract_threads, extract_claims}`.
+        Operator-only (D-44)."""
         _require_operator(request)
         return (await _mgmt().get_extraction_policy()).model_dump()
 
@@ -789,7 +790,7 @@ def create_app(
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
     ) -> dict[str, Any]:
-        """Update the emergent-extraction policy — send any subset of the three booleans (D-49).
+        """Update the emergent-extraction policy — send any subset of the five booleans (D-49/D-50).
         Operator-only (D-44). Disabling `extract_claims` degrades recall (the client disclaims)."""
         _require_operator(request)
         store = _mgmt()

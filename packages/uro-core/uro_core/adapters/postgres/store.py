@@ -1502,17 +1502,32 @@ class PostgresEventStore:
                     "SELECT extract_actors, extract_places, extract_factions, extract_threads, "
                     "extract_claims FROM extraction_policy WHERE id = 'singleton'"
                 )
-        except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
-            return ExtractionPolicy()  # pre-migration DB → all-on default (unchanged behavior)
-        if row is None:
-            return ExtractionPolicy()
-        return ExtractionPolicy(
-            extract_actors=row["extract_actors"],
-            extract_places=row["extract_places"],
-            extract_factions=row["extract_factions"],
-            extract_threads=row["extract_threads"],
-            extract_claims=row["extract_claims"],
-        )
+            if row is None:
+                return ExtractionPolicy()
+            return ExtractionPolicy(
+                extract_actors=row["extract_actors"],
+                extract_places=row["extract_places"],
+                extract_factions=row["extract_factions"],
+                extract_threads=row["extract_threads"],
+                extract_claims=row["extract_claims"],
+            )
+        except asyncpg.UndefinedColumnError:
+            # 022 not yet applied (D-50 code on a 021 DB): DON'T discard the operator's real 021
+            # values — read the three columns that DO exist, default the two new ones ON (review).
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT extract_actors, extract_places, extract_claims "
+                    "FROM extraction_policy WHERE id = 'singleton'"
+                )
+            if row is None:
+                return ExtractionPolicy()
+            return ExtractionPolicy(
+                extract_actors=row["extract_actors"],
+                extract_places=row["extract_places"],
+                extract_claims=row["extract_claims"],
+            )
+        except asyncpg.UndefinedTableError:
+            return ExtractionPolicy()  # pre-021 DB → nothing configured → all-on default
 
     async def set_extraction_policy(self, policy: ExtractionPolicy) -> None:
         async with self.pool.acquire() as conn:

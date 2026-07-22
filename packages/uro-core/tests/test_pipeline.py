@@ -422,3 +422,38 @@ async def test_policy_gates_factions_and_threads(store: PostgresEventStore) -> N
     off_t = await run_gauntlet(store, branch, ex, policy=ExtractionPolicy(extract_threads=False))
     assert _of_type(off_t, "ThreadCreated") == []
     assert len(_of_type(off_t, "FactionCreated")) == 1  # factions still on
+
+
+async def test_alias_mention_links_not_duplicates(store: PostgresEventStore) -> None:
+    # Review HIGH: a pack-authored actor mentioned by an ALIAS must link (not split)
+    # — the relational rewrite dropped find_actor_by_name's alias matching.
+    branch = await _branch(store)
+    await store.append_beat(
+        branch, [actor_created(actor_id="a:mera", name="Mera", tier=2, aliases=["the barkeep"])]
+    )
+    ex = Extraction(
+        actors=[ProposedActor(name="the barkeep", role="innkeeper")],
+        claims=[
+            ProposedClaim(
+                statement="The barkeep waters the ale.",
+                about=["the barkeep"],
+                provenance="narrator",
+            )
+        ],
+    )
+    events = await run_gauntlet(store, branch, ex)
+    assert _of_type(events, "ActorCreated") == []  # linked to Mera via the alias, no duplicate
+    assert _of_type(events, "ClaimRecorded")[0].payload["subject_refs"] == ["a:mera"]  # right actor
+
+
+async def test_affiliation_off_wires_no_edge_to_existing_faction(store: PostgresEventStore) -> None:
+    # Review C1: with factions OFF, an actor's member_of wires NO edge even to a PRE-EXISTING
+    # (authored) faction — the policy gate is at the call site, before resolve_* links the id.
+    from uro_core.domain.events import faction_created
+
+    branch = await _branch(store)
+    await store.append_beat(branch, [faction_created(faction_id="f:order", name="Iron Order")])
+    ex = Extraction(actors=[ProposedActor(name="Knight", member_of="Iron Order")])
+    ev = await run_gauntlet(store, branch, ex, policy=ExtractionPolicy(extract_factions=False))
+    assert _of_type(ev, "EdgeAdded") == []  # no member_of edge, even to the existing faction
+    assert len(_of_type(ev, "ActorCreated")) == 1  # the actor is still made
