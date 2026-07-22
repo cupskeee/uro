@@ -9,6 +9,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Fixed
+- **Codex inference: send `chatgpt-account-id` + surface backend errors (D-47).** The first live
+  Codex test (`✗ codex:gpt-5.6-terra failed (ProviderError)`) exposed two gaps. (1) The modern
+  ChatGPT Codex backend requires a `chatgpt-account-id` header to route the request to the
+  subscription's account; it's now derived from the access token's `https://api.openai.com/auth`
+  claim and sent (omitted if the token doesn't carry it). (2) A rejected Responses call was opaque —
+  the adapter now reads the backend's **error body** (safe — the token is only in the request
+  header) and includes it in the `ProviderError`, and the `test` probe surfaces that detail for
+  codex (its adapter builds the message token-free), so a failure says *why* (`HTTP 400 — …`) instead
+  of a bare `ProviderError`.
+
 ### Added
 - **Codex (ChatGPT-subscription) provider — engine (D-47).** A new `codex` provider kind that
   authenticates via OpenAI's OAuth **device-authorization** flow (a consumer ChatGPT login, not an

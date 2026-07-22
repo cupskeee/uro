@@ -408,9 +408,15 @@ def engine_deps(
                     )
                 )
         except Exception as exc:
+            from uro_core.errors import ProviderError
+
             # NEVER echo the raw provider/httpx exception text: it can carry the plaintext key (e.g.
-            # "Illegal header value b'Bearer sk-…'"). Report only the exception TYPE (review).
+            # "Illegal header value b'Bearer sk-…'") — report only the exception TYPE (review). The
+            # exception is codex, whose adapter builds its ProviderError token-free (status + the
+            # backend's error body), so surfacing it makes a rejected Responses call diagnosable.
             logger.warning("provider test failed for %s: %s", conn.provider, type(exc).__name__)
+            if conn.provider == "codex" and isinstance(exc, ProviderError):
+                return {"ok": False, "detail": f"{conn.provider}:{probe_model} failed — {exc}"}
             return {
                 "ok": False,
                 "detail": f"{conn.provider}:{probe_model} failed ({type(exc).__name__})",
