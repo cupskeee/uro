@@ -53,9 +53,12 @@ def test_body_translates_messages_to_responses_shape() -> None:
         {"role": "assistant", "content": [{"type": "output_text", "text": "hi"}]},
     ]
     assert body["stream"] is True and body["store"] is False
-    assert body["max_output_tokens"] == 64  # NOT max_tokens (Responses dialect)
-    assert body["text"] == {"format": {"type": "json_object"}}  # json_mode
-    assert "temperature" not in body  # gpt-5/codex reject a non-default temperature
+    # The restricted codex backend 400s on extra params (confirmed live for max_output_tokens), so
+    # the body sends ONLY the reference fields — no output cap, no temperature, no response_format.
+    assert "max_output_tokens" not in body
+    assert "max_tokens" not in body
+    assert "text" not in body  # json_mode has no response_format here (prompt-driven)
+    assert "temperature" not in body
 
 
 def _static(token: str):  # type: ignore[no-untyped-def]
