@@ -22,6 +22,20 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   **warns loudly** ("semantic memory is OFF") when it resolves to a chat-only provider (codex/
   anthropic, directly or via the `default` fallback), instead of embeddings failing silently every
   beat. Bind `embedder` to an openai/local connection to turn long-range recall back on.
+- **Emergent Place extraction (D-49).** The extractor now proposes **places** as well as actors +
+  claims: a named, standing location the scene is set in or travels to (a tavern, a town, a ruin)
+  becomes a `PlaceCreated` entity in `proj_places`, deduped by canonical name against existing
+  places and within the beat — exactly like emergent actors. Previously places only came from an
+  authored world pack, so a blank `uro world new` world left `proj_places` empty even as the fiction
+  named locations. The whitelist stays structural (actors/places/claims only — no damage/death); a
+  place is a benign `site` creation.
+- **Per-category extraction policy (D-49).** An instance-level, DB-backed policy (migration 021,
+  off the event/branch axis; operator-only `GET`/`PATCH /extraction-policy`) gates which EMERGENT
+  categories play may create — **Actors / Places / Claims** — default all-on (a pre-existing instance
+  is unchanged). The gauntlet enforces it structurally: a disabled category commits nothing even if
+  the model proposes it. Disabling `extract_claims` also drops beliefs and degrades recall (the
+  engine relies on them) — the forthcoming Loom toggle UI disclaims this. Threads/Factions remain
+  authored-only (from world packs); no emergent extractor, so no toggle.
 
 ### Fixed
 - **Codex inference: drop parameters the restricted backend rejects (D-47).** The live test surfaced

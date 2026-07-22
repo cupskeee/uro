@@ -777,6 +777,28 @@ def create_app(
             raise HTTPException(status_code=501, detail="router reload not enabled")
         return await deps.reload_router()
 
+    @app.get("/extraction-policy")
+    async def get_extraction_policy_ep(request: Request) -> dict[str, Any]:
+        """The instance's emergent-extraction policy (D-49): which categories play may create —
+        `{extract_actors, extract_places, extract_claims}`. Operator-only (D-44)."""
+        _require_operator(request)
+        return (await _mgmt().get_extraction_policy()).model_dump()
+
+    @app.patch("/extraction-policy")
+    async def patch_extraction_policy_ep(
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Update the emergent-extraction policy — send any subset of the three booleans (D-49).
+        Operator-only (D-44). Disabling `extract_claims` degrades recall (the client disclaims)."""
+        _require_operator(request)
+        store = _mgmt()
+        fields = ("extract_actors", "extract_places", "extract_claims")
+        updates = {k: bool(body[k]) for k in fields if k in body}
+        updated = (await store.get_extraction_policy()).model_copy(update=updates)
+        await store.set_extraction_policy(updated)
+        return updated.model_dump()
+
     @app.post("/providers/codex/start")
     async def codex_start_ep(
         request: Request,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.ports.event_store import EventStore
 from uro_core.ports.model_registry import ModelRegistry
 from uro_core.ports.participant import ParticipantMemory
@@ -162,3 +163,12 @@ class EngineStore(
     queries + semantic memory (VectorIndex) + participant memory (docs/18 B8) +
     session tokens (docs/18 B10) + the model-connection registry (D-47). The Postgres
     store satisfies it structurally; Phase 1 has one store."""
+
+    async def get_extraction_policy(self) -> ExtractionPolicy:
+        """The instance's emergent-extraction policy (D-49) — which categories play may create.
+        Defaults to all-on if the row/table is absent (pre-migration or first run)."""
+        ...
+
+    async def set_extraction_policy(self, policy: ExtractionPolicy) -> None:
+        """Replace the instance's emergent-extraction policy (D-49)."""
+        ...

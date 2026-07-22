@@ -8,12 +8,14 @@ from collections.abc import AsyncIterator
 
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import DomainEvent, actor_created, claim_recorded
+from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.engine import Engine
 from uro_core.pipeline.extraction import (
     Extraction,
     ProposedActor,
     ProposedClaim,
+    ProposedPlace,
     run_gauntlet,
 )
 from uro_core.pipeline.recall import assemble_recall
@@ -157,6 +159,71 @@ async def test_entity_resolution_deduplicates_actors(store: PostgresEventStore) 
     created = _of_type(events, "ActorCreated")
     assert [e.payload["name"] for e in created] == ["Bran"]  # Weck linked, only Bran created
     assert created[0].payload["tier"] == 1  # tier ceiling
+
+
+async def test_gauntlet_extracts_an_emergent_place(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    ex = Extraction(places=[ProposedPlace(name="The Rusty Tankard", description="a dim tavern")])
+    created = _of_type(await run_gauntlet(store, branch, ex), "PlaceCreated")
+    assert [e.payload["name"] for e in created] == ["The Rusty Tankard"]
+    assert created[0].payload["kind"] == "site"  # emergent places default to a site
+    assert created[0].payload["description"] == "a dim tavern"
+
+
+async def test_gauntlet_deduplicates_places(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    # commit "Alder Hollow", then re-propose it (case/article-folded) alongside a new place
+    first = await run_gauntlet(
+        store, branch, Extraction(places=[ProposedPlace(name="Alder Hollow")])
+    )
+    await store.append_beat(branch, first)
+    ex = Extraction(
+        places=[ProposedPlace(name="alder hollow"), ProposedPlace(name="The Deep Mine")]
+    )
+    created = _of_type(await run_gauntlet(store, branch, ex), "PlaceCreated")
+    assert [e.payload["name"] for e in created] == ["The Deep Mine"]  # Alder Hollow deduped
+
+
+async def test_extraction_policy_gates_each_category(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    ex = Extraction(
+        actors=[ProposedActor(name="Mara")],
+        places=[ProposedPlace(name="The Vault")],
+        claims=[ProposedClaim(statement="The vault is sealed.", provenance="narrator")],
+    )
+    # each run is independent (nothing committed) — a disabled category drops, the rest fire
+    off_places = await run_gauntlet(
+        store, branch, ex, policy=ExtractionPolicy(extract_places=False)
+    )
+    assert _of_type(off_places, "PlaceCreated") == []
+    assert len(_of_type(off_places, "ActorCreated")) == 1
+    assert len(_of_type(off_places, "ClaimRecorded")) == 1
+
+    off_actors = await run_gauntlet(
+        store, branch, ex, policy=ExtractionPolicy(extract_actors=False)
+    )
+    assert _of_type(off_actors, "ActorCreated") == []  # no new actor minted
+    assert len(_of_type(off_actors, "PlaceCreated")) == 1
+
+    off_claims = await run_gauntlet(
+        store, branch, ex, policy=ExtractionPolicy(extract_claims=False)
+    )
+    assert _of_type(off_claims, "ClaimRecorded") == []
+    assert len(_of_type(off_claims, "ActorCreated")) == 1  # actors/places still emerge
+
+
+async def test_extraction_policy_store_roundtrip(store: PostgresEventStore) -> None:
+    # The policy is an instance-wide SINGLETON, so mutating it leaks across tests via the shared
+    # test DB — restore the all-on default in a finally so later beat tests aren't poisoned.
+    assert (await store.get_extraction_policy()).extract_places is True  # migration default: all on
+    try:
+        await store.set_extraction_policy(
+            ExtractionPolicy(extract_actors=True, extract_places=False, extract_claims=False)
+        )
+        got = await store.get_extraction_policy()
+        assert (got.extract_actors, got.extract_places, got.extract_claims) == (True, False, False)
+    finally:
+        await store.set_extraction_policy(ExtractionPolicy())
 
 
 async def test_engine_extracts_state_and_recall_resurfaces_it(store: PostgresEventStore) -> None:

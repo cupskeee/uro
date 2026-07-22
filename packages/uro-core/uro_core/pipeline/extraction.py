@@ -4,8 +4,9 @@ The extractor turns generated prose into *proposed* world state; the gauntlet tu
 proposals into committed events — or drops them.
 
 Enforced by construction (structural — cannot be bypassed):
-- Whitelist: the schema permits only actors and claims, so the extractor is
-  structurally incapable of proposing damage/death/terrain events.
+- Whitelist: the schema permits only actors, places, and claims, so the extractor is
+  structurally incapable of proposing damage/death/loss events. A place is a benign
+  named-location creation (kind='site'), never a state change to an existing place.
 - Tier ceiling: the gauntlet always creates actors at T1.
 - Player text isolation: the extractor is fed generated prose only, never the
   player's intent text (see engine._extract) — so a player cannot directly assert
@@ -42,7 +43,9 @@ from uro_core.domain.events import (
     actor_created,
     belief_changed,
     claim_recorded,
+    place_created,
 )
+from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
@@ -55,6 +58,11 @@ _DEFAULT_BELIEF_CONFIDENCE = 0.8  # placeholder until belief-strength modeling (
 class ProposedActor(BaseModel):
     name: str
     role: str = ""
+
+
+class ProposedPlace(BaseModel):
+    name: str
+    description: str = ""
 
 
 class ProposedClaim(BaseModel):
@@ -70,6 +78,7 @@ class ProposedClaim(BaseModel):
 
 class Extraction(BaseModel):
     actors: list[ProposedActor] = Field(default_factory=list)
+    places: list[ProposedPlace] = Field(default_factory=list)  # emergent locations (D-49)
     claims: list[ProposedClaim] = Field(default_factory=list)
 
 
@@ -99,7 +108,8 @@ def build_extractor_messages(
     user = (
         f"KNOWN ACTORS:\n{known_actors}\n\nKNOWN CLAIMS:\n{known_claims}\n\n"
         f"NARRATION:\n{narration}\n\n"
-        'Return JSON: {"actors": [{"name", "role"}], "claims": [{"statement", '
+        'Return JSON: {"actors": [{"name", "role"}], '
+        '"places": [{"name", "description"}], "claims": [{"statement", '
         '"about": [names], "provenance": "narrator"|"dialogue", '
         '"speaker": name (dialogue only), "contradicts": [known claim ids], '
         '"durable": true ONLY if still true a month from now / false for any passing moment, '
@@ -133,9 +143,16 @@ def _slice_json_object(text: str) -> str | None:
 
 
 async def run_gauntlet(
-    store: ProjectionQueries, branch_id: str, extraction: Extraction
+    store: ProjectionQueries,
+    branch_id: str,
+    extraction: Extraction,
+    *,
+    policy: ExtractionPolicy | None = None,
 ) -> list[DomainEvent]:
-    """Validate proposals into committable events (docs/13). Downgrade-or-drop only."""
+    """Validate proposals into committable events (docs/13). Downgrade-or-drop only. `policy`
+    gates which EMERGENT categories may be created (D-49): a disabled category is silently skipped
+    here (structural — the extractor may still propose it, but nothing commits)."""
+    policy = policy or ExtractionPolicy()
     events: list[DomainEvent] = []
     name_to_ref: dict[str, str] = {}
 
@@ -149,8 +166,8 @@ async def run_gauntlet(
         if existing is not None:  # entity resolution: link, never duplicate
             name_to_ref[key] = existing.actor_id
             return existing.actor_id
-        if not create:
-            return None
+        if not create or not policy.extract_actors:
+            return None  # policy off → never MINT a new actor (an existing one still links above)
         ref = f"a:{new_id()}"
         events.append(actor_created(actor_id=ref, name=name.strip(), tier=1, role=role.strip()))
         name_to_ref[key] = ref
@@ -158,6 +175,31 @@ async def run_gauntlet(
 
     for pa in extraction.actors:
         await resolve(pa.name, create=True, role=pa.role)
+
+    # Emergent places (D-49): a named, standing location the scene is set in or moves to becomes a
+    # Place entity — like actors emerge from play. Dedup by canonical name against existing places
+    # and within the beat, so a location revisited across beats resolves to ONE place, not a
+    # duplicate. Places are independent of the actor/claim graph; kind defaults to 'site'.
+    if policy.extract_places:
+        existing_places = {
+            canonical_name(p.name): p.place_id for p in await store.list_places(branch_id)
+        }
+        seen_places: set[str] = set()
+        for pp in extraction.places:
+            pkey = canonical_name(pp.name)
+            if not pkey or pkey in existing_places or pkey in seen_places:
+                continue
+            seen_places.add(pkey)
+            events.append(
+                place_created(
+                    place_id=f"p:{new_id()}",
+                    name=pp.name.strip(),
+                    description=pp.description.strip(),
+                )
+            )
+
+    if not policy.extract_claims:
+        return events  # claims/beliefs disabled → actors+places only (the engine disclaims recall)
 
     # Pre-mint dialogue speakers so a claim *about* a speaker (resolved create=False
     # below) links to the same actor_id the belief uses, not a divergent name-token.

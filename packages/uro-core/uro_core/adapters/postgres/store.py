@@ -36,6 +36,7 @@ from uro_core.domain.events import (
     time_advanced,
     world_genesis,
 )
+from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.domain.hashing import compute_commit_hash
 from uro_core.domain.ids import new_id
 from uro_core.export import (
@@ -1491,6 +1492,37 @@ class PostgresEventStore:
                 credential_id,
                 enc_access,
                 enc_refresh,
+            )
+
+    # --- extraction policy (D-49): instance-level, off the event/branch axis ---
+    async def get_extraction_policy(self) -> ExtractionPolicy:
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT extract_actors, extract_places, extract_claims "
+                    "FROM extraction_policy WHERE id = 'singleton'"
+                )
+        except asyncpg.UndefinedTableError:
+            return ExtractionPolicy()  # pre-migration DB → all-on default (unchanged behavior)
+        if row is None:
+            return ExtractionPolicy()
+        return ExtractionPolicy(
+            extract_actors=row["extract_actors"],
+            extract_places=row["extract_places"],
+            extract_claims=row["extract_claims"],
+        )
+
+    async def set_extraction_policy(self, policy: ExtractionPolicy) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO extraction_policy "
+                "(id, extract_actors, extract_places, extract_claims, updated_at) "
+                "VALUES ('singleton', $1, $2, $3, now()) "
+                "ON CONFLICT (id) DO UPDATE SET extract_actors = $1, extract_places = $2, "
+                "extract_claims = $3, updated_at = now()",
+                policy.extract_actors,
+                policy.extract_places,
+                policy.extract_claims,
             )
 
     @staticmethod
