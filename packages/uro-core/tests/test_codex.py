@@ -348,3 +348,31 @@ async def test_router_shares_one_token_source_across_roles_on_one_codex_connecti
     default_src = router._default._token_provider  # type: ignore[union-attr,attr-defined]
     narrator_src = router._bindings["narrator"]._token_provider  # type: ignore[attr-defined]
     assert default_src is narrator_src  # SAME instance → SAME lock
+
+
+def _jwt_claims(claims: dict[str, object]) -> str:
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    return f"h.{body}.sig"
+
+
+def test_chatgpt_account_id_from_the_auth_claim() -> None:
+    tok = _jwt_claims({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}})
+    assert codex_auth.chatgpt_account_id(tok) == "acct-123"
+    assert codex_auth.chatgpt_account_id("not-a-jwt") is None
+    # the inference headers carry it when present, and omit it when absent
+    assert codex_auth.codex_inference_headers(tok)["chatgpt-account-id"] == "acct-123"
+    assert "chatgpt-account-id" not in codex_auth.codex_inference_headers(_jwt_claims({"sub": "u"}))
+
+
+async def test_stream_surfaces_the_backend_error_body() -> None:
+    # A rejected Responses call must surface the backend's error body (safe — no token) so the
+    # failure is diagnosable, not a bare ProviderError (the gpt-5.6-terra live failure).
+    body = '{"error":{"message":"model not supported on this endpoint"}}'
+    prov = CodexResponsesProvider(
+        model="gpt-5.6-terra",
+        token_provider=_static("t"),
+        transport=httpx.MockTransport(lambda r: httpx.Response(400, text=body)),
+    )
+    with pytest.raises(ProviderError, match=r"HTTP 400.*not supported"):
+        async for _ in prov.stream(_req()):
+            pass

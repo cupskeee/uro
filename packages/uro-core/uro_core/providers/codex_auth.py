@@ -71,9 +71,10 @@ def _oauth_headers() -> dict[str, str]:
 
 def codex_inference_headers(access_token: str) -> dict[str, str]:
     """Headers that disguise a Responses-API call as the Codex web UI. `Origin`/`Referer` are
-    load-bearing (the backend gates on them); no account-id/originator/session headers are sent
-    (the reference omits them — add id_token decoding if the backend later demands one)."""
-    return {
+    load-bearing (the backend gates on them). `chatgpt-account-id` is derived from the access
+    token's OpenAI auth claim when present — the modern Codex backend requires it to route the
+    request to the subscription's account (omitted if the token doesn't carry it)."""
+    headers = {
         "Accept": "application/json, text/event-stream",
         "Content-Type": "application/json",
         "Origin": "https://chatgpt.com",
@@ -81,6 +82,10 @@ def codex_inference_headers(access_token: str) -> dict[str, str]:
         "User-Agent": INFERENCE_UA,
         "Authorization": f"Bearer {access_token}",
     }
+    account_id = chatgpt_account_id(access_token)
+    if account_id:
+        headers["chatgpt-account-id"] = account_id
+    return headers
 
 
 async def request_device_code(
@@ -227,16 +232,39 @@ async def discover_codex_models(
     return models or [{"id": s, "modality": "chat"} for s in DEFAULT_MODELS]
 
 
-def _decode_jwt_exp(token: str) -> int | None:
-    """Read only the `exp` claim of a JWT without verifying the signature (best-effort)."""
+def _decode_jwt_claims(token: str) -> dict[str, Any]:
+    """Decode a JWT's payload claims, NO signature check (best-effort; {} on failure)."""
     try:
         payload = token.split(".")[1]
         payload += "=" * (-len(payload) % 4)  # restore base64 padding
         claims = json.loads(base64.urlsafe_b64decode(payload))
-        exp = claims.get("exp")
-        return int(exp) if exp is not None else None
+        return claims if isinstance(claims, dict) else {}
     except Exception:
+        return {}
+
+
+def _decode_jwt_exp(token: str) -> int | None:
+    """Read only the `exp` claim of a JWT without verifying the signature (best-effort)."""
+    exp = _decode_jwt_claims(token).get("exp")
+    try:
+        return int(exp) if exp is not None else None
+    except (TypeError, ValueError):
         return None
+
+
+def chatgpt_account_id(access_token: str) -> str | None:
+    """Best-effort: the ChatGPT account id from the access token's OpenAI auth claim, for the
+    `chatgpt-account-id` header the Codex Responses backend requires. The claim lives under the
+    namespaced `https://api.openai.com/auth` object (or, on some tokens, at the top level). None
+    if the token doesn't carry it."""
+    claims = _decode_jwt_claims(access_token)
+    auth = claims.get("https://api.openai.com/auth")
+    if isinstance(auth, dict):
+        acct = auth.get("chatgpt_account_id") or auth.get("user_id")
+        if acct:
+            return str(acct)
+    acct = claims.get("chatgpt_account_id")
+    return str(acct) if acct else None
 
 
 def token_is_expiring(access_token: str, *, skew: int = REFRESH_SKEW_SECONDS) -> bool:

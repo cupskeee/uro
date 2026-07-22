@@ -93,17 +93,21 @@ class CodexResponsesProvider:
                 ):
                     if resp.status_code == 401 and attempt == 0:
                         continue  # token likely stale → refresh and retry once
-                    resp.raise_for_status()
+                    if resp.status_code >= 400:
+                        # The RESPONSE body is the backend's own error JSON — safe to surface (it
+                        # carries no token; the token is only in the request header), and it's the
+                        # only way to diagnose a rejected request shape / model / missing header.
+                        detail = (await resp.aread()).decode("utf-8", "replace").strip()[:500]
+                        if resp.status_code == 401:
+                            raise ProviderError(
+                                "codex request failed: 401 Unauthorized after refresh — reconnect"
+                            )
+                        raise ProviderError(
+                            f"codex request failed: HTTP {resp.status_code} — {detail}"
+                        )
                     async for piece in self._parse_sse(resp):
                         yield piece
                     return
-            except httpx.HTTPStatusError as exc:
-                detail = (
-                    "401 Unauthorized after refresh — reconnect"
-                    if exc.response.status_code == 401
-                    else f"HTTP {exc.response.status_code}"
-                )
-                raise ProviderError(f"codex request failed: {detail}") from exc
             except httpx.HTTPError as exc:
                 # Report only the exception TYPE, never the raw text: a malformed-header error
                 # (httpx.LocalProtocolError ⊂ HTTPError) can embed the `Authorization: Bearer <tok>`
