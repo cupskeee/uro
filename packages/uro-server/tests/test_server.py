@@ -2230,6 +2230,8 @@ def test_extraction_policy_get_patch_and_operator_only() -> None:
     assert client.get("/extraction-policy?token=tok-a").json() == {
         "extract_actors": True,
         "extract_places": True,
+        "extract_factions": True,
+        "extract_threads": True,
         "extract_claims": True,
     }
     # PATCH a subset — the rest are preserved

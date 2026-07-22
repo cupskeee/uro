@@ -793,7 +793,13 @@ def create_app(
         Operator-only (D-44). Disabling `extract_claims` degrades recall (the client disclaims)."""
         _require_operator(request)
         store = _mgmt()
-        fields = ("extract_actors", "extract_places", "extract_claims")
+        fields = (
+            "extract_actors",
+            "extract_places",
+            "extract_factions",
+            "extract_threads",
+            "extract_claims",
+        )
         updates = {k: bool(body[k]) for k in fields if k in body}
         updated = (await store.get_extraction_policy()).model_copy(update=updates)
         await store.set_extraction_policy(updated)

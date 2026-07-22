@@ -10,6 +10,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Emergent world-building is now RELATIONAL (D-50).** Extending D-49: the extractor also proposes
+  **factions** and **threads**, and — the core idea — actors/places carry **affiliations** (an actor
+  is `member_of` a faction and `located_in` a place; a place has a `parent`). The gauntlet
+  **cascade-creates** any named faction/place that doesn't exist yet and wires the `member_of`/
+  `located_in` **edges** (populating the graph from play). Dedup is now **relationship-aware**: two
+  same-named actors of *different* houses stay **distinct** (fixing the false-merge in name-only
+  dedup), while a bare later mention links and *enriches*; factions dedup by name; **threads never
+  dedup**. The extraction policy gains `extract_factions` + `extract_threads` (migration 022, default
+  on — `extract_factions` also gates the actor→faction cascade). Structural whitelist unchanged
+  (only creations + `member_of`/`located_in` edges, never a mutation/death). ⚠️ This widens what the
+  model invents most — expect a prompt-tuning pass against live play.
 - **Opt-in NPC-speech routing via the `dialogue` role (D-48).** Previously the beat pipeline only
   ever called the `narrator` — it wrote the whole scene including NPC quoted speech, and the
   bindable `dialogue` role was never invoked. Now a beat the planner classifies as `dialogue`

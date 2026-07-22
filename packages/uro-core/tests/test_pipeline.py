@@ -15,7 +15,9 @@ from uro_core.pipeline.extraction import (
     Extraction,
     ProposedActor,
     ProposedClaim,
+    ProposedFaction,
     ProposedPlace,
+    ProposedThread,
     run_gauntlet,
 )
 from uro_core.pipeline.recall import assemble_recall
@@ -320,3 +322,103 @@ async def test_extractor_falls_back_to_narration_only_after_exhausting_reasks(
     engine = Engine(store, ProviderRouter(bindings={}, default=provider))
     result = await engine.run_beat(campaign, "player-1", "I look around")
     assert result.commit_id and result.extracted == 0  # prose kept, no state (the honest fallback)
+
+
+# --- D-50: emergent RELATIONAL world-building (cascade + edges + affiliation-aware dedup) --------
+
+
+async def test_relational_actor_cascades_faction_and_place(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    ex = Extraction(
+        actors=[
+            ProposedActor(
+                name="Ser Alden", role="knight", member_of="Iron Order", located_in="Alder Hollow"
+            )
+        ]
+    )
+    events = await run_gauntlet(store, branch, ex)
+    aid = _of_type(events, "ActorCreated")[0].payload["actor_id"]
+    fid = _of_type(events, "FactionCreated")[0].payload["faction_id"]
+    pid = _of_type(events, "PlaceCreated")[0].payload["place_id"]
+    edges = {
+        (e.payload["src"], e.payload["rel_type"], e.payload["dst"])
+        for e in _of_type(events, "EdgeAdded")
+    }
+    assert (aid, "member_of", fid) in edges  # the Order + the Hollow were cascade-created + wired
+    assert (aid, "located_in", pid) in edges
+
+
+async def test_same_name_actors_of_different_houses_stay_distinct(
+    store: PostgresEventStore,
+) -> None:
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        await run_gauntlet(
+            store, branch, Extraction(actors=[ProposedActor(name="the Duke", member_of="Ashfall")])
+        ),
+    )
+    # a Duke of a DIFFERENT house → a NEW, distinct actor (relationship-aware dedup)
+    ev = await run_gauntlet(
+        store, branch, Extraction(actors=[ProposedActor(name="the Duke", member_of="Windhelm")])
+    )
+    assert len(_of_type(ev, "ActorCreated")) == 1
+    # the SAME house → linked, not recreated
+    ev2 = await run_gauntlet(
+        store, branch, Extraction(actors=[ProposedActor(name="the Duke", member_of="Ashfall")])
+    )
+    assert _of_type(ev2, "ActorCreated") == []
+
+
+async def test_bare_mention_links_and_enriches(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    await store.append_beat(
+        branch, await run_gauntlet(store, branch, Extraction(actors=[ProposedActor(name="Mara")]))
+    )
+    # a later mention adds an affiliation → links to Mara (no new actor) + enriches the graph
+    ev = await run_gauntlet(
+        store, branch, Extraction(actors=[ProposedActor(name="Mara", member_of="Gray Watch")])
+    )
+    assert _of_type(ev, "ActorCreated") == []  # linked, not duplicated
+    assert len(_of_type(ev, "FactionCreated")) == 1  # Gray Watch created
+    assert len(_of_type(ev, "EdgeAdded")) == 1  # Mara member_of Gray Watch (enrichment)
+
+
+async def test_place_parent_cascade(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    ex = Extraction(places=[ProposedPlace(name="The Broken Spindle", parent="Alder Hollow")])
+    events = await run_gauntlet(store, branch, ex)
+    assert {e.payload["name"] for e in _of_type(events, "PlaceCreated")} == {
+        "The Broken Spindle",
+        "Alder Hollow",
+    }
+    assert len(_of_type(events, "EdgeAdded")) == 1  # spindle located_in Alder Hollow
+
+
+async def test_emergent_factions_and_threads(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    ex = Extraction(
+        factions=[ProposedFaction(name="The Ember Cult", description="fire-worshippers")],
+        threads=[ProposedThread(stakes="a war looms on the Ashfall border")],
+    )
+    events = await run_gauntlet(store, branch, ex)
+    assert [e.payload["name"] for e in _of_type(events, "FactionCreated")] == ["The Ember Cult"]
+    thr = _of_type(events, "ThreadCreated")
+    assert len(thr) == 1 and thr[0].payload["provenance"] == "emergent"
+
+
+async def test_policy_gates_factions_and_threads(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    ex = Extraction(
+        actors=[ProposedActor(name="Knight", member_of="Order")],  # cascade faction
+        threads=[ProposedThread(stakes="a plot")],
+    )
+    off_f = await run_gauntlet(store, branch, ex, policy=ExtractionPolicy(extract_factions=False))
+    assert _of_type(off_f, "FactionCreated") == []  # cascade suppressed
+    assert _of_type(off_f, "EdgeAdded") == []  # no member_of edge (faction wasn't made)
+    assert len(_of_type(off_f, "ActorCreated")) == 1  # the actor is still made
+    assert len(_of_type(off_f, "ThreadCreated")) == 1
+
+    off_t = await run_gauntlet(store, branch, ex, policy=ExtractionPolicy(extract_threads=False))
+    assert _of_type(off_t, "ThreadCreated") == []
+    assert len(_of_type(off_t, "FactionCreated")) == 1  # factions still on
