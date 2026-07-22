@@ -9,6 +9,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **Emergent Place extraction (D-49).** The extractor now proposes **places** as well as actors +
+  claims: a named, standing location the scene is set in or travels to (a tavern, a town, a ruin)
+  becomes a `PlaceCreated` entity in `proj_places`, deduped by canonical name against existing
+  places and within the beat — exactly like emergent actors. Previously places only came from an
+  authored world pack, so a blank `uro world new` world left `proj_places` empty even as the fiction
+  named locations. The whitelist stays structural (actors/places/claims only — no damage/death); a
+  place is a benign `site` creation. (A per-category **extraction policy** — toggle whether play can
+  create actors/places/threads/factions, with a Claims/Beliefs disclaimer — follows in later slices;
+  threads/factions stay authored-only for now.)
+
 ### Fixed
 - **Codex inference: drop parameters the restricted backend rejects (D-47).** The live test surfaced
   `HTTP 400 — {"detail":"Unsupported parameter: max_output_tokens"}` — the codex `/responses`

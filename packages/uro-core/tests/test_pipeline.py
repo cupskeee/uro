@@ -14,6 +14,7 @@ from uro_core.pipeline.extraction import (
     Extraction,
     ProposedActor,
     ProposedClaim,
+    ProposedPlace,
     run_gauntlet,
 )
 from uro_core.pipeline.recall import assemble_recall
@@ -157,6 +158,29 @@ async def test_entity_resolution_deduplicates_actors(store: PostgresEventStore) 
     created = _of_type(events, "ActorCreated")
     assert [e.payload["name"] for e in created] == ["Bran"]  # Weck linked, only Bran created
     assert created[0].payload["tier"] == 1  # tier ceiling
+
+
+async def test_gauntlet_extracts_an_emergent_place(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    ex = Extraction(places=[ProposedPlace(name="The Rusty Tankard", description="a dim tavern")])
+    created = _of_type(await run_gauntlet(store, branch, ex), "PlaceCreated")
+    assert [e.payload["name"] for e in created] == ["The Rusty Tankard"]
+    assert created[0].payload["kind"] == "site"  # emergent places default to a site
+    assert created[0].payload["description"] == "a dim tavern"
+
+
+async def test_gauntlet_deduplicates_places(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    # commit "Alder Hollow", then re-propose it (case/article-folded) alongside a new place
+    first = await run_gauntlet(
+        store, branch, Extraction(places=[ProposedPlace(name="Alder Hollow")])
+    )
+    await store.append_beat(branch, first)
+    ex = Extraction(
+        places=[ProposedPlace(name="alder hollow"), ProposedPlace(name="The Deep Mine")]
+    )
+    created = _of_type(await run_gauntlet(store, branch, ex), "PlaceCreated")
+    assert [e.payload["name"] for e in created] == ["The Deep Mine"]  # Alder Hollow deduped
 
 
 async def test_engine_extracts_state_and_recall_resurfaces_it(store: PostgresEventStore) -> None:
