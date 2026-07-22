@@ -217,9 +217,10 @@ class Engine:
         `plan` to drive the mechanics gate deterministically without the LLM planner (B9)."""
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
+        role = self._narration_role(ctx, encounter_events)
         started = time.perf_counter()
-        chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
-        await self._meter("narrator", messages, started)
+        chunks = [chunk async for chunk in self._router.stream(role, messages)]
+        await self._meter(role, messages, started)
         narration = "".join(chunks).strip()
         return await self._finish(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
@@ -243,15 +244,31 @@ class Engine:
         """
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
+        role = self._narration_role(ctx, encounter_events)
         started = time.perf_counter()
         collected: list[str] = []
-        async for chunk in self._router.stream("narrator", messages):
+        async for chunk in self._router.stream(role, messages):
             collected.append(chunk)
             yield chunk
-        await self._meter("narrator", messages, started)
+        await self._meter(role, messages, started)
         await self._finish(
             campaign, participant_id, intent_text, "".join(collected).strip(), ctx, encounter_events
         )
+
+    def _narration_role(self, ctx: _Context, encounter_events: list[DomainEvent] | None) -> str:
+        """Which model voices this beat. Conversational beats route through the `dialogue` model
+        when it is EXPLICITLY bound (opt-in NPC-speech routing, D-48); combat and everything else
+        stay on the `narrator`. Unbound `dialogue` → narrator, so the feature is off by default and
+        binding it turns it on. The plan's `intent_class` is the classifier; no plan (no ruleset) →
+        narrator, since we can't tell it's dialogue."""
+        if (
+            encounter_events is None
+            and ctx.plan is not None
+            and ctx.plan.intent_class == "dialogue"
+            and self._router.has_role("dialogue")
+        ):
+            return "dialogue"
+        return "narrator"
 
     async def _prepare_narration(
         self, campaign: Campaign, ctx: _Context, intent_text: str
@@ -383,9 +400,10 @@ class Engine:
         enters the append-only log, so the campaign state is untouched. Pass `plan` for B9."""
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
+        role = self._narration_role(ctx, encounter_events)
         started = time.perf_counter()
-        chunks = [chunk async for chunk in self._router.stream("narrator", messages)]
-        await self._meter("narrator", messages, started)
+        chunks = [chunk async for chunk in self._router.stream(role, messages)]
+        await self._meter(role, messages, started)
         narration = "".join(chunks).strip()
         events, _, _ = await self._beat_events(
             campaign, participant_id, intent_text, narration, ctx, encounter_events

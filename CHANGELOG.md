@@ -9,6 +9,20 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **Opt-in NPC-speech routing via the `dialogue` role (D-48).** Previously the beat pipeline only
+  ever called the `narrator` — it wrote the whole scene including NPC quoted speech, and the
+  bindable `dialogue` role was never invoked. Now a beat the planner classifies as `dialogue`
+  routes its narration through the **`dialogue` model when that role is explicitly bound** (so you
+  can point NPC conversation at a character-voice model); unbound → the narrator does everything
+  (feature off by default). Combat and no-plan beats always stay on the narrator, and dialogue beats
+  now show up in usage telemetry under the `dialogue` stage.
+- **Router announces whether semantic memory is on (review).** `build_router_from_registry` now logs
+  at serve-start/reload whether the `embedder` role resolves to an embedding-capable provider — and
+  **warns loudly** ("semantic memory is OFF") when it resolves to a chat-only provider (codex/
+  anthropic, directly or via the `default` fallback), instead of embeddings failing silently every
+  beat. Bind `embedder` to an openai/local connection to turn long-range recall back on.
+
 ### Fixed
 - **Codex inference: drop parameters the restricted backend rejects (D-47).** The live test surfaced
   `HTTP 400 — {"detail":"Unsupported parameter: max_output_tokens"}` — the codex `/responses`
