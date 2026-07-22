@@ -9,8 +9,10 @@ Store-agnostic: it takes a `token_provider(force_refresh) -> access_token` async
 same adapter serves both the pure one-shot probe (a static token) and the router (a refresh-capable
 token source). A 401 triggers one forced-refresh retry.
 
-Reasoning-model note: the Responses body carries NO temperature (gpt-5/codex reject a non-default
-one); `max_tokens` maps to `max_output_tokens`. Embeddings are unsupported (no backend endpoint).
+Restricted-backend note: the codex `/responses` endpoint is a SUBSET of the standard Responses API
+— it 400s on parameters the real API accepts (e.g. `max_output_tokens`, confirmed live). The body
+therefore carries only model/instructions/input/stream/store: NO temperature, NO output cap, and NO
+`response_format` for json_mode (structured output rides the prompt). Embeddings are unsupported.
 """
 
 from __future__ import annotations
@@ -54,6 +56,12 @@ class CodexResponsesProvider:
                 continue
             kind = "output_text" if m.role == "assistant" else "input_text"
             input_items.append({"role": m.role, "content": [{"type": kind, "text": m.content}]})
+        # The codex backend is a RESTRICTED subset of the Responses API — it 400s on parameters the
+        # standard API accepts (`{"detail":"Unsupported parameter: max_output_tokens"}`, live). So
+        # send ONLY the fields the working reference does: model + instructions + input + stream +
+        # store. `max_tokens` is dropped (no output cap — matches the reference), `temperature` was
+        # never added, and json_mode sends no `response_format`/`text.format` either; structured
+        # output for the planner/extractor rides the PROMPT instruction + the parse-salvage path.
         body: dict[str, object] = {
             "model": self._model,
             "input": input_items,
@@ -62,12 +70,6 @@ class CodexResponsesProvider:
         }
         if instructions:
             body["instructions"] = instructions
-        if req.max_tokens is not None:
-            body["max_output_tokens"] = req.max_tokens
-        if req.json_mode:
-            # Responses structured-output request. UNVERIFIED against the codex backend — the
-            # planner/extractor prompts also instruct JSON, so this is belt-and-suspenders.
-            body["text"] = {"format": {"type": "json_object"}}
         return body
 
     async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:

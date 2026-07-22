@@ -10,6 +10,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Fixed
+- **Codex inference: drop parameters the restricted backend rejects (D-47).** The live test surfaced
+  `HTTP 400 — {"detail":"Unsupported parameter: max_output_tokens"}` — the codex `/responses`
+  endpoint is a *subset* of the standard Responses API and 400s on parameters it accepts. The adapter
+  now sends only the working-reference fields (model + instructions + input + stream + store): the
+  `max_output_tokens` output cap is dropped, and json_mode no longer sends a `response_format`/
+  `text.format` (structured output for the planner/extractor rides the prompt + parse-salvage).
 - **Codex inference: send `chatgpt-account-id` + surface backend errors (D-47).** The first live
   Codex test (`✗ codex:gpt-5.6-terra failed (ProviderError)`) exposed two gaps. (1) The modern
   ChatGPT Codex backend requires a `chatgpt-account-id` header to route the request to the
