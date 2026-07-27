@@ -17,7 +17,7 @@ dependencies = [
     "uro-server==0.3.0",
     "typer>=0.27.0",
     "rich>=13.9",
-    "websockets>=16.1",
+    "websockets>=16.1.1",
     "python-dotenv>=1.0",
 ]
 
