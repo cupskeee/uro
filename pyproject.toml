@@ -6,11 +6,11 @@ members = ["packages/uro-core", "packages/uro-server", "packages/uro-cli"]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
-    "ruff>=0.15.22",
-    "mypy>=2.3.0",
+    "ruff>=0.16.4",
+    "mypy>=2.3.1",
     "import-linter>=2.1",
-    "coverage>=7.15.2",
-    "types-pyyaml>=6.0",
+    "coverage>=7.15.4",
+    "types-pyyaml>=6.0.12.20260815",
 ]
 
 # ---------------------------------------------------------------- ruff (D-18)
