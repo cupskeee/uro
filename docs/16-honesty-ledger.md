@@ -132,8 +132,9 @@ persisted; a provider transport failure → 502, unwired provider → 501; CI st
 the operator's) — BE-1..BE-10 + BE-7, #33-#42. Pack-upload *create* (with backfill-commit) and
 **seed** shipped 2026-10-30 as `POST /worlds/create` and `POST /worlds/{w}/seed`, through the same
 core path as the CLI (`worldpack.create`); seeding re-takes the pack, which must be the world's own,
-because the world doesn't persist `manifest.history`. World **`state?at=`** is a new read-only
-materialize-at-commit primitive, built separately.)
+because the world doesn't persist `manifest.history`. World **`state?at=`** shipped the same day:
+`store.state_at` runs the fork's materialization into a scratch branch and always rolls it back, so
+it's read-only by construction and equal to what a fork there starts from.)
 
 **Holistic-review hardening (D-46, post-epic system-wide seam hunt).** The BE epic had never had the
 project's phase-end cross-phase review; running it found a real **HIGH epistemic leak** and an

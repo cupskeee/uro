@@ -81,6 +81,13 @@ from uro_core.timeline.models import (
 # correctness. Instance-overridable so tests can exercise the snapshot path cheaply.
 SNAPSHOT_EVERY = 50
 
+
+def _check_sections(sections: list[str]) -> None:
+    for s in sections:
+        if s not in _SNAPSHOT_TABLES:
+            raise ValueError(f"unknown section {s!r}; known: {sorted(_SNAPSHOT_TABLES)}")
+
+
 # Per-section PRIMARY KEY columns — how diff_branches matches "the same row" across two branches
 # (docs/18 B5). A subset of each section's _SNAPSHOT_TABLES columns.
 _SECTION_KEYS: dict[str, tuple[str, ...]] = {
@@ -1765,24 +1772,57 @@ class PostgresEventStore:
         core UI of a branching consumer (Hollowloop's loop tree) needed N-times-round-trips before;
         this is ONE query per section (`branch_id = ANY(...)`). Returns {branch_id: {section:
         [rows]}}, rows deterministically ordered. Unknown sections raise (typo-loud)."""
-        for s in sections:
-            if s not in _SNAPSHOT_TABLES:
-                raise ValueError(f"unknown section {s!r}; known: {sorted(_SNAPSHOT_TABLES)}")
+        _check_sections(sections)
+        async with self.pool.acquire() as conn:
+            return await self._query_sections(conn, branch_ids, sections)
+
+    @staticmethod
+    async def _query_sections(
+        conn: asyncpg.Connection, branch_ids: list[str], sections: list[str]
+    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
         out: dict[str, dict[str, list[dict[str, Any]]]] = {
             b: {s: [] for s in sections} for b in branch_ids
         }
-        async with self.pool.acquire() as conn:
-            for section in sections:
-                cols = _SNAPSHOT_TABLES[section]
-                rows = await conn.fetch(
-                    f"SELECT branch_id, {', '.join(cols)} FROM proj_{section} "
-                    f"WHERE branch_id = ANY($1::text[]) ORDER BY branch_id, {', '.join(cols)}",
-                    branch_ids,
-                )
-                for r in rows:
-                    d = dict(r)
-                    out[d.pop("branch_id")][section].append(d)
+        for section in sections:
+            cols = _SNAPSHOT_TABLES[section]
+            rows = await conn.fetch(
+                f"SELECT branch_id, {', '.join(cols)} FROM proj_{section} "
+                f"WHERE branch_id = ANY($1::text[]) ORDER BY branch_id, {', '.join(cols)}",
+                branch_ids,
+            )
+            for r in rows:
+                d = dict(r)
+                out[d.pop("branch_id")][section].append(d)
         return out
+
+    async def state_at(
+        self, world_id: str, ref: str, sections: list[str]
+    ) -> tuple[str, dict[str, list[dict[str, Any]]]]:
+        """The projections as they stood at ANY commit (a marker, an id, or a unique prefix) —
+        `(commit_id, {section: rows})`. The read-only twin of a fork: the SAME nearest-snapshot +
+        replay path `fork_branch` uses, into a scratch branch inside a transaction that is always
+        rolled back. Nothing persists, and the result is exactly what a fork at `ref` would start
+        from. Cost is a fork's: bounded by the snapshot cadence, not by history."""
+        _check_sections(sections)
+        async with self.pool.acquire() as conn:
+            tx = conn.transaction()
+            await tx.start()
+            try:
+                commit_id = await self._resolve_ref(conn, world_id, ref)
+                scratch = new_id()
+                await conn.execute(
+                    "INSERT INTO branches (branch_id, world_id, name, head_commit, forked_from) "
+                    "VALUES ($1, $2, $3, $4, $4)",
+                    scratch,
+                    world_id,
+                    f"~state-at-{scratch}",
+                    commit_id,
+                )
+                await self._materialize_into(conn, scratch, await self._ancestry(conn, commit_id))
+                state = await self._query_sections(conn, [scratch], sections)
+                return commit_id, state[scratch]
+            finally:
+                await tx.rollback()  # always: this read must leave no trace
 
     async def diff_branches(
         self, branch_a: str, branch_b: str, sections: list[str] | None = None

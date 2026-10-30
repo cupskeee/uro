@@ -59,6 +59,14 @@ class ProjectionQueries(Protocol):
         {branch_id: {section: [rows]}} — the aggregate read a branch tree view needs."""
         ...
 
+    async def state_at(
+        self, world_id: str, ref: str, sections: list[str]
+    ) -> tuple[str, dict[str, list[dict[str, Any]]]]:
+        """Projection `sections` as they stood at any commit of the world (a marker, a commit id, or
+        a unique prefix) → `(commit_id, {section: rows})`. Read-only: materialized like a fork,
+        then discarded."""
+        ...
+
     async def diff_branches(
         self, branch_a: str, branch_b: str, sections: list[str] | None = None
     ) -> dict[str, dict[str, list[dict[str, Any]]]]:

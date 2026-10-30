@@ -1357,6 +1357,36 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such commit")
         return detail.model_dump()
 
+    @app.get("/worlds/{world_id}/state")
+    async def world_state(world_id: str, request: Request) -> dict[str, Any]:
+        """A world's projections at a branch head (`?branch=`, default main) or at ANY commit
+        (`?at=` a marker, commit id, or unique prefix — materialized like a fork, then discarded;
+        nothing is written). `?sections=` as for the campaign state (default the scene sections).
+        OPERATOR-only (D-45): any branch or past commit, every section — the GM's timeline view."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        raw = request.query_params.get("sections") or "actors,threads,places,factions"
+        sections = [x for x in raw.split(",") if x]
+        at, branch = request.query_params.get("at"), request.query_params.get("branch")
+        if at and branch:
+            raise HTTPException(status_code=400, detail="give at= or branch=, not both")
+        try:
+            if at:
+                commit_id, state = await store.state_at(world_id, at, sections)
+                return {"at": commit_id, "state": state}
+            name = branch or "main"
+            b = await store.get_branch_by_name(world_id, name)
+            if b is None:
+                raise HTTPException(status_code=404, detail=f"no such branch: {name}")
+            across = await store.query_across([b.branch_id], sections)
+            return {"branch": name, "at": b.head_commit, "state": across[b.branch_id]}
+        except KeyError as exc:  # an unknown or ambiguous commit ref
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        except ValueError as exc:  # an unknown section — typo-loud
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/worlds/{world_id}/diff")
     async def world_branch_diff(world_id: str, request: Request) -> dict[str, Any]:
         """What differs between two branches of a world, per projection section (docs/18 B5,

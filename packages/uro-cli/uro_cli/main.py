@@ -1066,28 +1066,48 @@ def show(
 
 @app.command()
 def state(
-    campaign_id: str,
+    campaign_id: str = typer.Argument(None, help="a campaign (or pass --world)"),
+    world: str = typer.Option(None, "--world", help="read a world branch or past commit instead"),
+    branch: str = typer.Option(None, "--branch", help="with --world: a branch head (default main)"),
+    at: str = typer.Option(None, "--at", help="with --world: any commit, marker, or id prefix"),
     sections: str = typer.Option(
         "actors,threads,places,factions",
         "--sections",
         help="comma-separated projections, e.g. actors,claims,beliefs,sheets,items,edges,counters",
     ),
 ) -> None:
-    """A campaign's current world state, one JSON row per entity — every section, including the
-    omniscient ones (claim truth values, hidden beliefs, sheets): the operator view (D-45)."""
+    """World state, one JSON row per entity: a campaign's now, or with --world any branch head or
+    any past commit (--at materializes it like a fork and discards it — nothing is written). Every
+    section, including the omniscient ones (claim truth values, hidden beliefs, sheets): the
+    operator view (D-45)."""
 
     async def _run() -> None:
+        if (campaign_id is None) == (world is None):
+            typer.echo("give a campaign id, or --world <world> [--branch B | --at REF]", err=True)
+            raise typer.Exit(1)
+        if at is not None and branch is not None:
+            typer.echo("give --at or --branch, not both", err=True)
+            raise typer.Exit(1)
+        names = [s.strip() for s in sections.split(",") if s.strip()]
         store = build_store()
         await connect_store(store)
         try:
-            c = await _campaign_or_exit(store, campaign_id)
-            names = [s.strip() for s in sections.split(",") if s.strip()]
-            across = await store.query_across([c.branch_id], names)
+            if campaign_id is not None:
+                c = await _campaign_or_exit(store, campaign_id)
+                rows = (await store.query_across([c.branch_id], names))[c.branch_id]
+            else:
+                w = await _world_or_exit(store, world)
+                if at is not None:
+                    commit_id, rows = await store.state_at(w.world_id, at, names)
+                    typer.echo(f"at commit {commit_id}")
+                else:
+                    b = await _branch_or_exit(store, w, branch or "main")
+                    rows = (await store.query_across([b.branch_id], names))[b.branch_id]
         finally:
             await store.close()
-        for section, rows in across.get(c.branch_id, {}).items():
-            typer.echo(f"{section} ({len(rows)}):")
-            for r in rows:
+        for section, section_rows in rows.items():
+            typer.echo(f"{section} ({len(section_rows)}):")
+            for r in section_rows:
                 typer.echo(f"  {_row(r)}")
 
     _run_async(_run)

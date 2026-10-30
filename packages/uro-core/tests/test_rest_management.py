@@ -714,3 +714,39 @@ async def test_a_pbta_campaign_plays_on_a_uro_basic_server(store: PostgresEventS
     assert [b.intent_text for b in beats] == ["I look around the camp"]
     pc = await store.campaign_pc(c)
     assert "harm" in (await store.get_sheet(campaign.branch_id, pc) or {})  # type: ignore[arg-type]
+
+
+async def test_world_state_at_a_branch_head_or_any_commit(store: PostgresEventStore) -> None:
+    # docs/08's `GET /worlds/{w}/state?branch=&at=` — deferred until a read-only materialize-at-
+    # commit existed; it reuses the fork path, rolled back.
+    from uro_core.domain.events import actor_created
+
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    app = create_app(
+        engine_deps(store, engine, {_TOK: "alice", "tok-player": "bob"}, admin_tokens={_TOK})
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": "Then"})).json()["world_id"]
+        world = await store.get_world(world_id)
+        assert world is not None
+        first = await store.append_beat(
+            world.main_branch_id, [actor_created(actor_id="a:1", name="One")]
+        )
+        await store.append_beat(world.main_branch_id, [actor_created(actor_id="a:2", name="Two")])
+
+        then = await client.get(_q(f"/worlds/{world_id}/state?at={first.commit_id}"))
+        assert then.status_code == 200, then.text
+        assert [a["name"] for a in then.json()["state"]["actors"]] == ["One"]
+        now = (await client.get(_q(f"/worlds/{world_id}/state"))).json()
+        assert sorted(a["name"] for a in now["state"]["actors"]) == ["One", "Two"]
+        assert now["branch"] == "main"
+
+        player = await client.get(f"/worlds/{world_id}/state?at={first.commit_id}&token=tok-player")
+        assert player.status_code == 403  # any commit, every section: operator-only (D-45)
+        both = await client.get(_q(f"/worlds/{world_id}/state?at={first.commit_id}&branch=main"))
+        assert both.status_code == 400
+        assert (await client.get(_q(f"/worlds/{world_id}/state?at=nope"))).status_code == 404
+        assert (await client.get(_q(f"/worlds/{world_id}/state?branch=nope"))).status_code == 404
+        typo = await client.get(_q(f"/worlds/{world_id}/state?sections=nope"))
+        assert typo.status_code == 400
