@@ -92,6 +92,12 @@ of those touches, and the port hosted it with **no changes**:
   actions produce NO effect until the round closes, and two fighters can wound each other.
 - **Milestones** from surviving encounters, not levels or failures.
 
+Its affordances carry real difficulties (`investigate` hard 5+, `talk_down` normal 4+, `hold_firm` easy
+3+) — the mechanics gate passes an affordance's difficulty into the check. Hosting it needed no PORT
+change, but the holistic review found the shared runner kept only each turn's FIRST effect trace
+(now every trace is kept, so a simultaneous round's strikes all reach the narrator) and that a mutual
+knockout left no fallout (now everyone downed is wounded; with no winner, nothing is looted).
+
 Honest limit, shared by every ruleset: the pipeline never applies a *free-roam check's*
 consequences to the sheet (`progression` isn't called; PbtA's XP-on-a-miss is likewise not live),
 so a push during a check is recorded only in its detail; a push in an encounter persists via the
