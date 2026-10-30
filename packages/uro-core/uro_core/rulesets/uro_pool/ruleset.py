@@ -147,18 +147,21 @@ class UroPool:
         return [
             Affordance(
                 id="investigate",
+                difficulty="hard",
                 stat="wits",
                 trigger_categories=["search"],
                 description="search for what's hidden or wrong",
             ),
             Affordance(
                 id="talk_down",
+                difficulty="normal",
                 stat="nerve",
                 trigger_categories=["change_disposition"],
                 description="steady someone and change their mind",
             ),
             Affordance(
                 id="hold_firm",
+                difficulty="easy",
                 stat="nerve",
                 trigger_categories=["coerce"],
                 description="refuse to yield under pressure",

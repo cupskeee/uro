@@ -114,6 +114,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   plain number in `set_counter`/`adjust_counter` clamps again as it did before computed writes
   (only expressions fail closed); and `$trigger.<field>` outside a `for_each` — where it was never
   substituted and silently became a literal reference — is now rejected when the pack loads.
+- **Encounters report every strike, and a double knockout has consequences.** The encounter
+  runner kept only the first effect's description per turn, so in Uro Pool's simultaneous rounds
+  the other fighters' strikes never reached the narrator; it now keeps them all. A fight where both
+  sides go down (now possible) wounds everyone who fell and loots nothing, and narrates "both sides
+  fall". Uro Pool's checks now use their difficulty (investigating is hard, holding firm easy) —
+  before, every check rolled against the same 4+.
 
 ## [0.4.0] - 2026-10-30
 
