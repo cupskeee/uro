@@ -699,3 +699,90 @@ async def test_threads_policy_gates_resolution(store: PostgresEventStore) -> Non
     off = ExtractionPolicy(extract_threads=False)
     ev = await run_gauntlet(store, branch, Extraction(resolves=[tid]), policy=off)
     assert _of_type(ev, "ThreadStateChanged") == []
+
+
+# --- D-56: partial-name resolution ----------------------------------------------------------
+
+
+async def test_a_partial_name_links_to_the_known_actor_and_records_an_alias(
+    store: PostgresEventStore,
+) -> None:
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        await run_gauntlet(
+            store, branch, Extraction(actors=[ProposedActor(name="Ser Aldren Voss")])
+        ),
+    )
+    aldren = (await store.list_actors(branch))[0].actor_id
+    ev = await run_gauntlet(
+        store,
+        branch,
+        Extraction(
+            actors=[ProposedActor(name="Aldren")],
+            claims=[ProposedClaim(statement="Aldren guards the gate.", about=["Aldren"])],
+        ),
+    )
+    assert _of_type(ev, "ActorCreated") == []  # linked, not a duplicate
+    alias = _of_type(ev, "EntityAliasAdded")
+    assert len(alias) == 1 and alias[0].payload["entity_id"] == aldren
+    assert _of_type(ev, "ClaimRecorded")[0].payload["subject_refs"] == [aldren]
+    await store.append_beat(branch, ev)
+    assert "Aldren" in (await store.list_actors(branch))[0].aliases
+    recall = await assemble_recall(store, branch, "I salute Aldren", 8)
+    assert [a.actor_id for a in recall.actors] == [aldren]  # the alias puts him on stage
+
+
+async def test_partial_names_never_link_when_ambiguous_or_conflicting(
+    store: PostgresEventStore,
+) -> None:
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        await run_gauntlet(
+            store,
+            branch,
+            Extraction(
+                actors=[
+                    ProposedActor(name="Tobin Reave", member_of="Wreck Crews"),
+                    ProposedActor(name="Ilse Reave"),
+                ]
+            ),
+        ),
+    )
+    ambiguous = await run_gauntlet(store, branch, Extraction(actors=[ProposedActor(name="Reave")]))
+    assert _of_type(ambiguous, "EntityAliasAdded") == []  # two Reaves → no partial link
+    conflicting = await run_gauntlet(
+        store,
+        branch,
+        Extraction(actors=[ProposedActor(name="Tobin", member_of="Harbour Wardens")]),
+    )
+    assert len(_of_type(conflicting, "ActorCreated")) == 1  # a Tobin of another faction (D-50)
+    assert _of_type(conflicting, "EntityAliasAdded") == []
+
+
+async def test_partial_names_resolve_places_and_factions_but_keep_organisation_words(
+    store: PostgresEventStore,
+) -> None:
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        await run_gauntlet(
+            store,
+            branch,
+            Extraction(
+                places=[ProposedPlace(name="Riverkeep")],
+                factions=[ProposedFaction(name="House Veyr"), ProposedFaction(name="Iron Order")],
+            ),
+        ),
+    )
+    ev = await run_gauntlet(
+        store,
+        branch,
+        Extraction(
+            places=[ProposedPlace(name="Riverkeep fortress")],
+            factions=[ProposedFaction(name="the Veyrs"), ProposedFaction(name="Iron Fist")],
+        ),
+    )
+    assert _of_type(ev, "PlaceCreated") == []  # "Riverkeep fortress" is Riverkeep
+    assert [e.payload["name"] for e in _of_type(ev, "FactionCreated")] == ["Iron Fist"]

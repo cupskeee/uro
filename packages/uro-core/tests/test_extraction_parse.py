@@ -134,3 +134,33 @@ def test_resolves_keeps_only_id_strings() -> None:
     ex = parse_extraction('{"resolves":["t:1", 7, null, {"id":"t:2"}, "t:3"]}')
     assert ex is not None and ex.resolves == ["t:1", "t:3"]
     assert parse_extraction('{"resolves":"t:1"}').resolves == []  # type: ignore[union-attr]
+
+
+def test_partial_name_rule_links_variants_and_refuses_near_names() -> None:
+    # D-56. The rule was validated on pairs written BEFORE it ran (not its tuning set); kept as a
+    # regression guard. Precision over recall: a miss duplicates an entity, a false merge fuses two.
+    from uro_core.pipeline.extraction import _name_words, _partial_match
+
+    def links(existing: list[str], mention: str) -> bool:
+        index = {f"e{i}": [_name_words(n)] for i, n in enumerate(existing)}
+        return _partial_match(_name_words(mention), index) is not None
+
+    for known, mention in [
+        ("Magister Olwen Tarr", "Olwen"),
+        ("Captain Hessa Drummond", "Drummond"),
+        ("The Gilded Lantern", "the Lantern"),
+        ("Lord Haldane Crowe", "Haldane"),
+        ("Saint Elsabet's Abbey", "the Abbey"),
+        ("House Veyr", "the Veyrs"),
+    ]:
+        assert links([known], mention), (known, mention)
+    for known, mention in [
+        ("Olwen Tarr", "Olwyn Tarrow"),
+        ("Hessa Drummond", "Hessa Vale"),
+        ("Lord Haldane Crowe", "Lady Mirelle Crowe"),
+        ("Old Tom", "Young Tom"),  # "Old"/"Young" are identity, not honorifics
+        ("Iron Order", "Iron Fist"),  # organisation words are kept
+        ("Ser Aldren Voss", "Ser Aldric Vane"),  # the pair the embedding index scored 0.741
+    ]:
+        assert not links([known], mention), (known, mention)
+    assert not links(["Hessa Drummond", "Hessa Vale"], "Hessa")  # ambiguity never links
