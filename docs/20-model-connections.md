@@ -152,8 +152,11 @@ up (on stub) with no config. Adding the first connection via CLI/API takes over.
 - **`uro-server` API (operator-only, D-44 — config is a cost/structural concern):**
   `GET/POST/PATCH/DELETE /providers` (connections), `GET/POST/DELETE /providers/credentials`,
   `GET/PUT /providers/roles` (bindings), `POST /providers/{id}/refresh`, `POST /providers/{id}/test`.
-- **`uro-cli` (client of that API, like `uro token`):** `uro provider add|list|rm`,
-  `uro provider bind narrator=<connection>:<model>`, `uro provider refresh|test`.
+- **`uro-cli` (direct-DB, like `uro world`; operator with DB access):** `uro provider
+  add|list|rm`, `uro provider bind <role> <connection> <model>` / `unbind <role>`,
+  `uro provider codex-login`, and `uro provider credential rm <id>` (refuses a credential a
+  connection still uses unless `--force`, which unlinks those connections — `rm` of a connection
+  keeps its credential, since one may back several). `refresh`/`test` are API-only.
 - **`uro-loom`:** the same API — a non-technical operator connects a provider, pastes a key (stored
   encrypted), picks models, and binds roles, all in the browser. (This is the instance operator's
   key; *per-end-user* keys in a multi-tenant deploy remain a platform/BFF concern, `docs/05` of Loom.)

@@ -87,3 +87,61 @@ def test_provider_bind_rejects_a_chat_model_for_the_embedder(monkeypatch) -> Non
     result = CliRunner().invoke(app, ["provider", "bind", "embedder", "conn-1", "gpt-5-codex"])
     assert result.exit_code == 1
     assert "embedding model" in result.output
+
+
+def _credential_store(monkeypatch, linked: list[str]):  # type: ignore[no-untyped-def]
+    """A fake registry holding credential `cred-1`, used by the connections in `linked`."""
+    from uro_cli import main
+    from uro_core.ports.model_registry import ModelConnection
+
+    deleted: list[str] = []
+
+    class _Cred:
+        id = "cred-1"
+
+    class _Store:
+        async def list_credentials(self) -> list[_Cred]:
+            return [_Cred()]
+
+        async def list_connections(self) -> list[ModelConnection]:
+            return [
+                ModelConnection(id=c, name=c, provider="codex", auth_id="cred-1") for c in linked
+            ]
+
+        async def delete_credential(self, credential_id: str) -> bool:
+            deleted.append(credential_id)
+            return True
+
+        async def close(self) -> None:
+            pass
+
+    async def _noop(store: object) -> None:
+        return None
+
+    monkeypatch.setattr(main, "build_store", lambda: _Store())
+    monkeypatch.setattr(main, "connect_store", _noop)
+    return deleted
+
+
+def test_provider_credential_rm_deletes_an_unused_credential(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    deleted = _credential_store(monkeypatch, linked=[])
+    result = CliRunner().invoke(app, ["provider", "credential", "rm", "cred-1"])
+    assert result.exit_code == 0, result.output
+    assert deleted == ["cred-1"] and "deleted" in result.output
+
+
+def test_provider_credential_rm_refuses_one_in_use_without_force(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Deleting a linked credential unlinks its connections (docs/20) — live roles would lose auth,
+    so the CLI makes that an explicit --force."""
+    deleted = _credential_store(monkeypatch, linked=["conn-1"])
+    refused = CliRunner().invoke(app, ["provider", "credential", "rm", "cred-1"])
+    assert refused.exit_code == 1 and "conn-1" in refused.output and deleted == []
+    forced = CliRunner().invoke(app, ["provider", "credential", "rm", "cred-1", "--force"])
+    assert forced.exit_code == 0, forced.output
+    assert deleted == ["cred-1"] and "unlinked (now unauthenticated): conn-1" in forced.output
+
+
+def test_provider_credential_rm_reports_an_unknown_id(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    deleted = _credential_store(monkeypatch, linked=[])
+    result = CliRunner().invoke(app, ["provider", "credential", "rm", "nope"])
+    assert result.exit_code == 1 and "no such credential: nope" in result.output and deleted == []

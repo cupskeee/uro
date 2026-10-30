@@ -53,6 +53,10 @@ provider_app = typer.Typer(
     no_args_is_help=True,
     help="Model connections — the DB-backed LLM provider registry (D-47, docs/20).",
 )
+credential_app = typer.Typer(
+    no_args_is_help=True,
+    help="Stored credentials — the encrypted API keys / OAuth logins that connections link to.",
+)
 outbox_app = typer.Typer(
     no_args_is_help=True,
     help="The transactional outbox — publish committed beats to other processes (D-57).",
@@ -64,6 +68,7 @@ app.add_typer(campaign_app, name="campaign")
 app.add_typer(codex_app, name="codex")
 app.add_typer(token_app, name="token")
 app.add_typer(provider_app, name="provider")
+provider_app.add_typer(credential_app, name="credential")
 app.add_typer(outbox_app, name="outbox")
 
 # The engine roles a connection can back (resolved by the ProviderRouter) — shared with the server.
@@ -1296,7 +1301,8 @@ def provider_list() -> None:
 def provider_rm(
     connection_id: str = typer.Argument(..., help="the connection id to delete"),
 ) -> None:
-    """Delete a connection (its role bindings cascade → those roles fall back to `default`)."""
+    """Delete a connection (its role bindings cascade → those roles fall back to `default`). Its
+    credential is kept — another connection may share it; remove it with `credential rm`."""
 
     async def _run() -> None:
         store = build_store()
@@ -1306,6 +1312,38 @@ def provider_rm(
         finally:
             await store.close()
         typer.echo("deleted" if ok else f"no such connection: {connection_id}")
+
+    _run_async(_run)
+
+
+@credential_app.command("rm")
+def provider_credential_rm(
+    credential_id: str = typer.Argument(..., help="the credential id to delete"),
+    force: bool = typer.Option(
+        False, "--force", help="delete even if connections use it (they become unauthenticated)"
+    ),
+) -> None:
+    """Delete a stored credential. Connections linked to it are UNLINKED, not deleted (docs/20), so
+    a credential still in use is refused unless --force."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            if all(c.id != credential_id for c in await store.list_credentials()):
+                raise ValueError(f"no such credential: {credential_id}")
+            linked = [c.id for c in await store.list_connections() if c.auth_id == credential_id]
+            if linked and not force:
+                raise ValueError(
+                    f"credential {credential_id} is used by {', '.join(linked)} — delete those "
+                    "connections first, or pass --force to leave them unauthenticated"
+                )
+            await store.delete_credential(credential_id)
+        finally:
+            await store.close()
+        typer.echo("deleted")
+        if linked:
+            typer.echo(f"unlinked (now unauthenticated): {', '.join(linked)}")
 
     _run_async(_run)
 
