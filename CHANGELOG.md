@@ -9,6 +9,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **`uro provider credential rm <id>`.** Deleting a connection keeps its credential (one credential
+  can back several connections), and the CLI had no way to remove one; only the operator API did.
+  The command refuses a credential that a connection still uses, naming those connections. With
+  `--force` it deletes the credential anyway, and those connections become unauthenticated rather
+  than deleted. `uro provider rm` now says the credential stays.
+
 ## [0.5.0] - 2026-10-30
 
 Upgrading: run `uro db migrate` (migration 023 adds the outbox table; commits made before it are not
