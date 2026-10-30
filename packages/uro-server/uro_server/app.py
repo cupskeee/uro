@@ -252,20 +252,35 @@ def engine_deps(
     async def campaign_exists(campaign_id: str) -> bool:
         return (await store.get_campaign(campaign_id)) is not None
 
+    # One server hosts campaigns of every ruleset (D-30): a campaign plays under the ruleset it
+    # pinned, like `uro play`. The process's own engine serves its ruleset and unpinned campaigns;
+    # any other ruleset gets a sibling engine, built once, sharing the router (a reload reaches it)
+    # and the per-branch react locks (D-34: one branch, one lock, whichever engine runs the pass).
+    siblings: dict[tuple[str, str], Engine] = {}
+
+    def engine_for(campaign: Campaign) -> Engine:
+        rid = campaign.ruleset_id
+        if not rid or rid == engine.ruleset_id:
+            return engine
+        key = (rid, campaign.ruleset_version)
+        if key not in siblings:
+            from uro_core.rulesets.registry import resolve
+
+            try:
+                ruleset = resolve(rid, campaign.ruleset_version)
+            except KeyError as exc:  # pinned to a ruleset this build doesn't have
+                raise ValueError(
+                    f"campaign {campaign.campaign_id} is bound to ruleset {rid!r}, which this "
+                    "server doesn't have"
+                ) from exc
+            siblings[key] = engine.with_ruleset(ruleset)
+        return siblings[key]
+
     async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[str]:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             return
-        # The server binds ONE ruleset per process (docs/08 deferral); a campaign pinned to a
-        # DIFFERENT ruleset would otherwise crash deep in sheet validation. Reject up front with a
-        # clear diagnostic instead (D-30 per-campaign binding; the CLI play path rebinds correctly).
-        if campaign.ruleset_id and engine.ruleset_id and campaign.ruleset_id != engine.ruleset_id:
-            raise ValueError(
-                f"campaign {campaign_id} is bound to ruleset {campaign.ruleset_id!r}, but this "
-                f"server runs {engine.ruleset_id!r} — start `uro serve --ruleset "
-                f"{campaign.ruleset_id}` (one ruleset per server process)"
-            )
-        async for chunk in engine.run_beat_stream(campaign, participant, text):
+        async for chunk in engine_for(campaign).run_beat_stream(campaign, participant, text):
             yield chunk
 
     async def report_outcome(campaign_id: str, bundle_json: dict[str, Any]) -> dict[str, Any]:
@@ -309,17 +324,11 @@ def engine_deps(
     async def preview_beat(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
         # BE-5 dry-run: run the full pipeline (plan→narrate→extract) and return the would-be events,
         # committing NOTHING. Intent-only (no `plan=`, D-37 — a network plan would need the D-32
-        # ceiling; this path never accepts one). Same one-ruleset-per-process guard as run_beat.
+        # ceiling; this path never accepts one). Plays under the campaign's ruleset, like run_beat.
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
-        if campaign.ruleset_id and engine.ruleset_id and campaign.ruleset_id != engine.ruleset_id:
-            raise ValueError(
-                f"campaign {campaign_id} is bound to ruleset {campaign.ruleset_id!r}, but this "
-                f"server runs {engine.ruleset_id!r} — start `uro serve --ruleset "
-                f"{campaign.ruleset_id}` (one ruleset per server process)"
-            )
-        events = await engine.preview_beat(campaign, participant, intent)
+        events = await engine_for(campaign).preview_beat(campaign, participant, intent)
         return [e.model_dump() for e in events]
 
     def list_rulesets() -> list[dict[str, Any]]:
@@ -1745,7 +1754,7 @@ def create_app(
         try:
             events = await deps.preview_beat(campaign_id, participant or "", intent)
         except (ValueError, KeyError) as exc:
-            # ValueError: a different-ruleset pin (one ruleset/process). KeyError: an unbound router
+            # ValueError: a ruleset this build doesn't have. KeyError: an unbound router
             # role (a residual incomplete-registry gap) → clean 400, not a raw 500.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"events": events}

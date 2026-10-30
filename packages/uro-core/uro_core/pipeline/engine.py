@@ -115,6 +115,25 @@ def _hash_messages(messages: list[Message]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+class _Shared:
+    """What an Engine shares with its `with_ruleset` siblings: one router (a reload reaches every
+    sibling), the per-branch style cache, and the per-branch react locks."""
+
+    def __init__(self, router: ProviderRouter) -> None:
+        self.router = router
+        # Per-branch prompt style (tone) + template env, from the world's pack (docs/09). Cached.
+        self.style_cache: dict[str, tuple[str, PromptEnv]] = {}
+        # Per-branch lock serializing the Reaction pass IN-PROCESS (computation-tier review, D-34):
+        # adjust_counter is a non-atomic read-modify-write (read via get_counter, later append the
+        # baked absolute), so two react() passes that interleave on one branch lose an increment.
+        # Round-robin serializes distinct-participant WS beats but NOT the un-arbitered Chronicler
+        # POST path nor one participant on two connections — this lock covers both within a
+        # process, and is SHARED by sibling engines so a second ruleset can't open a second lock
+        # on the same branch. Cross-PROCESS serialization stays the named P7 `expected_head`
+        # deferral.
+        self.react_locks: dict[str, asyncio.Lock] = {}
+
+
 class Engine:
     """Embeddable engine entry point. Wired with concrete adapters by the CLI/server."""
 
@@ -129,7 +148,7 @@ class Engine:
         bare: bool = False,
     ) -> None:
         self._store = store
-        self._router = router
+        self._shared = _Shared(router)
         # The bound ruleset enables the planner + mechanics gate (D-28). None → Phase-1 flow.
         self._ruleset = ruleset
         self._recency = recency
@@ -137,15 +156,34 @@ class Engine:
         # bare = ablation baseline (thesis T1): a raw-transcript GM — no structured/
         # semantic recall, no extraction, no memory. Just the narrator over recent beats.
         self._bare = bare
-        # Per-branch prompt style (tone) + template env, from the world's pack (docs/09). Cached.
-        self._style_cache: dict[str, tuple[str, PromptEnv]] = {}
-        # Per-branch lock serializing the Reaction pass IN-PROCESS (computation-tier review, D-34):
-        # adjust_counter is a non-atomic read-modify-write (read via get_counter, later append the
-        # baked absolute), so two react() passes that interleave on one branch lose an increment.
-        # Round-robin serializes distinct-participant WS beats but NOT the un-arbitered Chronicler
-        # POST path nor one participant on two connections — this lock covers both within a process.
-        # Cross-PROCESS serialization stays the named P7 `expected_head` deferral.
-        self._react_locks: dict[str, asyncio.Lock] = {}
+
+    def with_ruleset(self, ruleset: Ruleset | None) -> Engine:
+        """A sibling engine bound to another ruleset (a server hosting campaigns of several
+        rulesets). Same store and settings, and the SAME shared state: router, style cache, and
+        react locks — so a reload reaches it, and a branch's react pass stays serialized whichever
+        ruleset's engine runs it."""
+        sibling = Engine(
+            self._store,
+            self._shared.router,
+            ruleset=ruleset,
+            recency=self._recency,
+            semantic_k=self._semantic_k,
+            bare=self._bare,
+        )
+        sibling._shared = self._shared
+        return sibling
+
+    @property
+    def _router(self) -> ProviderRouter:
+        return self._shared.router
+
+    @property
+    def _style_cache(self) -> dict[str, tuple[str, PromptEnv]]:
+        return self._shared.style_cache
+
+    @property
+    def _react_locks(self) -> dict[str, asyncio.Lock]:
+        return self._shared.react_locks
 
     def rebind_router(self, router: ProviderRouter) -> None:
         """Swap the provider router in place (D-47 slice 4: reload-without-restart). The engine is
@@ -156,8 +194,9 @@ class Engine:
         use a MIX of the old and new routers. Both are complete, valid routers (an incomplete one is
         refused at build time — see `build_router_from_registry`), so the worst case is a single
         mixed-provider beat, never a crash or a leak. A true per-beat router snapshot (thread one
-        router through the pipeline helpers) is the clean fix — deferred, low-impact."""
-        self._router = router
+        router through the pipeline helpers) is the clean fix — deferred, low-impact. Siblings
+        from `with_ruleset` share the router, so this rebinds them too."""
+        self._shared.router = router
 
     @property
     def router(self) -> ProviderRouter:

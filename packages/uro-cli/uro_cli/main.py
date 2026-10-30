@@ -520,7 +520,9 @@ def serve(
     provider: str = typer.Option("stub", help="stub | local | openai | anthropic"),
     model: str = typer.Option(None, help="model id for the provider"),
     ruleset: str = typer.Option(
-        "", help="ruleset id for this server process (default: uro-basic via the registry)"
+        "",
+        help="the default ruleset, for campaigns that pin none (default uro-basic); every pinned "
+        "campaign plays under its own",
     ),
     arbiter_kind: str = typer.Option(
         None,
@@ -541,9 +543,8 @@ def serve(
     """Run the Uro server (docs/08): a thin FastAPI shell over the engine. Each --token maps to
     a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop).
 
-    NOTE (PoC limitation): the server binds ONE ruleset per process (--ruleset), since its single
-    Engine is shared across campaigns. Per-campaign rebinding (as the `play`/`dry-run` CLI paths
-    do from campaign.ruleset_id) needs the Engine to resolve the ruleset per beat — deferred."""
+    Each campaign plays under the ruleset it pinned, as with `uro play`: one server hosts d20,
+    PbtA and Uro Pool campaigns side by side. `--ruleset` sets the default for unpinned ones."""
     import uvicorn
     from uro_core.pipeline.engine import Engine
     from uro_core.session import PartyArbiter, ProposalWindowArbiter, TurnArbiter, VoteArbiter
