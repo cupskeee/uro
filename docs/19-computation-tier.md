@@ -7,7 +7,8 @@
 > **2 confirmed (one root cause) → fixed** (a per-branch in-process `_react_lock` serializing
 > `adjust_counter`'s read-modify-write against the un-arbitered Chronicler POST path + a
 > multi-connection participant; P2 replay + P3 lethal-proxy confirmed clean). **D-34 is in
-> `decisions.md`.** C3–C6 remain staged (below), to build on further evidence.
+> `decisions.md`.** C3–C5 shipped later (#13); C6 and computed-delta shipped 2026-10-30 (D-54, D-53 —
+> see the updates below).
 >
 > **Update (2026-10-30, D-53):** computed-delta arithmetic SHIPPED — the owner opted in. `set_counter.value`
 > / `adjust_counter.delta` accept a bounded INTEGER expression tree (literal · counter read · `add`/`sub`/
@@ -159,8 +160,8 @@ games flagged) — ship it *with* the numbers.
    > Plus: empty-`roll_table` ZeroDivision, a subject-less-rumor scope hole, `_substitute` `do`-corruption,
    > and the dead `where` filter (removed). No wire/canon-retraction leak found.
 6. **INC-C6 — SHIPPED (D-54, 2026-10-30; review folded into the stretch's holistic pass):** bounded fail-closed cascade
-   re-entry + make `CounterChanged` triggerable. Covers RL-12. **Still deferred** (touches `react()`'s
-   single-hop invariant; its own review).
+   re-entry + make `CounterChanged` triggerable. Covers RL-12. Its cross-phase review ran as part of
+   the stretch's holistic review; D-59 fixed what it found (a no-op write re-firing the cascade).
 7. **Computed-delta arithmetic — SHIPPED (D-53, 2026-10-30).** The economy-formula half, as a bounded
    integer expression in `set_counter`/`adjust_counter` (see the status note at the top).
 

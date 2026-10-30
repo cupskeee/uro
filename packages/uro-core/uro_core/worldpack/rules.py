@@ -596,7 +596,34 @@ class Rule(BaseModel):
             )
         if self.when is not None:  # RL-6: fence $trigger.<field> refs in the `when` tree
             _check_trigger_refs(self.when, ev, self.id)
+        _check_action_trigger_refs(self.then, self.id)
         return self
+
+
+def _check_action_trigger_refs(actions: list[Action], rule_id: str) -> None:
+    """`$trigger.<field>` is substituted ONLY inside a for_each (its `from` and `apply`); in any
+    other action — or a roll_table outcome, or an expression's counter read — it would be written
+    out literally as an entity ref. Reject it at parse, not commit a nonsense ref (D-59)."""
+
+    def refs(value: object) -> list[str]:
+        if isinstance(value, str):
+            return [value] if value.startswith(_TRIGGER_PREFIX) else []
+        if isinstance(value, dict):
+            return [r for v in value.values() for r in refs(v)]
+        if isinstance(value, list):
+            return [r for v in value for r in refs(v)]
+        return []
+
+    for action in actions:
+        if action.do == "for_each":
+            continue
+        found = refs(action.model_dump())
+        if found:
+            raise ValueError(
+                f"rule {rule_id!r}: {found[0]!r} in a {action.do} action is never substituted — "
+                "`$trigger.<field>` binds only inside a for_each (its `from` and `apply`); here it "
+                "would be written literally as an entity ref"
+            )
 
 
 class AgendaRule(BaseModel):
@@ -616,6 +643,7 @@ class AgendaRule(BaseModel):
         # it loudly at parse (RL-6) rather than fail-closed-and-silent at runtime.
         if self.when is not None:
             _check_trigger_refs(self.when, None, self.id)
+        _check_action_trigger_refs(self.then, self.id)
         return self
 
 

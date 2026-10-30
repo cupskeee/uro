@@ -109,6 +109,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   overwriting their belief, losing who they heard it from and how unsure they were; repeating a
   fact minted a duplicate claim; repeating a module rumor folded the claim into it, so rumor expiry
   could retract it. All three are fixed, and a plot that ended may now recur in the same words.
+- **Rule-pack counter fixes (D-59).** A counter write that doesn't change the value no longer
+  emits an event, so a rule that caps a counter can't re-fire itself until the cascade limit; a
+  plain number in `set_counter`/`adjust_counter` clamps again as it did before computed writes
+  (only expressions fail closed); and `$trigger.<field>` outside a `for_each` — where it was never
+  substituted and silently became a literal reference — is now rejected when the pack loads.
 
 ## [0.4.0] - 2026-10-30
 
