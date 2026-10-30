@@ -9,6 +9,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-30
+
+0.3.0 was cut as a GitHub Release but never published to PyPI, so on PyPI this release follows
+0.2.0 directly — see the [0.3.0 release notes](https://github.com/cupskeee/uro/releases/tag/v0.3.0)
+for everything else it brings (the HTTP management surface and the D-47 model-connection registry).
+
 ### Added
 - **Emergent world-building is now RELATIONAL (D-50).** Extending D-49: the extractor also proposes
   **factions** and **threads**, and — the core idea — actors/places carry **affiliations** (an actor
@@ -47,6 +53,44 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   the model proposes it. Disabling `extract_claims` also drops beliefs and degrades recall (the
   engine relies on them) — the forthcoming Loom toggle UI disclaims this. Threads/Factions remain
   authored-only (from world packs); no emergent extractor, so no toggle.
+- **Codex (ChatGPT-subscription) provider — engine (D-47).** A new `codex` provider kind that
+  authenticates via OpenAI's OAuth **device-authorization** flow (a consumer ChatGPT login, not an
+  API key) and does inference against the ChatGPT backend's **Responses API**
+  (`chatgpt.com/backend-api/codex`). `providers/codex_auth.py` implements the device-code request →
+  poll → token exchange → refresh lifecycle (PKCE is server-managed; the verifier returns from the
+  poll); `providers/adapters/codex.py` translates uro's message list into the Responses
+  `instructions`+`input` shape and parses its SSE, with a forced-refresh retry on 401. The registry
+  gains a refresh-capable `CodexTokenSource` (persists rotated tokens via a new
+  `update_credential_tokens`) for the router path. Codex can back chat roles (narrator/planner/
+  extractor/default) but NOT the embedder (the backend has no embedding endpoint). ⚠️ Unofficial:
+  this uses Codex's public client id against a consumer subscription and may breach OpenAI's terms;
+  endpoints/client-id/User-Agents are env-overridable (`URO_CODEX_*`). The server device-flow
+  endpoints and the CLI login ship in this release too (below).
+- **Codex provider — server device-flow endpoints (D-47).** Two operator-only routes drive the
+  OAuth login over the API: `POST /providers/codex/start` (optional `{name}`) mints a device code
+  and returns `{login_id, user_code, verification_uri, interval, expires_in}` to display; `POST
+  /providers/codex/poll {login_id}` returns `{status:"pending"}` until the user approves, then
+  exchanges the grant and creates a codex credential (`auth_mode=oauth_device`) + connection (with
+  discovered models; a failed connection insert rolls the credential back), returning
+  `{status:"connected", connection_id, ...}`. Pending
+  logins live in an in-memory store keyed by an unguessable handle (single-process; a multi-worker
+  deploy would need shared state). No token is ever returned to the client.
+- **Codex provider — `uro provider codex-login` CLI (D-47).** Connects a Codex provider from the
+  command line via the OAuth device flow: prints the code to enter on the authorization page (and
+  opens it in a browser unless `--no-browser`), polls until you approve, then stores the encrypted
+  credential + a `codex` connection (with discovered models) directly in the registry — no running
+  server needed. `--name` labels the connection.
+- **`.env` support.** The `uro` CLI auto-loads a `.env` from the working directory at startup
+  (via `python-dotenv`, `usecwd=True`), so `URO_SECRET_KEY` / provider keys / `URO_DATABASE_URL`
+  need only live in `.env` rather than be exported by hand. An already-exported env var still wins
+  (dotenv never overrides). A committed `.env.example` documents the vars (incl. the Fernet-key
+  one-liner for `URO_SECRET_KEY`).
+
+### Changed
+- **Raised dependency floors.** `uro-core` now requires `pydantic>=2.13.5`, `uro-server`
+  `fastapi>=0.141.1`, and `uro-cli` `typer>=0.27.2` plus the new `python-dotenv>=1.0` (for `.env`
+  support). Tooling moved to ruff 0.16 (its formatter now skips Markdown, so docs keep their
+  hand-aligned code samples).
 
 ### Fixed
 - **Codex inference: drop parameters the restricted backend rejects (D-47).** The live test surfaced
@@ -64,28 +108,6 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   header) and includes it in the `ProviderError`, and the `test` probe surfaces that detail for
   codex (its adapter builds the message token-free), so a failure says *why* (`HTTP 400 — …`) instead
   of a bare `ProviderError`.
-
-### Added
-- **Codex (ChatGPT-subscription) provider — engine (D-47).** A new `codex` provider kind that
-  authenticates via OpenAI's OAuth **device-authorization** flow (a consumer ChatGPT login, not an
-  API key) and does inference against the ChatGPT backend's **Responses API**
-  (`chatgpt.com/backend-api/codex`). `providers/codex_auth.py` implements the device-code request →
-  poll → token exchange → refresh lifecycle (PKCE is server-managed; the verifier returns from the
-  poll); `providers/adapters/codex.py` translates uro's message list into the Responses
-  `instructions`+`input` shape and parses its SSE, with a forced-refresh retry on 401. The registry
-  gains a refresh-capable `CodexTokenSource` (persists rotated tokens via a new
-  `update_credential_tokens`) for the router path. Codex can back chat roles (narrator/planner/
-  extractor/default) but NOT the embedder (the backend has no embedding endpoint). ⚠️ Unofficial:
-  this uses Codex's public client id against a consumer subscription and may breach OpenAI's terms;
-  endpoints/client-id/User-Agents are env-overridable (`URO_CODEX_*`). Server device-flow endpoints,
-  the CLI login, and the Loom authorize-modal UI follow in later slices.
-- **`.env` support.** The `uro` CLI auto-loads a `.env` from the working directory at startup
-  (via `python-dotenv`, `usecwd=True`), so `URO_SECRET_KEY` / provider keys / `URO_DATABASE_URL`
-  need only live in `.env` rather than be exported by hand. An already-exported env var still wins
-  (dotenv never overrides). A committed `.env.example` documents the vars (incl. the Fernet-key
-  one-liner for `URO_SECRET_KEY`).
-
-### Fixed
 - **OpenAI o-series reasoning models (o1/o3/o4-mini/…) were rejected by the adapter.** The
   `openai_compat` adapter hardcoded `temperature` and `max_tokens` in every request, but o-series
   reasoning models 400 on both (they require `max_completion_tokens` and accept only the default
@@ -100,20 +122,6 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   temperature since the role temperature can't be honored; and the oldest o1-preview/o1-mini also
   reject the `system` role and json-mode `response_format`, which is not yet remediated (so those
   two on the extractor/planner can still 400 — o3-mini/o4-mini accept both).
-- **Codex provider — server device-flow endpoints (D-47).** Two operator-only routes drive the
-  OAuth login over the API: `POST /providers/codex/start` (optional `{name}`) mints a device code
-  and returns `{login_id, user_code, verification_uri, interval, expires_in}` to display; `POST
-  /providers/codex/poll {login_id}` returns `{status:"pending"}` until the user approves, then
-  exchanges the grant and creates a codex credential (`auth_mode=oauth_device`) + connection (with
-  discovered models; a failed connection insert rolls the credential back), returning
-  `{status:"connected", connection_id, ...}`. Pending
-  logins live in an in-memory store keyed by an unguessable handle (single-process; a multi-worker
-  deploy would need shared state). No token is ever returned to the client.
-- **Codex provider — `uro provider codex-login` CLI (D-47).** Connects a Codex provider from the
-  command line via the OAuth device flow: prints the code to enter on the authorization page (and
-  opens it in a browser unless `--no-browser`), polls until you approve, then stores the encrypted
-  credential + a `codex` connection (with discovered models) directly in the registry — no running
-  server needed. `--name` labels the connection.
 - **Provider `test` picked a bad canary model (D-47).** The connection-level `POST /providers/{id}/test`
   probe, when given no model, no longer implicitly uses the head of the discovered list — that list
   is returned SORTED, so an OpenAI connection led with `babbage-002`, a legacy base-completion model
@@ -486,7 +494,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cupskeee/uro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cupskeee/uro/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cupskeee/uro/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cupskeee/uro/releases/tag/v0.1.0
