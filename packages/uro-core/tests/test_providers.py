@@ -6,7 +6,9 @@ import httpx
 import pytest
 from uro_core.errors import ProviderError
 from uro_core.providers.adapters.openai_compat import OpenAICompatProvider
+from uro_core.providers.adapters.stub import StubProvider
 from uro_core.providers.base import CompletionRequest, Message
+from uro_core.providers.router import ProviderRouter
 
 
 def _transport(sse_body: str) -> httpx.MockTransport:
@@ -138,3 +140,14 @@ async def test_chat_model_keeps_max_tokens_and_temperature() -> None:
     assert seen["max_tokens"] == 7
     assert "max_completion_tokens" not in seen
     assert "temperature" in seen
+
+
+def test_router_reports_the_model_serving_a_role() -> None:
+    # Metering reads this so llm_calls.model is filled (it was NULL on every row).
+    narrator = OpenAICompatProvider(model="gpt-test-narrator", api_key="k")
+    default = OpenAICompatProvider(model="gpt-test-default", api_key="k")
+    router = ProviderRouter({"narrator": narrator}, default=default)
+    assert router.model_for("narrator") == "gpt-test-narrator"
+    assert router.model_for("extractor") == "gpt-test-default"  # unbound → the default's model
+    assert ProviderRouter({}, default=StubProvider()).model_for("narrator") is None  # no model
+    assert ProviderRouter({}).model_for("narrator") is None  # nothing serves it

@@ -128,7 +128,7 @@ The INTENDED per-template context contract (Jinja2, `StrictUndefined` — shippe
 
 ## Provider request contract
 
-`CompletionRequest` = messages + `role` + `stage_tag` + optional `schema` + sampling params + optional seed. Every response records to `llm_calls` (`07`): prompt hash, model, tokens in/out, latency, stage_tag — powering `GET /usage`, recorded-response replay, and the test fixtures in `14-development-guide.md`.
+`CompletionRequest` = messages + `role` + `stage_tag` + optional `schema` + sampling params + optional seed. Every LLM call records to `llm_calls` (`07`): prompt hash, the model serving the stage (`ProviderRouter.model_for`; null for a provider that exposes none, e.g. the stub), latency, stage_tag — powering `GET /usage`. Token counts (columns reserved) and response capture are **not recorded yet** — the provider port returns text only — so recorded-response replay isn't built; tests use scripted/mock providers (`14-development-guide.md`).
 
 ## Latency budget
 

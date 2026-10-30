@@ -51,7 +51,7 @@ Projections are rebuildable caches keyed by branch (current-state tables are per
 
 **Fork semantics — copy-on-fork (D-20).** Creating a branch materializes the new branch's projection rows from the nearest snapshot + replay: a bounded copy, no copy-on-write cleverness. At PoC scale, paying one projection build per fork is the honest price for keeping every query simple and branch-local. Embeddings are the deliberate exception: vectors live exactly once in `embeddings(content_hash, vector)`, and only lightweight `memory_index(branch_id, content_hash, entity_refs, commit_id)` membership rows are copied. Forking never re-embeds anything, and semantic recall stays a plain branch-filtered pgvector query — instead of a commit-ancestry reachability check that no vector index can serve.
 
-Also stored: `llm_calls` (prompt hash, response, tokens, latency, stage tag — powers usage metering, recorded-response replay, and debugging; **prunable**, never part of world truth) and `probe_reports`.
+Also stored: `llm_calls` (prompt hash, model, latency, stage tag — powers usage metering; the token columns exist but aren't filled yet, and the response text isn't stored, so recorded-response replay isn't built — an unusable extractor response is logged as an excerpt instead; **prunable**, never part of world truth) and `probe_reports`.
 
 ## Events in motion (bus)
 

@@ -51,6 +51,11 @@ class OpenAICompatProvider:
         self._timeout = timeout
         self._transport = transport  # test seam; None = real network transport
 
+    @property
+    def model(self) -> str:
+        """The model id this adapter calls — read by `ProviderRouter.model_for` for metering."""
+        return self._model
+
     def _apply_sampling(self, body: dict[str, object], req: CompletionRequest) -> None:
         """Add the temperature + token-cap fields to `body`, dialect-aware. o-series reasoning
         models take `max_completion_tokens` (not `max_tokens`) and reject a non-default
