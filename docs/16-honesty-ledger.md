@@ -107,7 +107,8 @@ rumor via `claim_truth_changed` (C5, D-34/#13), and the `remove_edge` action emi
 `ActorDamaged` is **legacy** (replay-compat handler retained; the current harm path is opaque
 `SheetUpdated`, D-30).
 Other reserved: `TEMPLATE_API_VERSION` (pack pin),
-the transactional outbox + async event bus (docs/07 — the shipped model is inline-projector-in-txn),
+a full async event bus beyond the outbox's in-process publisher (the transactional outbox + NATS relay
+shipped as D-57 — projections stay inline-in-txn),
 `uro world delete` (privacy wipe), persisted probe reports, the per-campaign expected-head
 concurrency guard, consequence-gating (D-21), the `entity_index` (OQ-3). (The **REST management
 surface** is no longer fully reserved — B3/#12 shipped the authed CRUD/read core over the

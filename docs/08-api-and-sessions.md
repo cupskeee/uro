@@ -235,6 +235,8 @@ uro world export ashfall -o ashfall.uwp   # hash-chain-stamped bundle;  uro worl
 uro serve --token alice --token bob       # run the server;  uro connect <campaign> --server URL --token alice  (WS client)
 uro serve --token dev --cors-origin http://localhost:5173   # allow a browser SPA (uro-loom) — see "Browser access" below
 uro usage <campaign>
+uro outbox status                         # committed beats waiting to be published (D-57)
+uro outbox relay --nats nats://localhost:4222 [--once]   # publish them to NATS JetStream
 ```
 
 `uro play` and `uro dry-run` are the two commands the whole roadmap's acceptance tests run through.
