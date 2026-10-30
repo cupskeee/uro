@@ -165,4 +165,6 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
 
 - **D-52 — play resolves its own plots:** the extractor may move a live EMERGENT thread to `resolved` when the narration settles it (the one mutation in its whitelist; authored threads stay with the author — they can drive pack rules). Live: resolved at exactly the right beat in a scripted scenario, 0 false positives on three replayed stories.
 
-Next (owner-agreed stretch, 2026-10-30): the speculative horizon items — C6/computed-delta (OQ-1), an srd51 ruleset, the entity_index (OQ-3), NATS-backed distribution — then ONE holistic adversarial review; the staged **C6 / computed-delta (OQ-1)** on evidence; or the rest of the **Post-PoC horizon** (docs/10). Diminishing returns on the remaining strands.
+- **D-53 — computed counter writes:** `set_counter`/`adjust_counter` take a bounded integer expression over other counters (economy formulas), parse-capped, fail-closed on divide-by-zero/overflow, stored absolute. `RULES_API_VERSION` 5→6.
+
+Next (owner-agreed stretch, 2026-10-30): C6 bounded cascade, an ORIGINAL third ruleset (srd51 declined — it recreates D&D 5e), the entity_index (OQ-3), NATS-backed distribution — then ONE holistic adversarial review (Opus 5.5, medium); the staged **C6 / computed-delta (OQ-1)** on evidence; or the rest of the **Post-PoC horizon** (docs/10). Diminishing returns on the remaining strands.

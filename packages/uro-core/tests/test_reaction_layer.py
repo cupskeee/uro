@@ -1511,3 +1511,152 @@ async def test_rl6_trigger_free_when_evaluated_once_not_per_event(
     events = [actor_died(actor_id=f"a:{i}") for i in range(5)]
     fired = await evaluate_rules(store, branch, rules=rules, trigger_events=events, world_day=0)
     assert any(f.rule_id == "b-fires" for f in fired)  # not starved by a-hog's 5 events
+
+
+# --- D-53 (OQ-1): computed counter writes -----------------------------------------------------
+
+
+async def _counters(store: PostgresEventStore, values: dict[tuple[str, str], int]) -> str:
+    world = await store.create_world(f"calc-{new_id()}")
+    branch = world.main_branch_id
+    await store.append_beat(
+        branch,
+        [counter_changed(scope_ref=r, key=k, to_value=v) for (r, k), v in values.items()],
+    )
+    return branch
+
+
+async def _compute(store: PostgresEventStore, branch: str, *actions: dict):  # type: ignore[no-untyped-def]
+    from pydantic import TypeAdapter
+    from uro_core.engines.rules import FiredAction
+    from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+    from uro_core.worldpack.rules import Action, Scope
+
+    adapter: TypeAdapter[Action] = TypeAdapter(Action)
+    fired = [
+        FiredAction(
+            rule_id="calc", scope=Scope(world=True), action=adapter.validate_python(a), index=i
+        )
+        for i, a in enumerate(actions)
+    ]
+    result = await run_rules_gauntlet(store, branch, fired, trigger_commit="c1")
+    await store.append_beat(branch, result.events)
+    return result
+
+
+def _c(ref: str, key: str) -> dict:  # type: ignore[type-arg]
+    return {"counter": {"scope_ref": ref, "key": key}}
+
+
+async def test_computed_delta_runs_an_economy_formula(store: PostgresEventStore) -> None:
+    # RL-2 (docs/19), the formula the literal-only tier couldn't express:
+    # gold += holdings * 5 - upkeep * strength   →  10 + 4*5 - 2*3 = 24
+    branch = await _counters(
+        store,
+        {("f:h", "gold"): 10, ("f:h", "holdings"): 4, ("f:h", "upkeep"): 2, ("f:h", "strength"): 3},
+    )
+    delta = {
+        "op": "sub",
+        "args": [
+            {"op": "mul", "args": [_c("f:h", "holdings"), 5]},
+            {"op": "mul", "args": [_c("f:h", "upkeep"), _c("f:h", "strength")]},
+        ],
+    }
+    await _compute(
+        store, branch, {"do": "adjust_counter", "scope_ref": "f:h", "key": "gold", "delta": delta}
+    )
+    assert await store.get_counter(branch, "f:h", "gold") == 24
+
+
+async def test_computed_writes_read_earlier_writes_in_the_same_pass(
+    store: PostgresEventStore,
+) -> None:
+    # RL-6: strength += gold // 10, THEN gold %= 10 — order matters, and the second sees the first.
+    branch = await _counters(store, {("f:h", "gold"): 24, ("f:h", "strength"): 3})
+    await _compute(
+        store,
+        branch,
+        {
+            "do": "adjust_counter",
+            "scope_ref": "f:h",
+            "key": "strength",
+            "delta": {"op": "div", "args": [_c("f:h", "gold"), 10]},
+        },
+        {
+            "do": "set_counter",
+            "scope_ref": "f:h",
+            "key": "gold",
+            "value": {"op": "mod", "args": [_c("f:h", "gold"), 10]},
+        },
+    )
+    assert await store.get_counter(branch, "f:h", "strength") == 5
+    assert await store.get_counter(branch, "f:h", "gold") == 4
+
+
+async def test_an_undefined_expression_fails_closed(store: PostgresEventStore) -> None:
+    branch = await _counters(store, {("f:h", "gold"): 7, ("f:h", "zero"): 0})
+    by_zero = {"op": "div", "args": [_c("f:h", "gold"), _c("f:h", "zero")]}
+    huge = {"op": "mul", "args": [10**9, 10**9, 10**9]}
+    result = await _compute(
+        store,
+        branch,
+        {"do": "set_counter", "scope_ref": "f:h", "key": "gold", "value": by_zero},
+        {"do": "adjust_counter", "scope_ref": "f:h", "key": "gold", "delta": huge},
+    )
+    assert result.events == []  # nothing written — never a silently clamped or guessed value
+    assert [d.reason for d in result.drops] == ["div by zero", "expression value out of range"]
+    assert await store.get_counter(branch, "f:h", "gold") == 7
+
+
+async def test_for_each_binds_counter_reads_inside_an_expression(store: PostgresEventStore) -> None:
+    # Sum an alliance's strength: the bind var reaches the counter ref nested in the expression —
+    # and a bind var spelled like an op ("add") never corrupts the op itself.
+    branch = await _counters(store, {("f:b", "strength"): 4, ("f:c", "strength"): 6})
+    await store.append_beat(
+        branch,
+        [
+            edge_added(src="f:a", rel_type="allied_with", dst="f:b"),
+            edge_added(src="f:a", rel_type="allied_with", dst="f:c"),
+        ],
+    )
+    await _compute(
+        store,
+        branch,
+        {
+            "do": "for_each",
+            "traverse": "allied_with",
+            "from": "f:a",
+            "as": "add",
+            "apply": [
+                {
+                    "do": "adjust_counter",
+                    "scope_ref": "f:a",
+                    "key": "allied_strength",
+                    "delta": {"op": "add", "args": [_c("add", "strength"), 0]},
+                }
+            ],
+        },
+    )
+    assert await store.get_counter(branch, "f:a", "allied_strength") == 10
+
+
+def test_expression_size_and_depth_are_capped_at_parse() -> None:
+    from pydantic import TypeAdapter, ValidationError
+    from uro_core.worldpack.rules import Action
+
+    adapter: TypeAdapter[Action] = TypeAdapter(Action)
+    deep: object = 1
+    for _ in range(7):
+        deep = {"op": "add", "args": [deep, 1]}
+    wide = {"op": "add", "args": [{"op": "add", "args": [1] * 8} for _ in range(8)]}
+    for expr in (deep, wide):
+        with pytest.raises(ValidationError):
+            adapter.validate_python(
+                {"do": "adjust_counter", "scope_ref": "f:h", "key": "g", "delta": expr}
+            )
+    at_limit: object = 1  # depth exactly 6 → accepted (the cap is where it says it is)
+    for _ in range(5):
+        at_limit = {"op": "add", "args": [at_limit, 1]}
+    adapter.validate_python(
+        {"do": "adjust_counter", "scope_ref": "f:h", "key": "g", "delta": at_limit}
+    )

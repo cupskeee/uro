@@ -29,10 +29,12 @@ from uro_core.domain.events import ThreadState
 # D-34). The additions are purely additive, so v1 packs (no counters) remain valid — the engine
 # accepts the whole SUPPORTED set; a pack outside it fails loud at parse. A counter-using pack
 # should declare 2 so an old (v1) engine rejects it with a clear version error.
-RULES_API_VERSION = 5
-# v5 (RL-6): $trigger.<field>-aware `when` + trigger.per_event. v4 (for_each/roll_table/
-# expire_claims), v3 multi-ref, v2 counters all still valid (a $trigger/per_event pack declares 5).
-_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4, 5})
+RULES_API_VERSION = 6
+# v6 (OQ-1, D-53): computed counter writes — set_counter.value / adjust_counter.delta take an
+# integer EXPRESSION over other counters. v5 (RL-6): $trigger.<field>-aware `when` +
+# trigger.per_event. v4 (for_each/roll_table/expire_claims), v3 multi-ref, v2 counters all still
+# valid (a literal int is still an expression, so no older pack changes meaning).
+_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 
 
 def _event_payload_fields() -> dict[str, frozenset[str]]:
@@ -152,6 +154,53 @@ class CounterRef(BaseModel):
     model_config = _STRICT
     scope_ref: str
     key: str
+
+
+# Computed counter writes (OQ-1, D-53): a bounded INTEGER expression tree — a literal, a counter
+# read, or an op over sub-expressions. Structured data, not a string: no parser, no eval, no float
+# (docs/19 "what NOT to build"). Size and depth are capped at parse; the gauntlet evaluates it with
+# read-your-writes and FAILS CLOSED (drops the write) on a zero divisor or an oversized value.
+_MAX_EXPR_NODES = 32
+_MAX_EXPR_DEPTH = 6
+ExprOpName = Literal["add", "sub", "mul", "div", "mod", "min", "max"]
+
+
+class ExprCounter(BaseModel):
+    """Read a counter's current value (counters are reads, like `counter_compare` — unfenced)."""
+
+    model_config = _STRICT
+    counter: CounterRef
+
+
+class ExprOp(BaseModel):
+    """An integer op over sub-expressions. `sub`/`div`/`mod` take exactly two; `div` floors
+    toward minus infinity and `mod` takes the divisor's sign (Python's `//`/`%` — deterministic)."""
+
+    model_config = _STRICT
+    op: ExprOpName
+    args: list[Expr] = Field(min_length=2, max_length=8)
+
+    @model_validator(mode="after")
+    def _arity(self) -> ExprOp:
+        if self.op in ("sub", "div", "mod") and len(self.args) != 2:
+            raise ValueError(f"'{self.op}' takes exactly 2 args (got {len(self.args)})")
+        return self
+
+
+Expr = Union[int, ExprCounter, ExprOp]  # noqa: UP007 (a recursive alias pydantic resolves by name)
+
+
+def _check_expr(expr: Expr) -> Expr:
+    """Cap an expression's size and depth at parse — evaluation cost is bounded before it runs."""
+
+    def walk(e: Expr, depth: int) -> int:
+        if depth > _MAX_EXPR_DEPTH:
+            raise ValueError(f"expression nests deeper than {_MAX_EXPR_DEPTH}")
+        return 1 + sum(walk(a, depth + 1) for a in e.args) if isinstance(e, ExprOp) else 1
+
+    if walk(expr, 1) > _MAX_EXPR_NODES:
+        raise ValueError(f"expression has more than {_MAX_EXPR_NODES} nodes")
+    return expr
 
 
 class CondCounterCompare(BaseModel):
@@ -305,14 +354,17 @@ class ActSetThreadState(BaseModel):
 
 # Computation Layer (docs/19, D-34): bounded integer-counter writes → CounterChanged events. The
 # gauntlet clamps to ±_MAX_COUNTER, scope-fences scope_ref, and accumulates within a pass
-# (read-your-writes). `adjust`'s delta is a LITERAL — computed-from-other-counter deltas (economy
-# formulas, RL-2/RL-6) are deliberately NOT in this tier (docs/19 OQ-1).
+# (read-your-writes). Since v6 (OQ-1, D-53) `value`/`delta` may be an EXPRESSION over other counters
+# (economy formulas, RL-2/RL-6) — evaluated at write time, then stored as an ABSOLUTE value as
+# before, so replay and forks never re-evaluate it.
 class ActSetCounter(BaseModel):
     model_config = _STRICT
     do: Literal["set_counter"]
     scope_ref: str
     key: str
-    value: int
+    value: Expr
+
+    _cap = field_validator("value")(_check_expr)
 
 
 class ActAdjustCounter(BaseModel):
@@ -320,7 +372,9 @@ class ActAdjustCounter(BaseModel):
     do: Literal["adjust_counter"]
     scope_ref: str
     key: str
-    delta: int
+    delta: Expr
+
+    _cap = field_validator("delta")(_check_expr)
 
 
 class ActResetCounter(BaseModel):
@@ -587,7 +641,8 @@ class RulePack(BaseModel):
         return v
 
 
-# resolve the recursive Condition forward refs
+# resolve the recursive Condition / Expr forward refs
+ExprOp.model_rebuild()
 CondAll.model_rebuild()
 CondAny.model_rebuild()
 CondNot.model_rebuild()
