@@ -4,8 +4,10 @@ Gauntlet tests inspect the events it produces; the engine test drives the full l
 with a scripted provider and shows extracted state resurfacing via recall.
 """
 
+import logging
 from collections.abc import AsyncIterator
 
+import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import DomainEvent, actor_created, claim_recorded
 from uro_core.domain.extraction_policy import ExtractionPolicy
@@ -322,6 +324,33 @@ async def test_extractor_falls_back_to_narration_only_after_exhausting_reasks(
     engine = Engine(store, ProviderRouter(bindings={}, default=provider))
     result = await engine.run_beat(campaign, "player-1", "I look around")
     assert result.commit_id and result.extracted == 0  # prose kept, no state (the honest fallback)
+
+
+async def test_unparseable_extraction_logs_the_last_response(
+    store: PostgresEventStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Observability: a narration-only fallback must say WHAT came back, or the lost beat can't be
+    # diagnosed after the fact (a live beat that named three NPCs committed nothing, D-51).
+    world = await store.create_world(f"reask3-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    provider = ScriptedProvider(completions=["nope", "still nope", "the model rambled"])
+    engine = Engine(store, ProviderRouter(bindings={}, default=provider))
+    with caplog.at_level(logging.WARNING, logger="uro_core.pipeline.engine"):
+        await engine.run_beat(campaign, "player-1", "I look around")
+    assert "the model rambled" in caplog.text
+
+
+async def test_metering_records_the_model_serving_each_stage(store: PostgresEventStore) -> None:
+    # llm_calls.model was never populated, so /usage grouped every call under model=NULL.
+    model = f"scripted-{new_id()}"
+    provider = ScriptedProvider()
+    provider.model = model  # an adapter exposes the model it calls
+    world = await store.create_world(f"meter-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    engine = Engine(store, ProviderRouter(bindings={}, default=provider))
+    await engine.run_beat(campaign, "player-1", "I look around")
+    stages = {r["stage_tag"] for r in await store.usage_by_stage() if r["model"] == model}
+    assert {"narrator", "extractor"} <= stages
 
 
 # --- D-50: emergent RELATIONAL world-building (cascade + edges + affiliation-aware dedup) --------

@@ -70,6 +70,8 @@ from uro_core.worldpack.rules import RulePack
 
 logger = logging.getLogger(__name__)
 
+_EXCERPT = 500  # chars of an unusable LLM response kept in the warning log, for diagnosis
+
 
 class BeatResult(BaseModel):
     beat_id: str
@@ -839,6 +841,7 @@ class Engine:
         integrity is never sacrificed to keep prose, and prose is never lost to keep state)."""
         _, env = await self._prompt_style(branch_id)
         messages = build_extractor_messages(recall, narration, env=env)
+        raw = ""
         for _ in range(3):  # 1 attempt + 2 re-asks (docs/13)
             started = time.perf_counter()
             try:
@@ -865,8 +868,13 @@ class Engine:
                     "Return ONLY the corrected JSON object, nothing else.",
                 ),
             ]
+        # Log an excerpt of the last response: without it a lost beat can't be diagnosed after the
+        # fact (a live beat that named three NPCs and committed nothing never could be, D-51).
         logger.warning(
-            "extractor output not parseable after re-asks; committing narration-only beat"
+            "extractor output not parseable after re-asks; committing narration-only beat. "
+            "Last response (first %d chars): %r",
+            _EXCERPT,
+            raw[:_EXCERPT],
         )
         return []
 
@@ -876,7 +884,10 @@ class Engine:
             latency_ms = int((time.perf_counter() - started) * 1000)
             await self._store.record_llm_call(
                 LLMCall(
-                    stage_tag=stage_tag, prompt_hash=_hash_messages(messages), latency_ms=latency_ms
+                    stage_tag=stage_tag,
+                    prompt_hash=_hash_messages(messages),
+                    latency_ms=latency_ms,
+                    model=self._router.model_for(stage_tag),
                 )
             )
         except Exception as exc:

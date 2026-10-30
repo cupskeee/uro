@@ -226,11 +226,8 @@ def _salvage[M: BaseModel](data: dict[str, Any], key: str, model: type[M]) -> li
         try:
             kept.append(model.model_validate(item))
         except Exception:  # ValidationError, or anything odd — a bad item never crashes the beat
-            continue
-    if len(kept) < len(raw_items):
-        logger.warning(
-            "extractor: dropped %d malformed '%s' item(s)", len(raw_items) - len(kept), key
-        )
+            # what was dropped, not just how many — so a lost fact can be diagnosed later
+            logger.warning("extractor: dropped a malformed '%s' item: %.200r", key, item)
     return kept
 
 

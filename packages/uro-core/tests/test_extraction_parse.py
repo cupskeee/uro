@@ -1,5 +1,8 @@
 """Extractor response parsing + the whitelist-by-schema property (no DB)."""
 
+import logging
+
+import pytest
 from uro_core.pipeline.extraction import (
     _is_role_noun,
     build_extractor_messages,
@@ -119,3 +122,9 @@ def test_role_noun_detection() -> None:
     for name in ("the Duke", "Ser Aldren Voss", "Mara", "de la Cruz"):
         assert not _is_role_noun(name), name
     assert not _is_role_noun("衛兵")  # no letter case → can't judge → never refused
+
+
+def test_a_dropped_item_is_logged_with_its_content(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="uro_core.pipeline.extraction"):
+        parse_extraction('{"actors":[{"role":"the nameless one"}]}')
+    assert "the nameless one" in caplog.text  # what was dropped, not just a count

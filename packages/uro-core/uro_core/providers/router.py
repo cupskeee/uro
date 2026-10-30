@@ -30,6 +30,12 @@ class ProviderRouter:
         an optional role (e.g. `dialogue` speech-routing) opt-in: bound → on, unbound → off."""
         return role in self._bindings
 
+    def model_for(self, role: str) -> str | None:
+        """The model id serving `role`, for metering — or None if nothing serves it or the provider
+        doesn't expose a `model` (the port doesn't require one; the stub has none)."""
+        model = getattr(self._bindings.get(role, self._default), "model", None)
+        return model if isinstance(model, str) and model else None
+
     async def stream(
         self,
         role: str,

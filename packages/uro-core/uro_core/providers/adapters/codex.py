@@ -46,6 +46,11 @@ class CodexResponsesProvider:
         self._timeout = timeout
         self._transport = transport  # test seam; None = real network transport
 
+    @property
+    def model(self) -> str:
+        """The model id this adapter calls — read by `ProviderRouter.model_for` for metering."""
+        return self._model
+
     def _body(self, req: CompletionRequest) -> dict[str, object]:
         # System messages become the Responses `instructions`; user/assistant turns become typed
         # input items (`input_text` vs `output_text`).

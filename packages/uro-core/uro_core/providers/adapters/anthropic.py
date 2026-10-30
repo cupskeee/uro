@@ -47,6 +47,11 @@ class AnthropicProvider:
         self._timeout = timeout
         self._transport = transport
 
+    @property
+    def model(self) -> str:
+        """The model id this adapter calls — read by `ProviderRouter.model_for` for metering."""
+        return self._model
+
     def _headers(self) -> dict[str, str]:
         return {
             "x-api-key": self._api_key,

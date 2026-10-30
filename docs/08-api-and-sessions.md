@@ -100,8 +100,8 @@ HTTP (BE-8):** `GET …/export` returns the whole world as a portable, SHA-256 h
 tampered bundle with `400` (`ExportError`) **before** any write, else re-instantiates a fresh world
 (remapped ids, projections rebuilt by replay). Both are **operator-only** (import a structural write
 → D-44; export bulk omniscient disclosure → D-45). **Telemetry + registry + world-scoped chronicle
-ship (BE-10):** `GET /usage[?stage=]` aggregates the `llm_calls` metering by engine stage (count,
-token sums, avg latency) — **operator-only** (D-44, it reveals model/token/latency cost); the engine
+ship (BE-10):** `GET /usage[?stage=]` aggregates the `llm_calls` metering by engine stage and model (count,
+token sums — 0 until token counts are recorded — avg latency) — **operator-only** (D-44, it reveals model/token/latency cost); the engine
 only *exposes* metering, it never bills (docs/00). `?world=`/`?campaign=` are **not supported yet**
 (the `llm_calls` rows carry no world/campaign column) and return `400` rather than silently ignoring
 the filter — a consumer never mistakes a global total for a per-world one; keying metering by

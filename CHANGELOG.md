@@ -46,6 +46,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   Codex). One such null silently dropped every actor, place, thread, and claim for that beat.
   Parsing now salvages per item: a null takes the field's default and a malformed item is dropped
   on its own (logged); only a response with no JSON object at all triggers a re-ask.
+- **LLM-call metering records the model.** `llm_calls.model` was never filled in, so `GET /usage`
+  grouped every call under a null model. Each metered call now records the model serving its
+  stage (the provider adapters expose it; a custom provider without a `model` attribute still
+  records null). Token counts are still not recorded.
+- **Extraction failures say what came back.** A narration-only fallback (an extractor response
+  still unparseable after re-asks) now logs the first 500 characters of the last response, and a
+  dropped malformed item logs its content — previously a lost beat couldn't be diagnosed. The docs
+  (07/08/13) no longer claim `llm_calls` stores responses or tokens.
 
 ## [0.4.0] - 2026-10-30
 
