@@ -9,7 +9,12 @@ from collections.abc import AsyncIterator
 
 import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.domain.events import DomainEvent, actor_created, claim_recorded
+from uro_core.domain.events import (
+    DomainEvent,
+    actor_created,
+    claim_recorded,
+    thread_created,
+)
 from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.engine import Engine
@@ -638,3 +643,59 @@ async def test_unnamed_speaker_keeps_testimony_without_a_belief(store: PostgresE
     claims = _of_type(events, "ClaimRecorded")
     assert len(claims) == 1 and claims[0].payload["truth"] == "unknown"
     assert _of_type(events, "ActorCreated") == [] and _of_type(events, "BeliefChanged") == []
+
+
+# --- D-52: thread resolution from play -------------------------------------------------------
+
+
+async def _emergent_thread(store: PostgresEventStore, branch: str, stakes: str) -> str:
+    events = await run_gauntlet(store, branch, Extraction(threads=[ProposedThread(stakes=stakes)]))
+    await store.append_beat(branch, events)
+    return str(_of_type(events, "ThreadCreated")[0].payload["thread_id"])
+
+
+async def test_play_resolves_a_live_emergent_thread(store: PostgresEventStore) -> None:
+    # Live (D-51): "the fleeing figure" stayed open after the story revealed it was Tavi.
+    branch = await _branch(store)
+    tid = await _emergent_thread(store, branch, "Who is the fleeing figure with the bracelet?")
+    ev = await run_gauntlet(store, branch, Extraction(resolves=[tid, tid]))
+    changed = _of_type(ev, "ThreadStateChanged")
+    assert len(changed) == 1  # a repeated id resolves once
+    p = changed[0].payload
+    assert (p["thread_id"], p["to_state"], p["from_state"]) == (tid, "resolved", "active")
+    await store.append_beat(branch, ev)
+    assert {t.thread_id: t.state for t in await store.list_threads(branch)}[tid] == "resolved"
+    recall = await assemble_recall(store, branch, "I look around", 8)
+    assert tid not in {t.thread_id for t in recall.active_threads}  # no longer a KNOWN thread
+
+
+async def test_resolution_refuses_authored_unknown_and_settled_threads(
+    store: PostgresEventStore,
+) -> None:
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            thread_created(  # ACTIVE, so only the authored rule can refuse it
+                thread_id="t:pack",
+                stakes="The succession war.",
+                state="active",
+                provenance="author",
+            )
+        ],
+    )
+    settled = await _emergent_thread(store, branch, "The missing villagers.")
+    resolved = await run_gauntlet(store, branch, Extraction(resolves=[settled]))
+    await store.append_beat(branch, resolved)
+    ev = await run_gauntlet(store, branch, Extraction(resolves=["t:pack", "t:nope", settled]))
+    assert _of_type(ev, "ThreadStateChanged") == []  # authored, unknown, already resolved
+    states = {t.thread_id: t.state for t in await store.list_threads(branch)}
+    assert states["t:pack"] == "active"
+
+
+async def test_threads_policy_gates_resolution(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    tid = await _emergent_thread(store, branch, "A war looms.")
+    off = ExtractionPolicy(extract_threads=False)
+    ev = await run_gauntlet(store, branch, Extraction(resolves=[tid]), policy=off)
+    assert _of_type(ev, "ThreadStateChanged") == []

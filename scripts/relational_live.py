@@ -14,6 +14,10 @@ from Postgres (the world is named in the output).
 
     uv run python scripts/relational_live.py               # registry models (keyed)
     uv run python scripts/relational_live.py --provider stub   # dry-run the driver
+    uv run python scripts/relational_live.py --scenario resolution   # a plot set up, then settled
+
+The `resolution` scenario (D-52) sets up a plot and then settles it, to check that the extractor
+resolves the thread when — and only when — the story actually ends it.
 """
 
 from __future__ import annotations
@@ -53,8 +57,22 @@ INTENTS = [
     "I ask the knight what the order plans to do about the trouble.",
 ]
 
+RESOLUTION = [
+    "I walk into the village of Millbrook and ask the innkeeper why everyone looks so worried.",
+    "I ask the innkeeper to tell me everything about the miller's missing daughter.",
+    "I promise to find her and ask where she was last seen.",
+    "I go to the old mill at the edge of the village to look for clues.",
+    "I search the mill loft carefully, calling out her name.",
+    "I follow the trail I find and keep searching until I find her.",
+    "I ask the girl what happened and whether she is hurt.",
+    "I bring the girl home to her father, the miller.",
+    "I tell the innkeeper the miller's daughter is safe and home.",
+]
 
-async def _main(provider: str) -> None:
+SCENARIOS = {"relational": INTENTS, "resolution": RESOLUTION}
+
+
+async def _main(provider: str, scenario: str) -> None:
     load_dotenv(find_dotenv(usecwd=True))  # URO_SECRET_KEY decrypts the registry's credentials
     store = PostgresEventStore(DSN)
     await store.connect()
@@ -66,7 +84,7 @@ async def _main(provider: str) -> None:
             if built is None:
                 raise SystemExit("the model-connection registry is empty (see `uro provider`)")
             router = built
-        world = await store.create_world(f"relational-live-{new_id()}")
+        world = await store.create_world(f"{scenario}-live-{new_id()}")
         sheet, ruleset_id = _build_pc_sheet()
         campaign = await store.start_campaign(
             world.world_id,
@@ -82,7 +100,7 @@ async def _main(provider: str) -> None:
         )
         print(f"world {world.name!r}  campaign {campaign.campaign_id}  ({provider})\n")
 
-        for i, intent in enumerate(INTENTS, 1):
+        for i, intent in enumerate(SCENARIOS[scenario], 1):
             narration = "".join(
                 [c async for c in engine.run_beat_stream(campaign, PARTICIPANT, intent)]
             )
@@ -109,4 +127,6 @@ async def _main(provider: str) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--provider", choices=["registry", "stub"], default="registry")
-    asyncio.run(_main(ap.parse_args().provider))
+    ap.add_argument("--scenario", choices=sorted(SCENARIOS), default="relational")
+    args = ap.parse_args()
+    asyncio.run(_main(args.provider, args.scenario))

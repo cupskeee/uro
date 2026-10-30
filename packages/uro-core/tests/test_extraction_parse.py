@@ -98,7 +98,7 @@ def test_extractor_sees_known_factions_and_threads() -> None:
     )
     user = build_extractor_messages(recall, "Ser Alden rides out.")[1].content
     assert "KNOWN FACTIONS:\n- Iron Order [f:1]" in user
-    assert "KNOWN THREADS:\n- A war looms." in user
+    assert "KNOWN THREADS:\n- [t:1] A war looms." in user  # ids, so `resolves` can cite one
     assert "never null" in user
 
 
@@ -128,3 +128,9 @@ def test_a_dropped_item_is_logged_with_its_content(caplog: pytest.LogCaptureFixt
     with caplog.at_level(logging.WARNING, logger="uro_core.pipeline.extraction"):
         parse_extraction('{"actors":[{"role":"the nameless one"}]}')
     assert "the nameless one" in caplog.text  # what was dropped, not just a count
+
+
+def test_resolves_keeps_only_id_strings() -> None:
+    ex = parse_extraction('{"resolves":["t:1", 7, null, {"id":"t:2"}, "t:3"]}')
+    assert ex is not None and ex.resolves == ["t:1", "t:3"]
+    assert parse_extraction('{"resolves":"t:1"}').resolves == []  # type: ignore[union-attr]
