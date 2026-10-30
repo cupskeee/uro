@@ -9,6 +9,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **Play can resolve the plots it created (D-52).** A thread play created (emergent) used to stay
+  open forever, even after the story answered it — Solara's "fleeing figure" stayed live after it
+  turned out to be Tavi. The extractor now sees each known thread's id and may list in `resolves`
+  the threads the narration settles; the gauntlet moves a live (`active`/`offered`) EMERGENT thread
+  to `resolved` and drops anything else — authored threads (which can drive pack rules) stay with
+  their author and the Reaction Layer. A resolved thread stops being shown as known. Live: a
+  scripted session resolved its missing-girl thread at exactly the beat she was found, and
+  replaying three recorded stories resolved nothing. `scripts/relational_live.py --scenario
+  resolution` reproduces it.
+
 ### Changed
 - **The extractor stops re-recording what it already knows (D-51, live-tuned).** In the two
   post-D-50 live sessions, the same plot became a new thread almost every beat (14 emergent threads

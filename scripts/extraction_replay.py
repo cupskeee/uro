@@ -48,6 +48,8 @@ def _label(e: DomainEvent | dict[str, Any]) -> str:
     t, p = (e.event_type, e.payload) if isinstance(e, DomainEvent) else (e["type"], e["payload"])
     if t == "EdgeAdded":
         return f"Edge {p['src']} -{p['rel_type']}-> {p['dst']}"
+    if t == "ThreadStateChanged":
+        return f"Thread {p['thread_id']} -> {p['to_state']}"
     text = p.get("name") or p.get("stakes") or p.get("statement") or ""
     return f"{t.removesuffix('Created').removesuffix('Recorded')}: {text}"
 
@@ -86,6 +88,7 @@ async def _summary(store: PostgresEventStore, world_id: str) -> dict[str, int]:
         "places": counts["PlaceCreated"],
         "factions": counts["FactionCreated"],
         "threads": counts["ThreadCreated"],
+        "threads resolved": counts["ThreadStateChanged"],
         "edges": counts["EdgeAdded"],
         "claims": counts["ClaimRecorded"],
         "claims (exact repeats)": dup_claims,
@@ -171,7 +174,8 @@ async def _main(source: str, provider: str) -> None:
                 ],
             )
             note = "" if extraction else "  (unparseable after re-asks)"
-            shown = [_label(e) for e in events if e.event_type in (*_CREATED, "EdgeAdded")]
+            kinds = (*_CREATED, "EdgeAdded", "ThreadStateChanged")
+            shown = [_label(e) for e in events if e.event_type in kinds]
             print(f"beat {i:>2}: {' || '.join(shown) or '(nothing)'}{note}")
 
         before = await _summary(store, src.world_id)

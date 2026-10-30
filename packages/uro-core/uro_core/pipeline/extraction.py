@@ -6,8 +6,9 @@ proposals into committed events — or drops them.
 Enforced by construction (structural — cannot be bypassed):
 - Whitelist: the schema permits only actors, places, factions, threads, claims — and, via
   affiliations, `member_of`/`located_in` edges between them (D-50). The extractor is structurally
-  incapable of proposing damage/death/loss/state-change events; every emergent entity is a benign
-  CREATION, never a mutation of an existing one.
+  incapable of proposing damage/death/loss events; every emergent entity is a benign CREATION.
+  The one mutation it may propose is resolving a live EMERGENT thread the narration settles
+  (D-52) — never an authored thread, never any other state change.
 - Tier ceiling: the gauntlet always creates actors at T1.
 - Role-noun guard (D-51): an actor is never MINTED from a description ("the guard" — all
   lowercase once its article is stripped); under D-50 it would become a name key every later
@@ -59,6 +60,7 @@ from uro_core.domain.events import (
     faction_created,
     place_created,
     thread_created,
+    thread_state_changed,
 )
 from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.domain.ids import new_id
@@ -113,6 +115,9 @@ class Extraction(BaseModel):
     factions: list[ProposedFaction] = Field(default_factory=list)  # emergent factions (D-50)
     threads: list[ProposedThread] = Field(default_factory=list)  # emergent plots (D-50; soft)
     claims: list[ProposedClaim] = Field(default_factory=list)
+    # ids of KNOWN threads the narration SETTLES (D-52) — the gauntlet resolves only an active/
+    # offered EMERGENT one; authored plots stay under author/rule control.
+    resolves: list[str] = Field(default_factory=list)
 
 
 # Entity-name canonicalization: fold case/whitespace and strip a leading article, so an actor
@@ -152,7 +157,9 @@ def build_extractor_messages(
     known_factions = "\n".join(f"- {f.name} [{f.faction_id}]" for f in recall.factions) or "(none)"
     # Live play showed the extractor re-proposing the SAME plot every beat ("something beneath
     # the canoe", 8 times) because it never saw which threads already existed (D-51).
-    known_threads = "\n".join(f"- {t.stakes}" for t in recall.active_threads) or "(none)"
+    known_threads = (
+        "\n".join(f"- [{t.thread_id}] {t.stakes}" for t in recall.active_threads) or "(none)"
+    )
     known_claims = (
         "\n".join(f"- [{c.claim_id}] ({c.truth}) {c.statement}" for c in recall.claims) or "(none)"
     )
@@ -165,6 +172,7 @@ def build_extractor_messages(
         '"located_in": place name (optional)}], '
         '"places": [{"name", "description", "parent": larger place name (optional)}], '
         '"factions": [{"name", "description"}], "threads": [{"stakes"}], '
+        '"resolves": [ids of KNOWN THREADS this narration settles], '
         '"claims": [{"statement", "about": [names], "provenance": "narrator"|"dialogue", '
         '"speaker": name (dialogue only), "contradicts": [known claim ids], '
         '"durable": true ONLY if still true a month from now / false for any passing moment, '
@@ -203,6 +211,7 @@ def parse_extraction(raw: str) -> Extraction | None:
                 factions=_salvage(data, "factions", ProposedFaction),
                 threads=_salvage(data, "threads", ProposedThread),
                 claims=_salvage(data, "claims", ProposedClaim),
+                resolves=_salvage_ids(data, "resolves"),
             )
     return None
 
@@ -229,6 +238,12 @@ def _salvage[M: BaseModel](data: dict[str, Any], key: str, model: type[M]) -> li
             # what was dropped, not just how many — so a lost fact can be diagnosed later
             logger.warning("extractor: dropped a malformed '%s' item: %.200r", key, item)
     return kept
+
+
+def _salvage_ids(data: dict[str, Any], key: str) -> list[str]:
+    """`data[key]` as a list of id strings — anything else in it is dropped (D-52)."""
+    raw = data.get(key)
+    return [r for r in raw if isinstance(r, str)] if isinstance(raw, list) else []
 
 
 def _slice_json_object(text: str) -> str | None:
@@ -381,7 +396,8 @@ async def run_gauntlet(
     for pf in extraction.factions:
         resolve_faction(pf.name, description=pf.description)
     if policy.extract_threads:
-        known_stakes = {_statement_key(t.stakes) for t in await store.list_threads(branch_id)}
+        threads = await store.list_threads(branch_id)
+        known_stakes = {_statement_key(t.stakes) for t in threads}
         for pt in extraction.threads:
             stakes = pt.stakes.strip()
             if stakes and _statement_key(stakes) not in known_stakes:
@@ -392,6 +408,22 @@ async def run_gauntlet(
                         stakes=stakes,
                         state="active",
                         provenance="emergent",
+                    )
+                )
+        # Resolution from play (D-52): the one MUTATION the extractor may propose — a KNOWN thread
+        # the narration settles goes to `resolved`. Only an EMERGENT thread (play made it, play may
+        # end it) that is still live; an authored plot can drive pack rules (`thread_state`
+        # conditions), so its lifecycle stays with the author and the Reaction Layer.
+        live_emergent = {
+            t.thread_id: t.state
+            for t in threads
+            if t.provenance == "emergent" and t.state in ("active", "offered")
+        }
+        for tid in dict.fromkeys(extraction.resolves):  # dedup, keep order
+            if tid in live_emergent:
+                events.append(
+                    thread_state_changed(
+                        thread_id=tid, to_state="resolved", from_state=live_emergent[tid]
                     )
                 )
 

@@ -939,7 +939,8 @@ def thread_state_changed(
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     """Advance a thread through its lifecycle (dormant→offered→active→resolved/dead, docs/12).
-    The Reaction Layer (docs/17) is the first engine emitter; `caused_by=module_cause(...)`."""
+    The Reaction Layer (docs/17) emits it with `caused_by=module_cause(...)`; the extractor gauntlet
+    emits only `→ resolved`, for a live EMERGENT thread the narration settles (D-52)."""
     return DomainEvent(
         event_type="ThreadStateChanged",
         entity_refs=[thread_id],

@@ -164,3 +164,5 @@ groups and places. `scripts/relational_live.py` plays a fixed 15-intent session 
 narrator there (a walled town, the order keeping its peace, a rival group, a shared trouble asked
 about three ways) on the registry's models, then prints each beat and a summary; replay its world
 afterwards to A/B a later extractor change on the same prose (`--provider stub` dry-runs it).
+`--scenario resolution` instead sets up a plot (a missing girl) and then settles it, to check that
+the extractor resolves the thread (D-52) at the beat the story ends it — and not before.
