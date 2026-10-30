@@ -25,6 +25,7 @@ import httpx
 
 if TYPE_CHECKING:  # annotation-only (from __future__ import annotations) — no runtime import
     from uro_core.engines.probe import ProbeReport
+    from uro_core.ports.tokens import TokenInfo
     from uro_core.providers.router import ProviderRouter
     from uro_core.timeline.models import Campaign
     from uro_core.worldpack.models import WorldManifest, WorldPack
@@ -228,6 +229,9 @@ class ServerDeps:
     # check, behind the same resolve_participant choke point. None → the token endpoints return 501.
     mint_token: Callable[[str, str], Awaitable[str]] | None = None  # (participant, campaign)→token
     revoke_token: Callable[[str], Awaitable[bool]] | None = None  # (plaintext token) → revoked?
+    # (participant, campaign) → how many live runtime tokens were revoked
+    revoke_participant: Callable[[str, str], Awaitable[int]] | None = None
+    list_tokens: Callable[[str], Awaitable[list[TokenInfo]]] | None = None  # campaign → metadata
     is_admin: Callable[[str], bool] | None = None  # (token) → operator tier (may act for others)?
     token_campaign: Callable[[str], str | None] | None = None  # minted token → its campaign (scope)
     hydrate_tokens: Callable[[], Awaitable[None]] | None = None  # load durable tokens at startup
@@ -516,6 +520,8 @@ def engine_deps(
         preview_beat=preview_beat,
         mint_token=registry.mint,
         revoke_token=registry.revoke,
+        revoke_participant=registry.revoke_participant,
+        list_tokens=registry.list_tokens,
         is_admin=registry.is_admin,
         token_campaign=registry.campaign_of,
         hydrate_tokens=registry.hydrate,
@@ -1497,19 +1503,54 @@ def create_app(
             )
         return {"token": await deps.mint_token(participant, campaign_id)}
 
+    @app.get("/campaigns/{campaign_id}/tokens")
+    async def list_tokens_endpoint(campaign_id: str, request: Request) -> dict[str, Any]:
+        """The campaign's runtime tokens — metadata only (`token_id` is a hash prefix, never the
+        token). An operator sees every participant's; anyone else only their own (D-39)."""
+        _auth(request)
+        _reject_foreign_scope(request, campaign_id)
+        if deps.list_tokens is None:
+            raise HTTPException(status_code=501, detail="runtime token management not enabled")
+        if await _mgmt().get_campaign(campaign_id) is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        _, caller, admin = _scope(request)
+        tokens = await deps.list_tokens(campaign_id)
+        return {
+            "tokens": [
+                t.model_dump(mode="json") for t in tokens if admin or t.participant_id == caller
+            ]
+        }
+
     @app.post("/campaigns/{campaign_id}/tokens/revoke")
     async def revoke_token_endpoint(
         campaign_id: str,
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
     ) -> dict[str, Any]:
-        """Revoke a token (D-39), self-or-admin scoped. Blocks a NEW connect immediately; a live
-        socket survives until it disconnects (auth is checked once before accept — a residual)."""
+        """Revoke a token (D-39), self-or-admin scoped: `{token}` revokes that token, and
+        `{participant}` every live runtime token that participant holds on this campaign — so an
+        operator can remove a player without holding their token. Blocks a NEW connect
+        immediately, and a live socket is closed at its next message."""
         _auth(request)
         if deps.revoke_token is None:
             raise HTTPException(status_code=501, detail="runtime token management not enabled")
-        target = _require(body, "token")
+        if ("token" in body) == ("participant" in body):
+            raise HTTPException(status_code=400, detail="give exactly one of token or participant")
         _, caller, admin = _scope(request)
+        if "participant" in body:
+            _reject_foreign_scope(request, campaign_id)
+            participant = body["participant"]
+            if not isinstance(participant, str) or not participant:
+                raise HTTPException(status_code=400, detail="participant must be a string")
+            if participant != caller and not admin:
+                raise HTTPException(
+                    status_code=403, detail="can only revoke your own tokens (or as operator)"
+                )
+            if deps.revoke_participant is None:
+                raise HTTPException(status_code=501, detail="token management not enabled")
+            count = await deps.revoke_participant(participant, campaign_id)
+            return {"revoked": count > 0, "count": count}
+        target = _require(body, "token")
         owner = deps.resolve_participant(target)  # whose token is it?
         if owner is not None and owner != caller and not admin:
             raise HTTPException(
@@ -1745,6 +1786,12 @@ def create_app(
             forward = asyncio.create_task(_forward(ws, queue))  # fan hub → this socket
             while True:
                 msg = await ws.receive_json()
+                # Auth is checked once before accept; re-check it per message so a REVOKED token
+                # stops acting (revoke evicts it from the resolve cache). Its socket still received
+                # broadcasts until now — revocation stops a player acting, not a past read.
+                if deps.resolve_participant(token) != participant:
+                    await ws.close(code=4401)
+                    break
                 mtype = msg.get("type")
                 if mtype == "intent":
                     await _run_and_broadcast(

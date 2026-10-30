@@ -485,3 +485,49 @@ async def test_branch_diff_endpoint(store: PostgresEventStore) -> None:
         typo = await client.get(_q(f"/worlds/{world_id}/diff?a=main&b=what-if&sections=nope"))
         assert typo.status_code == 400
         assert (await client.get(_q("/worlds/nope/diff?a=main&b=main"))).status_code == 404
+
+
+async def test_tokens_are_listed_and_revoked_by_participant(store: PostgresEventStore) -> None:
+    # Parity/ops gap: revoking needed the raw token (only its hash is stored) and nothing listed
+    # tokens, so an operator could not remove a player. Now: list, and revoke by participant.
+    async with _client(store) as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": "Tokens"})).json()["world_id"]
+        c = (
+            await client.post(
+                _q(f"/worlds/{world_id}/campaigns"),
+                json={"participant": "alice", "new_pc_name": "Ash"},
+            )
+        ).json()["campaign_id"]
+        joined = await client.post(
+            _q(f"/campaigns/{c}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+        )
+        bob = joined.json()["token"]  # mint-on-join
+        await client.post(_q(f"/campaigns/{c}/tokens"), json={"participant": "bob"})  # a 2nd
+        await client.post(
+            _q(f"/campaigns/{c}/join"), json={"participant": "carol", "new_pc_name": "Cass"}
+        )
+
+        listed = (await client.get(_q(f"/campaigns/{c}/tokens"))).json()["tokens"]
+        assert sorted(t["participant_id"] for t in listed) == ["bob", "bob", "carol"]
+        assert all(len(t["token_id"]) == 12 and t["token_id"] not in bob for t in listed)
+        own = (await client.get(f"/campaigns/{c}/tokens?token={bob}")).json()["tokens"]
+        assert [t["participant_id"] for t in own] == ["bob", "bob"]  # never carol's
+
+        # a player can't revoke someone else; both/neither fields is a 400
+        r = await client.post(
+            f"/campaigns/{c}/tokens/revoke?token={bob}", json={"participant": "alice"}
+        )
+        assert r.status_code == 403
+        both = await client.post(
+            _q(f"/campaigns/{c}/tokens/revoke"), json={"participant": "bob", "token": bob}
+        )
+        assert both.status_code == 400
+        assert (await client.post(_q(f"/campaigns/{c}/tokens/revoke"), json={})).status_code == 400
+
+        r = await client.post(_q(f"/campaigns/{c}/tokens/revoke"), json={"participant": "bob"})
+        assert r.json() == {"revoked": True, "count": 2}
+        assert (await client.get(f"/campaigns/{c}/roster?token={bob}")).status_code == 401
+        after = (await client.get(_q(f"/campaigns/{c}/tokens"))).json()["tokens"]
+        assert {t["participant_id"]: t["revoked"] for t in after} == {"bob": True, "carol": False}
+        again = await client.post(_q(f"/campaigns/{c}/tokens/revoke"), json={"participant": "bob"})
+        assert again.json() == {"revoked": False, "count": 0}

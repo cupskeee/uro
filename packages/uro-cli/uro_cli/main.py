@@ -723,16 +723,20 @@ def connect(
     asyncio.run(_client())
 
 
-def _server_post(server: str, path: str, token: str, body: dict[str, Any]) -> dict[str, Any]:
-    """POST JSON to a running `uro serve` (stdlib urllib — no extra dep), authed by ?token."""
-    import json
+def _server_post(server: str, path: str, token: str, body: dict[str, Any] | None) -> dict[str, Any]:
+    """POST JSON (or GET, when `body` is None) to a running `uro serve` — stdlib urllib, no extra
+    dep — authed by ?token."""
     import urllib.error
+    import urllib.parse
     import urllib.request
 
-    url = f"{server.rstrip('/')}{path}?token={token}"
-    req = urllib.request.Request(
-        url, data=json.dumps(body).encode(), headers={"content-type": "application/json"}
-    )
+    url = f"{server.rstrip('/')}{path}?token={urllib.parse.quote(token)}"
+    if body is None:
+        req = urllib.request.Request(url)
+    else:
+        req = urllib.request.Request(
+            url, data=json.dumps(body).encode(), headers={"content-type": "application/json"}
+        )
     try:
         with urllib.request.urlopen(req) as resp:
             return dict(json.loads(resp.read()))
@@ -825,14 +829,42 @@ def token_mint(
 @token_app.command("revoke")
 def token_revoke(
     campaign_id: str,
-    target: str = typer.Option(..., "--target", help="the token to revoke"),
+    target: str = typer.Option(None, "--target", help="the token to revoke"),
+    participant: str = typer.Option(
+        None, "--participant", help="revoke every live token this participant holds here"
+    ),
     server: str = typer.Option("http://127.0.0.1:8000", help="server base URL"),
     token: str = typer.Option(..., help="your bearer token (own token) or an operator --token"),
 ) -> None:
-    """Revoke a session token (docs/18 B10, D-39). Self-or-operator scoped. Blocks a new connect;
-    a live socket survives until it disconnects (a named residual)."""
-    out = _server_post(server, f"/campaigns/{campaign_id}/tokens/revoke", token, {"token": target})
-    typer.echo("revoked" if out.get("revoked") else "no live token matched (already revoked?)")
+    """Revoke a session token (docs/18 B10, D-39), or with --participant all of a participant's —
+    so an operator can remove a player without holding their token. Self-or-operator scoped.
+    Blocks a new connect, and a live socket is closed at its next message."""
+    if (target is None) == (participant is None):
+        typer.echo("give exactly one of --target <token> or --participant <id>", err=True)
+        raise typer.Exit(1)
+    body = {"token": target} if target is not None else {"participant": participant}
+    out = _server_post(server, f"/campaigns/{campaign_id}/tokens/revoke", token, body)
+    if participant is not None:
+        typer.echo(f"revoked {out.get('count', 0)} token(s) for {participant}")
+    else:
+        typer.echo("revoked" if out.get("revoked") else "no live token matched (already revoked?)")
+
+
+@token_app.command("list")
+def token_list(
+    campaign_id: str,
+    server: str = typer.Option("http://127.0.0.1:8000", help="server base URL"),
+    token: str = typer.Option(..., help="an operator --token (all) or your own token (yours)"),
+) -> None:
+    """A campaign's runtime tokens — who holds one, when it was minted, whether it's revoked. Never
+    the token itself; `token_id` is a hash prefix."""
+    out = _server_post(server, f"/campaigns/{campaign_id}/tokens", token, None)
+    tokens = out.get("tokens", [])
+    if not tokens:
+        typer.echo("(no runtime tokens)")
+    for t in tokens:
+        state = "revoked" if t["revoked"] else "live"
+        typer.echo(f"{t['token_id']}  {t['participant_id']:<16} {state:<8} {t['created_at']}")
 
 
 @branch_app.command("list")

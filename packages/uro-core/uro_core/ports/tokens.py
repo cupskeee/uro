@@ -12,7 +12,19 @@ in-process write-through cache over this so `resolve_participant` stays a sync, 
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
+
+from pydantic import BaseModel
+
+
+class TokenInfo(BaseModel):
+    """One runtime token's metadata — never the token, and never its full hash."""
+
+    token_id: str  # the first 12 hex characters of sha256(token): a stable, non-secret handle
+    participant_id: str
+    created_at: datetime
+    revoked: bool
 
 
 class SessionTokenStore(Protocol):
@@ -30,4 +42,14 @@ class SessionTokenStore(Protocol):
         """All non-revoked (token_hash, participant_id, campaign_id) triples — for the server to
         hydrate its in-process resolve cache at startup (so runtime-minted, campaign-scoped tokens
         survive a restart)."""
+        ...
+
+    async def campaign_tokens(self, campaign_id: str) -> list[TokenInfo]:
+        """Every runtime token minted for a campaign (live and revoked), oldest first."""
+        ...
+
+    async def revoke_participant_tokens(self, campaign_id: str, participant_id: str) -> list[str]:
+        """Revoke every LIVE token a participant holds on a campaign — how an operator removes a
+        player without holding their token. Returns the revoked hashes, so the server can evict
+        them from its resolve cache."""
         ...

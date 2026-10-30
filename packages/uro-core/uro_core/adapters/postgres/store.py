@@ -55,6 +55,7 @@ from uro_core.export import (
 from uro_core.metering import LLMCall
 from uro_core.ports.model_registry import ModelConnection, ProviderCredential, RoleBinding
 from uro_core.ports.outbox import OutboxMessage
+from uro_core.ports.tokens import TokenInfo
 from uro_core.timeline.models import (
     ActorView,
     BeliefView,
@@ -1469,6 +1470,34 @@ class PostgresEventStore:
                 "FROM session_tokens WHERE NOT revoked"
             )
         return [(r["token_hash"], r["participant_id"], r["campaign_id"]) for r in rows]
+
+    async def campaign_tokens(self, campaign_id: str) -> list[TokenInfo]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT token_hash, participant_id, created_at, revoked FROM session_tokens "
+                "WHERE campaign_id = $1 ORDER BY created_at, token_hash",
+                campaign_id,
+            )
+        return [
+            TokenInfo(
+                token_id=r["token_hash"][:12],
+                participant_id=r["participant_id"],
+                created_at=r["created_at"],
+                revoked=r["revoked"],
+            )
+            for r in rows
+        ]
+
+    async def revoke_participant_tokens(self, campaign_id: str, participant_id: str) -> list[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "UPDATE session_tokens SET revoked = true "
+                "WHERE campaign_id = $1 AND participant_id = $2 AND NOT revoked "
+                "RETURNING token_hash",
+                campaign_id,
+                participant_id,
+            )
+        return [r["token_hash"] for r in rows]
 
     # --- Model-connection registry (D-47, docs/20) — instance-level, OFF THE BRANCH/EVENT AXIS ---
 
