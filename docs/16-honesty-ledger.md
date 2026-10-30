@@ -129,12 +129,11 @@ gap-fill PREVIEW, `ai_backfill`-tagged seeds; `POST /worlds/probe[?tries=]` — 
 model-capability report, **warn-not-fail** → a weak model is a 200 with `ok=false`, never an HTTP
 error; both operator-only D-44 for uncapped LLM cost, pack-UPLOAD-shaped since the manifest isn't
 persisted; a provider transport failure → 502, unwired provider → 501; CI stub-tested, live pass
-the operator's) — BE-1..BE-10 + BE-7, #33-#42. Pack-upload *create* + **seed** + world
-**`state?at=`** stay CLI-only — seed is carved out because `seed_history` needs the pack's
-`manifest.history` (which the world doesn't persist → belongs with pack-upload create, not a
-`{seed}`-only body); world `state?at=` is a new read-only materialize-at-commit primitive deferred
-to its own focused slice + tests, not the head-only `query_across` the campaign `/state` uses;
-backfill-COMMIT (the `ai_backfill` `ThreadCreated` at genesis) also rides pack-upload create.)
+the operator's) — BE-1..BE-10 + BE-7, #33-#42. Pack-upload *create* (with backfill-commit) and
+**seed** shipped 2026-10-30 as `POST /worlds/create` and `POST /worlds/{w}/seed`, through the same
+core path as the CLI (`worldpack.create`); seeding re-takes the pack, which must be the world's own,
+because the world doesn't persist `manifest.history`. World **`state?at=`** is a new read-only
+materialize-at-commit primitive, built separately.)
 
 **Holistic-review hardening (D-46, post-epic system-wide seam hunt).** The BE epic had never had the
 project's phase-end cross-phase review; running it found a real **HIGH epistemic leak** and an

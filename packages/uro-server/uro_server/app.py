@@ -27,7 +27,8 @@ if TYPE_CHECKING:  # annotation-only (from __future__ import annotations) — no
     from uro_core.engines.probe import ProbeReport
     from uro_core.ports.tokens import TokenInfo
     from uro_core.providers.router import ProviderRouter
-    from uro_core.timeline.models import Campaign
+    from uro_core.timeline.models import Campaign, World
+    from uro_core.worldpack.create import PackImport, SeedResult
     from uro_core.worldpack.models import WorldManifest, WorldPack
 
 from fastapi import (
@@ -76,7 +77,17 @@ _PLAYER_SAFE_SECTIONS = frozenset({"actors", "threads", "places", "factions", "p
 # The multipart pack-UPLOAD routes. FastAPI spools the whole body during form parsing — BEFORE a
 # handler's operator gate or the `_safe_extract_pack` cap — so an oversized upload is rejected up
 # front by Content-Length (below). NOT `/worlds/import`: that's a JSON bundle, legitimately large.
-_PACK_UPLOAD_PATHS = frozenset({"/worlds/validate", "/worlds/backfill", "/worlds/probe"})
+_PACK_UPLOAD_PATHS = frozenset(
+    {"/worlds/validate", "/worlds/backfill", "/worlds/probe", "/worlds/create"}
+)
+
+
+def _is_pack_upload(path: str) -> bool:
+    """A pack-upload route, including `/worlds/{w}/seed` (the world id is in the path)."""
+    parts = path.split("/")
+    return path in _PACK_UPLOAD_PATHS or (
+        len(parts) == 4 and parts[1] == "worlds" and parts[3] == "seed"
+    )
 
 
 def _safe_extract_pack(data: bytes, dest: Path) -> Path:
@@ -209,6 +220,9 @@ class ServerDeps:
     # `probe` returns the model-capability report. None (no provider wired) → the endpoints 501.
     backfill: Callable[[WorldPack], Awaitable[tuple[WorldPack, list[str]]]] | None = None
     probe: Callable[[WorldManifest, int], Awaitable[ProbeReport]] | None = None
+    # pack import + history seeding (docs/09): one core path with `uro world create|seed`
+    import_pack: Callable[[WorldPack, bool], Awaitable[PackImport]] | None = None
+    seed_world: Callable[[World, WorldPack, int], Awaitable[SeedResult]] | None = None
     # Model-connection registry slice 3/4 (D-47): discover a connection's models (live), probe a
     # connection (a 1-token call), and rebuild the instance router from the registry without a
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
@@ -323,20 +337,34 @@ def engine_deps(
     # BE-7: the AI world-authoring stages bind the SAME process router the Engine holds (serve
     # builds it once, main.py) — one provider per process, exactly like run_beat. Wired only when a
     # router is supplied; a transport-only deployment leaves them None → the endpoints 501.
+    # They read the ENGINE's router at call time, not the one passed in: `POST /providers/reload`
+    # rebinds the engine, and a captured router would keep serving the old connections.
     backfill: Callable[[WorldPack], Awaitable[tuple[WorldPack, list[str]]]] | None = None
     probe: Callable[[WorldManifest, int], Awaitable[ProbeReport]] | None = None
     if router is not None:
-        bound_router = router  # narrow for the closures (mypy: no Optional capture)
 
         async def backfill(pack: WorldPack) -> tuple[WorldPack, list[str]]:
             from uro_core.worldpack.backfill import backfill_gaps
 
-            return await backfill_gaps(pack, bound_router)
+            return await backfill_gaps(pack, engine.router)
 
         async def probe(manifest: WorldManifest, tries: int) -> ProbeReport:
             from uro_core.engines.probe import run_probes
 
-            return await run_probes(manifest, bound_router, tries=tries)
+            return await run_probes(manifest, engine.router, tries=tries)
+
+    async def import_pack(pack: WorldPack, with_backfill: bool) -> PackImport:
+        from uro_core.worldpack.create import import_pack as _import_pack
+
+        if with_backfill and router is None:  # a transport-only deployment has no provider
+            raise NotImplementedError("backfill not enabled (no provider wired)")
+        backfill_router = engine.router if with_backfill else None
+        return await _import_pack(store, pack, backfill_router=backfill_router)
+
+    async def seed_world(world: World, pack: WorldPack, seed: int) -> SeedResult:
+        from uro_core.worldpack.create import seed_world as _seed_world
+
+        return await _seed_world(store, world, pack, seed)
 
     async def refresh_models(connection_id: str) -> list[dict[str, str]]:
         from uro_core.providers.registry import refresh_connection_models
@@ -448,6 +476,8 @@ def engine_deps(
         list_rulesets=list_rulesets,
         backfill=backfill,
         probe=probe,
+        import_pack=import_pack,
+        seed_world=seed_world,
         refresh_models=refresh_models,
         test_connection=test_connection,
         reload_router=reload_router,
@@ -493,7 +523,7 @@ def create_app(
         (`_MAX_UNCOMPRESSED_BYTES` in `_safe_extract_pack`) — those two are the actual guarantees.
         Scoped to the pack routes; `/worlds/import` (a large JSON bundle) is untouched. In
         production a reverse proxy should also cap the request body."""
-        if request.method == "POST" and request.url.path in _PACK_UPLOAD_PATHS:
+        if request.method == "POST" and _is_pack_upload(request.url.path):
             cl = request.headers.get("content-length")
             if cl is not None and cl.isdigit() and int(cl) > _MAX_PACK_BYTES:
                 return JSONResponse({"detail": "pack archive too large"}, status_code=413)
@@ -502,6 +532,17 @@ def create_app(
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/version")
+    async def server_version(request: Request) -> dict[str, str]:
+        """The server's package versions — what a client (uro-loom) is talking to. Any-authed: the
+        unauthenticated `/healthz` stays a bare liveness probe that advertises nothing."""
+        _auth(request)
+        import uro_core
+
+        import uro_server
+
+        return {"uro-server": uro_server.__version__, "uro-core": uro_core.__version__}
 
     @app.get("/usage")
     async def usage(request: Request) -> dict[str, Any]:
@@ -937,11 +978,27 @@ def create_app(
         tone = body.get("tone")
         if isinstance(tone, str):  # allow a bare-string tone from a JSON consumer
             tone = [tone]
+        # The world's ruleset, as a pack's `[ruleset]` declares it (id + optional version; D-30) —
+        # without it a REST-created world could only ever play the default. Unknown → 400.
+        ruleset_id, ruleset_version = body.get("ruleset") or "", body.get("ruleset_version") or ""
+        if not isinstance(ruleset_id, str) or not isinstance(ruleset_version, str):
+            raise HTTPException(status_code=400, detail="ruleset and ruleset_version are strings")
+        if ruleset_id:
+            try:
+                _resolve_ruleset_id(ruleset_id, ruleset_version)
+            except KeyError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             # create_world validates a Reaction-Layer rule_pack LOUDLY (the "silent pack death" fix,
             # docs/18): a malformed pack from a REST client is bad INPUT → 400, not a 500.
             pack = body.get("rule_pack") or None
-            w = await _mgmt().create_world(_require(body, "name"), tone=tone, rule_pack=pack)
+            w = await _mgmt().create_world(
+                _require(body, "name"),
+                tone=tone,
+                rule_pack=pack,
+                ruleset_id=ruleset_id,
+                ruleset_version=ruleset_version,
+            )
         except ValueError as exc:  # pydantic ValidationError (bad rule_pack) subclasses ValueError
             raise HTTPException(status_code=400, detail=f"invalid world: {exc}") from exc
         return {"world_id": w.world_id, "main_branch_id": w.main_branch_id, "name": w.name}
@@ -959,8 +1016,7 @@ def create_app(
         """Validate an uploaded world pack (a `.zip` of the pack directory) → its sufficiency grade
         + gaps (BE-6, `uro world validate`). PARSE-ONLY: nothing is imported, no world state is
         touched — a plain any-authed read-shaped op, guarded against untrusted input (a size cap + a
-        zip-slip-safe extraction). The pack-upload CREATE (a structural write, operator-only D-44)
-        is a follow-up."""
+        zip-slip-safe extraction). Importing a pack is `POST /worlds/create` (operator-only)."""
         _auth(request)
         from uro_core.errors import PackError
         from uro_core.rulesets import registry
@@ -991,6 +1047,77 @@ def create_app(
                 "gaps": report.gaps,
             }
 
+    @app.post("/worlds/create")
+    async def create_world_from_pack(
+        request: Request,
+        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+    ) -> dict[str, Any]:
+        """Import an uploaded world pack (a `.zip` of the pack directory) as a new world — `uro
+        world create` over the API, through the same core path (`worldpack.create.import_pack`).
+        `?backfill=true` AI-fills a thin pack's gaps first and commits them, tagged ai_backfill.
+        OPERATOR-only (D-44): a structural write, and backfill is a live, uncapped LLM call."""
+        _require_operator(request)
+        if deps.import_pack is None:
+            raise HTTPException(status_code=501, detail="management surface not enabled")
+        flag = (request.query_params.get("backfill") or "false").lower()
+        if flag not in ("true", "false"):
+            raise HTTPException(status_code=400, detail="backfill must be true or false")
+        from uro_core.errors import PackError, ProviderError
+        from uro_core.worldpack.parse import parse_pack
+
+        data = await pack.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _safe_extract_pack(data, Path(tmp))
+            try:
+                parsed = parse_pack(root)
+                result = await deps.import_pack(parsed, flag == "true")
+            except NotImplementedError as exc:
+                raise HTTPException(status_code=501, detail=str(exc)) from exc
+            except ProviderError as exc:  # a live-model failure is upstream → 502
+                raise HTTPException(status_code=502, detail=f"provider error: {exc}") from exc
+            except (PackError, ValueError) as exc:  # bad pack / unknown ruleset / bad rule pack
+                raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
+        w = result.world
+        return {
+            "world_id": w.world_id,
+            "main_branch_id": w.main_branch_id,
+            "name": w.name,
+            "grade": result.grade,
+            "backfilled": result.backfilled,
+        }
+
+    @app.post("/worlds/{world_id}/seed")
+    async def seed_world_from_pack(
+        world_id: str,
+        request: Request,
+        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+    ) -> dict[str, Any]:
+        """Run History seeding (`?seed=`, default 42) on a world: seed-dependent dynasties and
+        wars on its authored geography — `uro world seed` over the API. The world doesn't persist
+        its manifest's `[history]`, so the pack is re-supplied, and it must be the pack the world
+        was created from. OPERATOR-only (D-44): a structural write on the main branch."""
+        _require_operator(request)
+        if deps.seed_world is None:
+            raise HTTPException(status_code=501, detail="management surface not enabled")
+        try:
+            seed = int(request.query_params.get("seed") or 42)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="seed must be an integer") from exc
+        world = await _mgmt().get_world(world_id)
+        if world is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        from uro_core.errors import PackError
+        from uro_core.worldpack.parse import parse_pack
+
+        data = await pack.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _safe_extract_pack(data, Path(tmp))
+            try:
+                result = await deps.seed_world(world, parse_pack(root), seed)
+            except PackError as exc:
+                raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
+        return result.model_dump()
+
     @app.post("/worlds/backfill")
     async def backfill_world_pack(
         request: Request,
@@ -1002,7 +1129,7 @@ def create_app(
         cost, never caps it — docs/00), so a plain player token can't burn model budget. Like
         `/worlds/validate` this is pack-UPLOAD-shaped, not `/worlds/{w}/`: backfill needs the pack's
         manifest/lore (sufficiency gaps), which a stored world doesn't persist. Committing the
-        seeds is `world create --backfill` — it rides the deferred pack-upload CREATE endpoint. The
+        seeds is `POST /worlds/create?backfill=true` (or `uro world create --backfill`). The
         PoC backfill fills only the `conflict` dimension."""
         _require_operator(request)
         if deps.backfill is None:

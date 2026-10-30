@@ -46,6 +46,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
     which credential a connection uses.
 
   A running server picks either change up on reload.
+- **The server can import a world pack and seed its history.** `POST /worlds/create` (a `.zip` of the
+  pack, `?backfill=true` to AI-fill gaps first) and `POST /worlds/{w}/seed?seed=N`, both
+  operator-only. Before, only the CLI could import a pack: over the API a world couldn't come from a
+  pack, carry its ruleset, or get a history. Both surfaces now share one core path,
+  `uro_core.worldpack.create`. Seeding checks that the pack is the world's own (by name), so
+  another pack's history can't be layered onto it.
+- **A world created without a pack can choose its ruleset.** `POST /worlds` takes `ruleset` (and an
+  optional `ruleset_version`), and `uro world new` takes `--ruleset`. Unknown ids are refused. Before,
+  only an imported pack could pick a ruleset.
+- **`GET /version`** reports the server's `uro-server` and `uro-core` versions, so a client knows what
+  it's talking to. It requires a token; `/healthz` still reveals nothing.
 - **A commit reference can be a unique id prefix.** Anything that takes a commit (fork `--at`,
   `uro show`, the fork endpoint) accepts a prefix of 6 or more characters. An ambiguous prefix is an
   error, never a guess.
@@ -62,6 +73,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **A revoked token stops acting on an open socket.** Auth was checked once, before the WebSocket
   was accepted, so a revoked player kept playing until they disconnected (a residual D-39 named).
   The socket is now closed at its next message.
+- **Backfill and probe use the reloaded provider.** After `POST /providers/reload` the engine
+  switched to the new connections, but the server's backfill and probe kept the router captured at
+  startup. They now read the engine's current router, via the new `Engine.router` property.
 - **The admin PATCH endpoints no longer turn `"false"` into true.** `PATCH /providers/{id}` and
   `PATCH /extraction-policy` coerced values with `bool()`, so the string `"false"` enabled a
   connection or turned a category on. A non-boolean is now a 400.

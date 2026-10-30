@@ -38,7 +38,9 @@ management surface over the `EngineStore` port (`ServerDeps.store`; `501` when a
 transport-only deps). **Built now:**
 
 ```
-POST /worlds                     {name, tone?, rule_pack?}         create world (JSON body; OPERATOR-only, D-46)
+POST /worlds                     {name, tone?, rule_pack?, ruleset?, ruleset_version?}   create world (JSON body; OPERATOR-only, D-46)
+POST /worlds/create              (multipart .zip) [?backfill=]     import a pack as a new world, its ruleset pinned (OPERATOR-only, D-44)
+POST /worlds/{w}/seed            (multipart .zip) [?seed=]         History seeding; the pack must be the world's own (OPERATOR-only, D-44)
 POST /worlds/validate            (multipart .zip of the pack)      grade an uploaded pack, no import (BE-6)
 POST /worlds/backfill            (multipart .zip of the pack)      AI gap-fill preview, ai_backfill seeds (OPERATOR-only, D-44) (BE-7)
 POST /worlds/probe               (multipart .zip) [?tries=]        model-capability report, warn-not-fail (OPERATOR-only, D-44) (BE-7)
@@ -70,6 +72,7 @@ GET  /campaigns/{c}/tokens                                         runtime token
 POST /campaigns/{c}/tokens/revoke {token} | {participant}           revoke one token, or all of a participant's (self/admin, D-39)
 GET  /usage                      [?stage=]                        LLM-call telemetry by stage (OPERATOR-only, D-44) (BE-10)
 GET  /rulesets                                                    registry: id@version + sheet shape (any-authed) (BE-10)
+GET  /version                                                     the server's uro-server/uro-core versions (any-authed; /healthz stays a bare probe)
 GET  /providers                                                   model-connection registry snapshot: connections+roles+credential-metadata (OPERATOR-only, D-47)
 POST /providers                  {name, provider, base_url?, auth_id?}   register a connection (OPERATOR-only, D-47)
 PATCH  /providers/{id}           {is_enabled?, auth_id?}          enable/disable a connection and/or relink its credential (null unlinks) (OPERATOR-only)
@@ -126,21 +129,22 @@ caps it) and **pack-UPLOAD-shaped** (multipart `.zip`, like `/worlds/validate`),
 backfill's sufficiency gaps read `manifest.generate_population`/`history`/lore and probe reads
 `manifest.content`, none of which a stored world persists — so the pack must be re-supplied.
 Backfill is **preview-only** (mirrors `uro world backfill` — it commits nothing); committing the
-`ai_backfill` `ThreadCreated` seeds is `world create --backfill`, which rides the deferred
-pack-upload **create** endpoint. Probe is **warn-not-fail** (D-24): a weak/refusing model yields
+`ai_backfill` `ThreadCreated` seeds is `world create --backfill`, or `POST /worlds/create?backfill=true`
+(below). Probe is **warn-not-fail** (D-24): a weak/refusing model yields
 `status=warn|fail` in a `200` report (`ok` is the machine verdict), never an HTTP error; a real
 provider transport failure is a `502`, a malformed pack a `400`, and an unwired provider a `501`.
 An over-cap upload (Content-Length > 20 MB) is `413`'d by a small middleware **before** the body is
 spooled — so a large body can't be buffered pre-auth on these operator-only routes (the same guard
 now also fronts `/worlds/validate`; `/worlds/import`'s legitimately-large JSON bundle is exempt).
 CI never makes live calls — the stub provider drives the deterministic path; the live pass is the
-operator's. Still **CLI-only / scaffolded** (deferred, not regressed): world `seed`, the SSE `POST
-…/beats` (play is WS), and world `state?at=`. `seed` is
-carved out on purpose — `seed_history` needs the pack's `manifest.history` (era, simulate_years),
-which the world does **not** persist in a `seed_history`-usable form (`WorldGenesis` stores only
-name/tone/overrides/ruleset/rule-pack), so a `{seed}`-only body can't reconstruct it; seeding needs
-the pack re-supplied and so belongs with the deferred pack-upload **create** endpoint, not a bare
-seed call. **Authority:** the timeline summary reads (`/branches`, `/log`) are plain any-authed reads; the
+operator's. **Pack import and seeding ship (2026-10-30):** `POST /worlds/create[?backfill=true]` imports
+an uploaded pack as a new world and `POST /worlds/{w}/seed[?seed=]` runs History seeding, both
+operator-only and pack-upload-shaped, through the same core path as `uro world create|seed`
+(`uro_core.worldpack.create`). Seeding re-takes the pack because `seed_history` needs the manifest's
+`[history]` (era, simulate_years), which the world does **not** persist (`WorldGenesis` stores only
+name/tone/overrides/ruleset/rule-pack); the pack must be the one the world was created from (its
+name must match), else another world's history would be seeded here. Still **CLI-only /
+scaffolded**: the SSE `POST …/beats` (play is WS). **Authority:** the timeline summary reads (`/branches`, `/log`) are plain any-authed reads; the
 *structural writes* — `POST …/branches` (fork) and `POST …/markers` — are **operator-only** (D-44;
 require an `--admin-token`, a plain player token → 403), via `_require_operator` on the same
 `is_admin` choke point as D-39's self-or-admin scoping. The **raw event log** (`GET …/events`,
