@@ -53,6 +53,10 @@ provider_app = typer.Typer(
     no_args_is_help=True,
     help="Model connections — the DB-backed LLM provider registry (D-47, docs/20).",
 )
+outbox_app = typer.Typer(
+    no_args_is_help=True,
+    help="The transactional outbox — publish committed beats to other processes (D-57).",
+)
 app.add_typer(db_app, name="db")
 app.add_typer(world_app, name="world")
 app.add_typer(branch_app, name="branch")
@@ -60,6 +64,7 @@ app.add_typer(campaign_app, name="campaign")
 app.add_typer(codex_app, name="codex")
 app.add_typer(token_app, name="token")
 app.add_typer(provider_app, name="provider")
+app.add_typer(outbox_app, name="outbox")
 
 # The engine roles a connection can back (resolved by the ProviderRouter) — shared with the server.
 _ROLES = tuple(sorted(ROLES))
@@ -731,6 +736,60 @@ def _server_post(server: str, path: str, token: str, body: dict[str, Any]) -> di
     except OSError as exc:
         typer.echo(f"could not reach {server}: {exc} (is `uro serve` running?)", err=True)
         raise typer.Exit(1) from exc
+
+
+@outbox_app.command("status")
+def outbox_status() -> None:
+    """How many committed beats are waiting to be published."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            typer.echo(f"pending: {await store.outbox_pending()}")
+        finally:
+            await store.close()
+
+    _run_async(_run)
+
+
+@outbox_app.command("relay")
+def outbox_relay(
+    nats_url: str = typer.Option(..., "--nats", help="NATS server URL, e.g. nats://localhost:4222"),
+    stream: str = typer.Option("URO", help="JetStream stream (created if missing)"),
+    subject_prefix: str = typer.Option("uro", help="subjects are <prefix>.<world>.<branch>"),
+    once: bool = typer.Option(False, "--once", help="drain what is pending, then exit"),
+    interval: float = typer.Option(1.0, help="seconds between polls (without --once)"),
+    batch: int = typer.Option(100, help="commits claimed per transaction"),
+) -> None:
+    """Publish committed beats to NATS JetStream (D-57). At-least-once from the outbox; JetStream
+    drops a re-sent commit (Nats-Msg-Id = commit id). Run ONE relay for strict global order; several
+    are safe (no row is published twice) but their batches may interleave."""
+    try:
+        from uro_core.adapters.nats import NatsJetStreamPublisher
+    except ImportError as exc:
+        typer.echo("the NATS relay needs `pip install 'uro-core[nats]'`", err=True)
+        raise typer.Exit(1) from exc
+    from uro_core.outbox import relay_outbox
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        publisher = NatsJetStreamPublisher(nats_url, stream=stream, subject_prefix=subject_prefix)
+        await publisher.connect()
+        try:
+            while True:
+                sent = await relay_outbox(store, publisher, limit=batch)
+                if sent:
+                    typer.echo(f"published {sent} commit(s)")
+                if once:
+                    return
+                await asyncio.sleep(interval)
+        finally:
+            await publisher.close()
+            await store.close()
+
+    _run_async(_run)
 
 
 @token_app.command("mint")

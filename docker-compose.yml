@@ -16,5 +16,14 @@ services:
       timeout: 3s
       retries: 10
 
+  # Optional (D-57): the NATS JetStream server the outbox relay publishes to. Not started by a plain
+  # `docker compose up` — opt in with `docker compose --profile nats up -d`.
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js"]
+    profiles: ["nats"]
+    ports:
+      - "4222:4222"
+
 volumes:
   pgdata:

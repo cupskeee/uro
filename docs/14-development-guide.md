@@ -93,6 +93,7 @@ Re-recording fixtures is a deliberate act (`just record`), reviewed like a snaps
 
 ```sh
 just up        # docker compose up -d + migrate
+               # (+ `docker compose --profile nats up -d` for the outbox relay's NATS — D-57)
 just migrate   # uro db migrate
 just test      # ruff check + mypy + import-linter + pytest (replay mode)
 just record    # re-record LLM fixtures against live providers (local decision, reviewed)

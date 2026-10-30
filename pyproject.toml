@@ -12,6 +12,7 @@ dev = [
     "coverage>=7.16.0",
     "types-pyyaml>=6.0.12.20260815",
     "httpx2>=2.16",
+    "nats-py>=2.16",
 ]
 
 # ---------------------------------------------------------------- ruff (D-18)
@@ -80,6 +81,7 @@ forbidden_modules = [
     "fastapi",
     "asyncpg",
     "httpx",
+    "nats",
     "uro_core.adapters",
     # Concrete provider/ruleset impls — the core ring may import their PORTS
     # (uro_core.providers, uro_core.rulesets) but never these impls. The leaf-lib

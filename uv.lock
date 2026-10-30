@@ -19,6 +19,7 @@ dev = [
     { name = "httpx2", specifier = ">=2.16" },
     { name = "import-linter", specifier = ">=2.14" },
     { name = "mypy", specifier = ">=2.3.1" },
+    { name = "nats-py", specifier = ">=2.16" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "ruff", specifier = ">=0.16.6" },
@@ -848,6 +849,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nats-py"
+version = "2.16.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/c8/739b72c9201081e48000884d476231873ac82f7247c43b33823eaf3c0bfb/nats_py-2.16.0.tar.gz", hash = "sha256:1d137ed7afc9b59033b3199324c6237df2016a5091935871344a787eba6b72fc", size = 79731, upload-time = "2026-09-16T07:47:21.843Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/a3/16cec37172144d3362d7551bb823a098b2b2903281fc095dfe4480b8c2fd/nats_py-2.16.0-py3-none-any.whl", hash = "sha256:aeb1ff123966c05833d26c7df7e1d54c1c6d32b612428b21677a2e921f1fecae", size = 93578, upload-time = "2026-09-16T07:47:20.799Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1251,6 +1261,9 @@ all = [
 llm = [
     { name = "httpx" },
 ]
+nats = [
+    { name = "nats-py" },
+]
 postgres = [
     { name = "asyncpg" },
     { name = "cryptography" },
@@ -1263,13 +1276,14 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'postgres'", specifier = ">=43" },
     { name = "httpx", marker = "extra == 'llm'", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
+    { name = "nats-py", marker = "extra == 'nats'", specifier = ">=2.16" },
     { name = "pgvector", marker = "extra == 'postgres'", specifier = ">=0.5.0" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "python-ulid", specifier = ">=3.2.1" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "uro-core", extras = ["postgres", "llm"], marker = "extra == 'all'" },
 ]
-provides-extras = ["postgres", "llm", "all"]
+provides-extras = ["postgres", "llm", "nats", "all"]
 
 [[package]]
 name = "uro-server"

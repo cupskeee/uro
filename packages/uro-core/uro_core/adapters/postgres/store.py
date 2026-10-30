@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,7 @@ from uro_core.export import (
 )
 from uro_core.metering import LLMCall
 from uro_core.ports.model_registry import ModelConnection, ProviderCredential, RoleBinding
+from uro_core.ports.outbox import OutboxMessage
 from uro_core.timeline.models import (
     ActorView,
     BeliefView,
@@ -168,6 +170,18 @@ async def _init_conn(conn: asyncpg.Connection) -> None:
     await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
 
+async def _outbox_row(
+    conn: asyncpg.Connection, world_id: str, branch_id: str, commit_id: str
+) -> None:
+    """Queue a commit for publication (D-57) — called inside the commit's own transaction."""
+    await conn.execute(
+        "INSERT INTO outbox (world_id, branch_id, commit_id) VALUES ($1, $2, $3)",
+        world_id,
+        branch_id,
+        commit_id,
+    )
+
+
 class PostgresEventStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
@@ -276,7 +290,55 @@ class PostgresEventStore:
             # Project the seed events into the new main branch (genesis itself is a no-op).
             for event in genesis:
                 await apply_event(conn, branch_id, event)
+            await _outbox_row(conn, world_id, branch_id, commit_id)  # D-57, same transaction
             return World(world_id=world_id, name=name, main_branch_id=branch_id)
+
+    # --- the transactional outbox (D-57, docs/07) ---
+
+    async def outbox_pending(self) -> int:
+        async with self.pool.acquire() as conn:
+            return int(
+                await conn.fetchval("SELECT count(*) FROM outbox WHERE published_at IS NULL")
+            )
+
+    async def drain_outbox(
+        self, deliver: Callable[[OutboxMessage], Awaitable[None]], *, limit: int = 100
+    ) -> int:
+        """Claim up to `limit` pending rows in `seq` order — `SKIP LOCKED`, so concurrent relays
+        never publish the same row twice — deliver each with its events, then stamp them
+        published, all in ONE transaction: a `deliver` failure rolls the batch back to pending
+        (at-least-once). With several relays, batches may interleave, so strict global order
+        needs a single relay."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            rows = await conn.fetch(
+                "SELECT o.seq, o.world_id, o.branch_id, o.commit_id, c.parent_id, c.depth "
+                "FROM outbox o JOIN commits c USING (commit_id) WHERE o.published_at IS NULL "
+                "ORDER BY o.seq LIMIT $1 FOR UPDATE OF o SKIP LOCKED",
+                limit,
+            )
+            for r in rows:
+                events = await conn.fetch(
+                    "SELECT event_id, event_type, entity_refs, world_time, caused_by, payload "
+                    "FROM events WHERE commit_id = $1 ORDER BY seq",
+                    r["commit_id"],
+                )
+                await deliver(
+                    OutboxMessage(
+                        seq=r["seq"],
+                        world_id=r["world_id"],
+                        branch_id=r["branch_id"],
+                        commit_id=r["commit_id"],
+                        parent_id=r["parent_id"],
+                        depth=r["depth"],
+                        events=[dict(e) for e in events],
+                    )
+                )
+            if rows:
+                await conn.execute(
+                    "UPDATE outbox SET published_at = now() WHERE seq = ANY($1::bigint[])",
+                    [r["seq"] for r in rows],
+                )
+            return len(rows)
 
     # --- export / import: a portable, hash-chain-verified world bundle (docs/03, 07, 08) ---
 
@@ -951,6 +1013,8 @@ class PostgresEventStore:
             commit_id,
             branch_id,
         )
+        # D-57: the outbox row joins THIS transaction — published iff the commit exists.
+        await _outbox_row(conn, branch["world_id"], branch_id, commit_id)
         # Periodic snapshot: the branch's proj_* rows now equal state at this new
         # head, and state-at-a-commit is branch-independent — capture it verbatim.
         if depth > 0 and depth % self._snapshot_every == 0:

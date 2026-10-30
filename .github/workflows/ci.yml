@@ -38,6 +38,10 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run lint-imports
+      # The outbox relay's JetStream test (D-57) needs a NATS server with JetStream on; a service
+      # container can't pass the `-js` flag, so start it here (the test skips if it's absent).
+      - run: docker run -d --name nats -p 4222:4222 nats:2.10-alpine -js
       - run: uv run pytest
         env:
           URO_DATABASE_URL: postgresql://uro:uro@localhost:5432/uro
+          URO_TEST_NATS: nats://localhost:4222

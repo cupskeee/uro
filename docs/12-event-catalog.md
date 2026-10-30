@@ -118,7 +118,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 
 1. **One beat commit contains exactly one `BeatResolved`** plus its side-effect events; simulation/seeding commits contain no `BeatResolved`.
 2. **Markers are refs, not events** (`03`) — creating a marker doesn't touch the log.
-3. **Probe reports, llm_calls, sessions are not events.** They're operational data (`07`), never world truth.
+3. **Probe reports, llm_calls, sessions, and outbox rows are not events.** They're operational data (`07`), never world truth — an outbox row (D-57) only points at a commit whose events it publishes.
 4. **Payload evolution:** bump `v`, keep old projector paths until a projection rebuild retires them. Never mutate the meaning of an existing `(event_type, v)`.
 5. **Extractor ceiling:** X-emitted events are proposals that must survive the full gauntlet — whitelist, schema, tier, entity resolution, provenance & consequence gating, contradiction (`13-contracts.md`). Anything mechanical, lethal, or slow-layer (damage, death, terrain) is structurally impossible for the extractor to emit.
 6. **Player text is never evidence.** Proposals ground in generated prose only; `truth=true` additionally requires narrator (not dialogue) provenance and consequence-gating clearance — the trust model in `13-contracts.md`.

@@ -45,6 +45,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   actor link is recorded as an alias (`EntityAliasAdded`, now implemented), which recall also uses.
   The planned embedding index was measured first and dropped: name embeddings scored two
   different people higher than one person's own name variants.
+- **Committed beats can be published to other processes (D-57).** Every commit now also writes a row
+  to a transactional outbox (migration 023) in the same transaction, and `uro outbox relay --nats
+  URL` publishes pending commits — with their events — to NATS JetStream on `uro.<world>.<branch>`
+  (install `uro-core[nats]`; `docker compose --profile nats up -d` runs a local server). Delivery is
+  at-least-once, and JetStream drops a re-sent commit. `uro outbox status` shows what's pending.
 
 ### Changed
 - **The extractor stops re-recording what it already knows (D-51, live-tuned).** In the two
