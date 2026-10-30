@@ -205,9 +205,9 @@ class Engine:
 
     @property
     def ruleset_id(self) -> str:
-        """The id of the bound ruleset ('' if none). Lets a caller (e.g. the server) detect a
-        campaign pinned to a DIFFERENT ruleset than this Engine holds, and reject gracefully
-        instead of crashing deep in sheet validation (D-30 per-campaign binding)."""
+        """The id of the bound ruleset ('' if none). The server compares it with a campaign's pin
+        to pick the engine for that ruleset (`with_ruleset`), so a campaign never plays under
+        another ruleset's sheets (D-30 per-campaign binding)."""
         return self._ruleset.id if self._ruleset is not None else ""
 
     async def _prompt_style(self, branch_id: str) -> tuple[str, PromptEnv]:

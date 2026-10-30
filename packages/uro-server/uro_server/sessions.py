@@ -81,8 +81,8 @@ class TokenRegistry:
 
     async def revoke(self, token: str) -> bool:
         """Revoke a token (by its plaintext); True iff a live token was actually revoked. Evicts the
-        cache so a NEW connect is denied immediately (a live socket survives — auth is checked once
-        before accept; the per-message re-check is a named residual, D-39)."""
+        cache so a NEW connect is denied immediately; the server then closes the token's open
+        sockets (`_close_revoked_sockets`)."""
         if self._store is None:
             return False
         token_hash = _hash(token)

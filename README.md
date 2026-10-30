@@ -103,7 +103,7 @@ await engine.append_and_react(campaign, events)                   # commit + fir
 The feat propagates along who-knows-whom edges — an eyewitness recounts it firsthand, someone two hops away retells a garbled, low-confidence rumor, and with zero survivors it's never told at all. Two things worth knowing up front (both by design):
 
 - **The outcome path is a deliberate trust boundary.** A reported death of a **player character or a named, higher-tier actor downgrades to an unconfirmed rumor** rather than real canon death — so a self-reported battle can't assassinate your story's king by accident. Only rank-and-file combatants actually die.
-- **You get a receipt back.** `distill_outcome_with_receipt` (and the outcome HTTP endpoint) report a per-reference disposition — `applied` / `downgraded` / `dropped` — so you know exactly what became canon versus rumor. Roster, state, and chronicle are also readable over the authed REST surface; a few ops (export/import, branches, usage) stay CLI-only for now — see [what "proof of concept" means](#what-proof-of-concept-means-for-you-today).
+- **You get a receipt back.** `distill_outcome_with_receipt` (and the outcome HTTP endpoint) report a per-reference disposition — `applied` / `downgraded` / `dropped` — so you know exactly what became canon versus rumor. Roster, state, chronicle, branches, export/import and usage are all on the authed REST surface too.
 
 A full worked example is [`examples/games/ironwake`](examples/games/ironwake) (a tactics-style game integrated this way, with its own gap report); the integration contract is [`examples/games/URO_INTEGRATION.md`](examples/games/URO_INTEGRATION.md).
 
@@ -121,7 +121,7 @@ A full worked example is [`examples/games/ironwake`](examples/games/ironwake) (a
 Uro is honest about being a PoC. Concretely, before you build on it:
 
 - **Postgres + pgvector is required** from the first command — there's no in-memory/SQLite mode.
-- **Some management is CLI-only.** The server exposes an authed REST surface (worlds, campaigns, roster, state, chronicle, join, time-skip, tokens) plus the WebSocket play channel and the outcome endpoint — but seed, branches, export/import, probes, and usage stay CLI-only for now.
+- **A few things are CLI-only by nature:** `uro db migrate`, the outbox relay, and the play-testing flags (`--bare`, `--no-mechanics`). Everything else is on both the CLI and the authed REST surface.
 - **The LLM-driven legs need your own key.** The thesis ablation and live alien-ruleset play are validated only in specific documented runs; world-pack AI backfill and capability probes are stub-tested only (never run live). The deterministic core needs no model to verify. `uro consistency` is a labeled *proxy* metric, not a full verification pass.
 
 The full proven / proxy / stub-only / deferred breakdown lives in [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).

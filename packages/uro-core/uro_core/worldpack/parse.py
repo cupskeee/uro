@@ -59,7 +59,7 @@ def _rule_pack(root: Path) -> RulePack | None:
     for path, key in ((rules_path, "rules"), (agendas_path, "agendas")):
         if not path.is_file():
             continue
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = _load_yaml(path) or {}
         if not isinstance(raw, dict):
             raise PackError(f"{path.name} must be a YAML mapping (with rules_api_version + {key})")
         data.setdefault("rules_api_version", raw.get("rules_api_version"))
@@ -97,11 +97,19 @@ def _manifest(path: Path) -> WorldManifest:
         raise PackError(f"world.toml failed validation: {exc}") from exc
 
 
+def _load_yaml(path: Path) -> object:
+    """A pack's YAML, with a syntax error reported as a PackError (bad INPUT, never a crash)."""
+    try:
+        return yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        raise PackError(f"{path.name} is not valid YAML: {exc}") from exc
+
+
 def _seeds[T: BaseModel](root: Path, filename: str, model: type[T]) -> list[T]:
     path = root / "entities" / filename
     if not path.is_file():
         return []
-    raw = yaml.safe_load(path.read_text())
+    raw = _load_yaml(path)
     if raw is None:
         return []
     if not isinstance(raw, list):
