@@ -30,7 +30,7 @@ from uro_core.domain.events import (
 )
 from uro_core.domain.ids import new_id
 from uro_core.engines.rules import evaluate_agendas, evaluate_rules
-from uro_core.engines.rules_gauntlet import run_rules_gauntlet
+from uro_core.engines.rules_gauntlet import GauntletResult, run_rules_gauntlet
 from uro_core.errors import (
     EmptyNarrationError,
     PlannerError,
@@ -71,6 +71,18 @@ from uro_core.worldpack.rules import RulePack
 logger = logging.getLogger(__name__)
 
 _EXCERPT = 500  # chars of an unusable LLM response kept in the warning log, for diagnosis
+_MAX_CASCADE_HOPS = 3  # C6 (D-54): extra reaction hops a counter change may set off, per pass
+
+
+def _log_drops(label: str, result: GauntletResult) -> None:
+    """The dropped-action audit (B11, D-40): a rule did nothing — say which, and why."""
+    if result.drops:
+        logger.warning(
+            "%s dropped %d action(s): %s",
+            label,
+            len(result.drops),
+            "; ".join(f"{d.rule_id}/{d.do}→{d.ref}: {d.reason}" for d in result.drops),
+        )
 
 
 class BeatResult(BaseModel):
@@ -434,7 +446,8 @@ class Engine:
             )
             # Reaction Layer (docs/17, D-33): after the beat commits, a post-beat pass reads the
             # just-committed state and commits any consequences as a SEPARATE caused_by=module
-            # beat. Runs once per trigger; module events do not re-trigger it (no cascade). It is
+            # beat. Runs once per trigger; only its counter changes cascade further — bounded,
+            # to CounterChanged-triggered rules (C6, D-54). It is
             # exception-isolated (react() never raises) — the beat is already durable.
             await self.react(campaign, commit.commit_id, events)
         return BeatResult(
@@ -487,16 +500,61 @@ class Engine:
                 result = await run_rules_gauntlet(
                     self._store, campaign.branch_id, fired, trigger_commit=trigger_commit_id
                 )
-                if result.drops:  # dropped-action audit (B11, D-40) — a rule did nothing; say why
-                    logger.warning(
-                        "reaction pass dropped %d action(s): %s",
-                        len(result.drops),
-                        "; ".join(f"{d.rule_id}/{d.do}→{d.ref}: {d.reason}" for d in result.drops),
-                    )
+                _log_drops("reaction pass", result)
                 if result.events:
-                    await self._store.append_beat(campaign.branch_id, result.events)
+                    commit = await self._store.append_beat(campaign.branch_id, result.events)
+                    await self._cascade(
+                        campaign.branch_id, pack, result.events, commit.commit_id, world_day
+                    )
             except Exception as exc:  # the beat is durable — a reaction fault must not fail it
                 logger.warning("reaction pass failed; the beat stands, no reactions: %s", exc)
+
+    async def _cascade(
+        self,
+        branch_id: str,
+        pack: RulePack,
+        events: list[DomainEvent],
+        commit_id: str,
+        world_day: int,
+    ) -> None:
+        """C6 (D-54): the bounded, fail-closed reaction cascade. After a module pass commits, the
+        rules TRIGGERED BY `CounterChanged` evaluate against that pass's counter changes, and their
+        consequences commit as the next module beat — up to `_MAX_CASCADE_HOPS`; anything still
+        firing past the cap is dropped and logged (a two-rule ping-pong terminates).
+
+        Only CounterChanged-triggered rules take part, against only counter changes: a player beat
+        never carries `CounterChanged` (the reaction gauntlet is its sole emitter), so no rule that
+        predates C6 can fire in a hop — every existing pack behaves exactly as before. Runs under
+        the caller's `_react_lock`; each hop's ids are keyed to the previous hop's commit, and the
+        whole effect is events, so replay/fork never re-run it."""
+        rules = [r for r in pack.rules if r.trigger.event == "CounterChanged"]
+        hop = 0
+        while rules:
+            changes = [e for e in events if e.event_type == "CounterChanged"]
+            if not changes:
+                return
+            fired = await evaluate_rules(
+                self._store, branch_id, rules=rules, trigger_events=changes, world_day=world_day
+            )
+            if not fired:
+                return
+            if hop == _MAX_CASCADE_HOPS:  # fail closed: stop, and say what didn't run
+                logger.warning(
+                    "reaction cascade stopped at %d hops; dropped %d further action(s) from %s",
+                    hop,
+                    len(fired),
+                    ", ".join(sorted({f.rule_id for f in fired})),
+                )
+                return
+            hop += 1
+            result = await run_rules_gauntlet(
+                self._store, branch_id, fired, trigger_commit=commit_id
+            )
+            _log_drops(f"reaction cascade hop {hop}", result)
+            if not result.events:
+                return
+            commit = await self._store.append_beat(branch_id, result.events)
+            events, commit_id = result.events, commit.commit_id
 
     def _react_lock(self, branch_id: str) -> asyncio.Lock:
         lock = self._react_locks.get(branch_id)
@@ -568,14 +626,10 @@ class Engine:
                 result = await run_rules_gauntlet(
                     self._store, branch_id, fired, trigger_commit=skip_commit.commit_id
                 )
-                if result.drops:  # dropped-action audit (B11, D-40)
-                    logger.warning(
-                        "agenda tick dropped %d action(s): %s",
-                        len(result.drops),
-                        "; ".join(f"{d.rule_id}/{d.do}→{d.ref}: {d.reason}" for d in result.drops),
-                    )
+                _log_drops("agenda tick", result)
                 if result.events:
-                    await self._store.append_beat(branch_id, result.events)
+                    commit = await self._store.append_beat(branch_id, result.events)
+                    await self._cascade(branch_id, pack, result.events, commit.commit_id, to_day)
             except Exception as exc:  # the time-skip is durable — an agenda fault must not fail it
                 logger.warning("agenda tick failed; the time-skip stands, no agendas: %s", exc)
 

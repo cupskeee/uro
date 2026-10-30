@@ -26,6 +26,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   read, or `add`/`sub`/`mul`/`div`/`mod`/`min`/`max` — capped at 32 nodes and depth 6; a zero
   divisor or an oversized value drops the write (audited) rather than guessing. Reads see earlier
   writes in the same pass. `rules_api_version: 6`; older packs are unchanged.
+- **Counter thresholds react in the same pass (D-54).** A rule can now trigger on
+  `CounterChanged`, so "when tension reaches 2, the war starts" fires in the same reaction pass
+  (or downtime tick) that raised the tension, instead of a beat later. Such rules run in a bounded
+  cascade — at most 3 extra hops, after which further firing is dropped and logged — and only
+  CounterChanged-triggered rules take part, so existing packs behave exactly as before.
+  `rules_api_version: 7`.
 
 ### Changed
 - **The extractor stops re-recording what it already knows (D-51, live-tuned).** In the two

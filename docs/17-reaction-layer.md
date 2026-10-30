@@ -200,6 +200,15 @@ proposers converged; an adversary killed the naive shape).
   scope-fenced and clamped, and stored absolute. A `for_each` bind var reaches a counter read's
   `scope_ref` inside the expression — never an op name. `RULES_API_VERSION` 5→6 (a literal int
   is still an expression, so v1–v5 packs are unchanged).
+- **The bounded cascade (C6, D-54).** `react()` was single-hop. Now, after a module pass commits
+  (a reaction or a downtime agenda tick), rules TRIGGERED BY `CounterChanged` evaluate against that
+  pass's counter changes, and their consequences commit as the next module beat — up to
+  `_MAX_CASCADE_HOPS` (3) extra hops; anything still firing past the cap is dropped and logged, so
+  a ping-pong terminates. Only CounterChanged-triggered rules take part, against only counter
+  changes: a player beat never carries `CounterChanged`, so no pre-C6 rule can fire in a hop and
+  every existing pack behaves exactly as before. A threshold rule should guard itself (e.g. `when`
+  the war thread is still `dormant`), or it fires on every later change past the threshold.
+  `RULES_API_VERSION` 6→7.
 - **Still deferred (honest ceiling).** Multi-hop/transitive triggers ("a member of an ALLY of X") need
   `for_each` traversal in CONDITIONS (reserved); aggregate triggers ("the 3rd death this season")
   compose WITH a counter+threshold but are not themselves a new primitive.

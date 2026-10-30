@@ -89,7 +89,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Computation (numeric state)
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `CounterChanged` | scope_ref, key, to_value (int, ABSOLUTE), created_day, updated_day | M | LIVE via emitter M (D-34, Computation Layer): a pack rule sets a bounded integer counter. Projector UPSERTs `proj_counters` (preserves created_day). Structurally non-canon (writes only `proj_counters`); scope-fenced, magnitude-capped. NOT triggerable until cascade (C6) — popped from the trigger vocab to avoid accepted-but-inert |
+| `CounterChanged` | scope_ref, key, to_value (int, ABSOLUTE), created_day, updated_day | M | LIVE via emitter M (D-34, Computation Layer): a pack rule sets a bounded integer counter. Projector UPSERTs `proj_counters` (preserves created_day). Structurally non-canon (writes only `proj_counters`); scope-fenced, magnitude-capped. Triggerable since C6 (D-54): a rule on `CounterChanged` runs in the bounded reaction cascade after a module pass (at most `_MAX_CASCADE_HOPS` hops; only CounterChanged-triggered rules take part, so pre-C6 packs are unchanged). |
 
 ### Play & campaign
 | event_type | payload | emit | notes |

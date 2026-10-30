@@ -1660,3 +1660,110 @@ def test_expression_size_and_depth_are_capped_at_parse() -> None:
     adapter.validate_python(
         {"do": "adjust_counter", "scope_ref": "f:h", "key": "g", "delta": at_limit}
     )
+
+
+# --- C6 (D-54): the bounded reaction cascade --------------------------------------------------
+
+_WORLD = {"world": True}
+_TENSION_UP = {
+    "id": "death-raises-tension",
+    "trigger": {"event": "ActorDied"},
+    "then": [{"do": "adjust_counter", "scope_ref": "f:houses", "key": "tension", "delta": 1}],
+    "scope": _WORLD,
+}
+_WAR_AT_TWO = {  # fires on the COUNTER CHANGE — impossible before C6 (no cascade, not triggerable)
+    "id": "tension-starts-the-war",
+    "trigger": {"event": "CounterChanged", "where": {"key": "tension"}},
+    "when": {
+        "kind": "all",
+        "all": [
+            {"kind": "counter", "scope_ref": "f:houses", "key": "tension", "op": ">=", "value": 2},
+            {"kind": "thread_state", "thread": "t:war", "state": "dormant"},
+        ],
+    },
+    "then": [{"do": "set_thread_state", "thread": "t:war", "to": "active"}],
+    "scope": _WORLD,
+}
+
+
+async def _cascade_world(store: PostgresEventStore, rules: list, agendas: list | None = None):  # type: ignore[no-untyped-def,type-arg]
+    pack = {"rules_api_version": 7, "rules": rules, "agendas": agendas or []}
+    world = await store.create_world(f"cascade-{new_id()}", rule_pack=pack)
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await store.append_beat(
+        campaign.branch_id, [thread_created(thread_id="t:war", stakes="the houses' war")]
+    )
+    return campaign
+
+
+async def _death(store: PostgresEventStore, campaign, actor: str) -> None:  # type: ignore[no-untyped-def]
+    died = [actor_died(actor_id=actor)]
+    await store.append_beat(campaign.branch_id, died)
+    await _engine(store).react(campaign, await _head(store, campaign.branch_id), died)
+
+
+async def test_a_counter_change_cascades_into_a_threshold_rule(store: PostgresEventStore) -> None:
+    # RL-12: the second death pushes tension to 2 and the war starts IN THE SAME reaction pass.
+    campaign = await _cascade_world(store, [_TENSION_UP, _WAR_AT_TWO])
+    branch = campaign.branch_id
+    await _death(store, campaign, "a:one")
+    assert (await _states(store, branch))["t:war"] == "dormant"  # tension 1: below the threshold
+    await _death(store, campaign, "a:two")
+    assert await store.get_counter(branch, "f:houses", "tension") == 2
+    assert (await _states(store, branch))["t:war"] == "active"
+    await _death(store, campaign, "a:three")  # tension 3: the guard stops a re-fire
+    assert (await _states(store, branch))["t:war"] == "active"
+
+
+async def test_the_cascade_is_bounded(store: PostgresEventStore) -> None:
+    # A two-rule ping-pong would loop forever; the cascade stops after _MAX_CASCADE_HOPS (3).
+    def bounce(src: str, dst: str) -> dict:  # type: ignore[type-arg]
+        return {
+            "id": f"{src}-bumps-{dst}",
+            "trigger": {"event": "CounterChanged", "where": {"key": src}},
+            "then": [{"do": "adjust_counter", "scope_ref": "f:houses", "key": dst, "delta": 1}],
+            "scope": _WORLD,
+        }
+
+    kick = {
+        **_TENSION_UP,
+        "then": [{"do": "adjust_counter", "scope_ref": "f:houses", "key": "x", "delta": 1}],
+    }
+    campaign = await _cascade_world(store, [kick, bounce("x", "y"), bounce("y", "x")])
+    await _death(store, campaign, "a:one")
+    x = await store.get_counter(campaign.branch_id, "f:houses", "x")
+    y = await store.get_counter(campaign.branch_id, "f:houses", "y")
+    assert (x, y) == (2, 2)  # the kick + 3 hops (y, x, y), then stopped — not an endless loop
+
+
+async def test_pre_cascade_rules_never_fire_in_a_cascade_hop(store: PostgresEventStore) -> None:
+    # Only CounterChanged-triggered rules take part in a hop: a rumor a hop records must NOT wake a
+    # ClaimRecorded rule — so every pack written before C6 behaves exactly as it did.
+    rumor_on_war = {
+        **_WAR_AT_TWO,
+        "then": [{"do": "record_rumor", "text": "war is coming", "subjects": ["f:houses"]}],
+    }
+    echo = {
+        "id": "a-rumor-echoes",
+        "trigger": {"event": "ClaimRecorded"},
+        "then": [{"do": "adjust_counter", "scope_ref": "f:houses", "key": "echo", "delta": 1}],
+        "scope": _WORLD,
+    }
+    campaign = await _cascade_world(store, [_TENSION_UP, rumor_on_war, echo])
+    await _death(store, campaign, "a:one")
+    await _death(store, campaign, "a:two")  # tension 2 → the cascade records the rumor
+    claims = await store.list_claims(campaign.branch_id)
+    assert any(c.statement == "war is coming" for c in claims)
+    assert await store.get_counter(campaign.branch_id, "f:houses", "echo") == 0
+
+
+async def test_the_cascade_runs_after_a_downtime_agenda_tick(store: PostgresEventStore) -> None:
+    grow = {
+        "id": "tension-grows",
+        "every_days": 10,
+        "then": [{"do": "adjust_counter", "scope_ref": "f:houses", "key": "tension", "delta": 2}],
+        "scope": _WORLD,
+    }
+    campaign = await _cascade_world(store, [_WAR_AT_TWO], agendas=[grow])
+    await _engine(store).agenda_tick(campaign.branch_id, 10)
+    assert (await _states(store, campaign.branch_id))["t:war"] == "active"
