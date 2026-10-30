@@ -9,6 +9,9 @@ Enforced by construction (structural — cannot be bypassed):
   incapable of proposing damage/death/loss/state-change events; every emergent entity is a benign
   CREATION, never a mutation of an existing one.
 - Tier ceiling: the gauntlet always creates actors at T1.
+- Role-noun guard (D-51): an actor is never MINTED from a description ("the guard" — all
+  lowercase once its article is stripped); under D-50 it would become a name key every later
+  guard merges into. An existing actor known by that alias still links.
 - Player text isolation: the extractor is fed generated prose only, never the
   player's intent text (see engine._extract) — so a player cannot directly assert
   a claim into the extractor.
@@ -132,6 +135,13 @@ def _statement_key(text: str) -> str:
     """Exact-restatement key (D-51): case, inner whitespace, and trailing punctuation folded —
     "Tavi has a bracelet." == "tavi  has a bracelet" — but any change of WORDS is a new key."""
     return " ".join(text.lower().split()).rstrip(" .!?;:")
+
+
+def _is_role_noun(name: str) -> bool:
+    """A description, not a name (D-51): all-lowercase once a leading article is stripped —
+    "the guard", "tallest hooded stranger". A capitalized title ("the Duke") reads as a name, and a
+    script without letter case can't be judged, so both pass (`islower` needs a cased letter)."""
+    return re.sub(r"^(the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE).islower()
 
 
 def build_extractor_messages(
@@ -342,6 +352,12 @@ async def run_gauntlet(
                 name_to_ref[key] = cand
                 return cand
         if not policy.extract_actors:
+            return None
+        # D-51: never MINT an identity from a role ("the guard") — under D-50 it becomes a name key
+        # every later guard merges into, collecting their affiliations. Linking above is unaffected,
+        # so an existing actor known by that alias still resolves; facts about the figure still
+        # record as claims (subject = a name token), but an unnamed speaker gets no belief.
+        if _is_role_noun(name):
             return None
         aid = f"a:{new_id()}"
         events.append(actor_created(actor_id=aid, name=name.strip(), tier=1, role=role.strip()))

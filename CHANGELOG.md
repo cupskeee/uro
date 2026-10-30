@@ -24,8 +24,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   records the speaker's belief (in the existing claim), and a narrator confirming a rumor still
   commits. Reworded restatements are only prompt-guarded — there is deliberately no similarity
   merge. Replaying the recorded Solara narration through the tuned extractor on the same model:
-  threads 10 → 1, claims 17 → 5, exact claim repeats 3 → 0 (Tamriel: threads 4 → 1). The new
-  `scripts/extraction_replay.py` runs such a replay for any played world.
+  threads 10 → 0–1 (its one borderline plot varies run to run), claims 17 → 5, exact claim
+  repeats 3 → 0 (Tamriel: threads 4 → 1). The new `scripts/extraction_replay.py` runs such a
+  replay for any played world.
+- **Role nouns are never minted as actors (D-51).** A live session that names factions and places
+  (`scripts/relational_live.py`) showed the model creating actors from descriptions ("the guard",
+  "the barkeep" — 3 of 4 actors) despite the prompt; under D-50's relational identity a
+  description becomes a name key, so a different Riverwarden merged into "guard" and took a
+  wrong location. The gauntlet now refuses to MINT an actor whose name is all-lowercase once its
+  article is stripped ("the Duke" and scripts without letter case pass; an existing actor known
+  by that alias still links). Facts about such a figure still record as claims; an unnamed
+  dialogue speaker's testimony keeps its claim but no longer gets a belief. The prompt also sets a
+  place's `parent` only when the prose states it. On replay that session's edges went from 5
+  (2 wrong) to 2 (both right).
 
 ### Fixed
 - **One `null` field no longer discards a whole beat's extraction (D-51).** The extractor's

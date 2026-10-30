@@ -569,3 +569,43 @@ async def test_recall_surfaces_mentioned_factions(store: PostgresEventStore) -> 
     )
     recall = await assemble_recall(store, branch, "I salute the Iron Order's banner", 8)
     assert [f.name for f in recall.factions] == ["Iron Order"]
+
+
+async def test_role_noun_is_never_minted_as_an_actor(store: PostgresEventStore) -> None:
+    # D-51, live: "the guard" was minted, then a DIFFERENT Riverwarden merged into it by name and
+    # gave it the wrong location. A role is not an identity; a capitalized title still is.
+    branch = await _branch(store)
+    ex = Extraction(
+        actors=[
+            ProposedActor(name="the guard", member_of="Riverwardens"),
+            ProposedActor(name="Ser Aldren Voss", member_of="Riverwardens"),
+            ProposedActor(name="the Duke"),
+        ],
+        claims=[ProposedClaim(statement="The guard wears heron colors.", about=["the guard"])],
+    )
+    events = await run_gauntlet(store, branch, ex)
+    assert {e.payload["name"] for e in _of_type(events, "ActorCreated")} == {
+        "Ser Aldren Voss",
+        "the Duke",
+    }
+    assert len(_of_type(events, "EdgeAdded")) == 1  # only Ser Aldren's member_of
+    claim = _of_type(events, "ClaimRecorded")[0]
+    assert claim.payload["subject_refs"] == ["name:guard"]  # the fact survives, unminted
+
+
+async def test_unnamed_speaker_keeps_testimony_without_a_belief(store: PostgresEventStore) -> None:
+    # The cost the guard accepts (D-51): no actor for "a hooded stranger", so no belief to hold.
+    branch = await _branch(store)
+    ex = Extraction(
+        claims=[
+            ProposedClaim(
+                statement="The boats were taken upriver.",
+                provenance="dialogue",
+                speaker="a hooded stranger",
+            )
+        ]
+    )
+    events = await run_gauntlet(store, branch, ex)
+    claims = _of_type(events, "ClaimRecorded")
+    assert len(claims) == 1 and claims[0].payload["truth"] == "unknown"
+    assert _of_type(events, "ActorCreated") == [] and _of_type(events, "BeliefChanged") == []

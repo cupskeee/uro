@@ -158,3 +158,9 @@ claims, exact claim repeats). Live mode uses the `extractor` role binding of the
 registry (D-47) — one call per beat plus re-asks, no narrator calls — and needs `URO_SECRET_KEY`
 (auto-loaded from `.env`). Reworded duplicates (one plot, several phrasings) aren't counted
 automatically: read the per-beat thread lines, or query the replay world in Postgres.
+
+To exercise the relational path (factions, `member_of`/`located_in`, edges) a story has to name
+groups and places. `scripts/relational_live.py` plays a fixed 15-intent session that steers the
+narrator there (a walled town, the order keeping its peace, a rival group, a shared trouble asked
+about three ways) on the registry's models, then prints each beat and a summary; replay its world
+afterwards to A/B a later extractor change on the same prose (`--provider stub` dry-runs it).
