@@ -307,8 +307,9 @@ class PostgresEventStore:
         """Claim up to `limit` pending rows in `seq` order — `SKIP LOCKED`, so concurrent relays
         never publish the same row twice — deliver each with its events, then stamp them
         published, all in ONE transaction: a `deliver` failure rolls the batch back to pending
-        (at-least-once). With several relays, batches may interleave, so strict global order
-        needs a single relay."""
+        (at-least-once). Order: one branch's commits are serialized, so a SINGLE relay publishes
+        each branch in commit order; there is no global order across branches (`seq` is allocated
+        at insert, not at commit), and several relays may interleave even one branch."""
         async with self.pool.acquire() as conn, conn.transaction():
             rows = await conn.fetch(
                 "SELECT o.seq, o.world_id, o.branch_id, o.commit_id, c.parent_id, c.depth "

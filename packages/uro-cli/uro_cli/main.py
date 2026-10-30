@@ -763,8 +763,10 @@ def outbox_relay(
     batch: int = typer.Option(100, min=1, help="commits claimed per transaction"),
 ) -> None:
     """Publish committed beats to NATS JetStream (D-57). At-least-once from the outbox; JetStream
-    drops a re-sent commit (Nats-Msg-Id = commit id). Run ONE relay for strict global order; several
-    are safe (no row is published twice) but their batches may interleave."""
+    drops a re-sent commit (Nats-Msg-Id = commit id). Run ONE relay to keep each branch in commit
+    order (there is no global order across branches); several are safe — no row is published
+    twice — but may interleave a branch. A publish error is retried with backoff (`--once` exits
+    instead)."""
     try:
         from uro_core.adapters.nats import NatsJetStreamPublisher
     except ImportError as exc:
