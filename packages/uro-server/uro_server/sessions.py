@@ -10,7 +10,7 @@ import hashlib
 import secrets
 from typing import Any
 
-from uro_core.ports.tokens import SessionTokenStore
+from uro_core.ports.tokens import SessionTokenStore, TokenInfo
 
 
 def _hash(token: str) -> str:
@@ -89,6 +89,21 @@ class TokenRegistry:
         ok = await self._store.revoke_token(token_hash)
         self._cache.pop(token_hash, None)
         return ok
+
+    async def revoke_participant(self, participant_id: str, campaign_id: str) -> int:
+        """Revoke every live runtime token a participant holds on a campaign, without needing any
+        of them; returns how many. A launch `--token` credential is the server's argv config and is
+        not revocable at runtime."""
+        if self._store is None:
+            return 0
+        hashes = await self._store.revoke_participant_tokens(campaign_id, participant_id)
+        for token_hash in hashes:
+            self._cache.pop(token_hash, None)
+        return len(hashes)
+
+    async def list_tokens(self, campaign_id: str) -> list[TokenInfo]:
+        """A campaign's runtime tokens (metadata only — never a token or its full hash)."""
+        return [] if self._store is None else await self._store.campaign_tokens(campaign_id)
 
 
 class SessionHub:

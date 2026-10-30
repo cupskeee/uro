@@ -22,6 +22,10 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **Branch diff on both surfaces.** `diff_branches` (docs/18 B5) had no CLI command or endpoint.
   New: `uro branch diff <world> <a> <b>` and `GET /worlds/{w}/diff?a=&b=` (operator-only, D-45,
   since the rows include claim truth values and sheets).
+- **Operators can list tokens and remove a player.** Revoking needed the raw token, which only the
+  player holds (the server stores a hash), and nothing listed tokens. New: `GET /campaigns/{c}/tokens`
+  and `uro token list` (metadata only; a player sees only their own), and revoke by participant
+  (`{participant}` on `/tokens/revoke`, `uro token revoke --participant`).
 - **A commit reference can be a unique id prefix.** Anything that takes a commit (fork `--at`,
   `uro show`, the fork endpoint) accepts a prefix of 6 or more characters. An ambiguous prefix is an
   error, never a guess.
@@ -35,6 +39,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **A PC seated over the server now gets the same starting gear as one seated by the CLI** (a
   traveler's knife, which a lost fight can loot). REST-created and REST-joined PCs started with
   nothing. The default lives in one place, `uro_core.timeline.models.STARTING_GEAR`.
+- **A revoked token stops acting on an open socket.** Auth was checked once, before the WebSocket
+  was accepted, so a revoked player kept playing until they disconnected (a residual D-39 named).
+  The socket is now closed at its next message.
 - **The CLI prints full commit ids.** `uro log`, `uro branch list`, `branch mark`, `campaign end` and
   `world seed` printed 8 characters. Commit ids are ULIDs, whose first 10 characters are a
   millisecond timestamp, so 8 characters matched every commit made in the same second: the printed id

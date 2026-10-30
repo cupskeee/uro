@@ -2243,3 +2243,32 @@ def test_extraction_policy_get_patch_and_operator_only() -> None:
     # operator-only (D-44)
     assert client.get("/extraction-policy?token=tok-b").status_code == 403
     assert client.patch("/extraction-policy?token=tok-b", json={}).status_code == 403
+
+
+def test_a_revoked_token_stops_acting_on_its_open_socket() -> None:
+    # D-39 named this residual: auth was checked once, before accept, so a revoked player's open
+    # socket kept playing until it disconnected. Now the next message closes it.
+    live = dict(_TOKENS)
+    beats: list[str] = []
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return True
+
+    async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[str]:
+        beats.append(text)
+        yield "ok"
+
+    deps = ServerDeps(
+        resolve_participant=lambda token: live.get(token),
+        campaign_exists=campaign_exists,
+        run_beat=run_beat,
+    )
+    client = TestClient(create_app(deps))
+    with client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        ws.send_json({"type": "intent", "text": "first"})
+        _recv_until(ws, "beat_committed")
+        del live["tok-a"]  # revoked (the registry evicts it from the resolve cache)
+        ws.send_json({"type": "intent", "text": "second"})
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            _recv_until(ws, "beat_committed")
+    assert excinfo.value.code == 4401 and beats == ["first"]

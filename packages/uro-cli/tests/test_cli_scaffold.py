@@ -145,3 +145,38 @@ def test_provider_credential_rm_reports_an_unknown_id(monkeypatch) -> None:  # t
     deleted = _credential_store(monkeypatch, linked=[])
     result = CliRunner().invoke(app, ["provider", "credential", "rm", "nope"])
     assert result.exit_code == 1 and "no such credential: nope" in result.output and deleted == []
+
+
+def test_token_revoke_by_participant_and_list(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from uro_cli import main
+
+    calls: list[tuple[str, object]] = []
+
+    def fake(server: str, path: str, token: str, body: object) -> dict[str, object]:
+        calls.append((path, body))
+        if path.endswith("/revoke"):
+            return {"revoked": True, "count": 2}
+        return {
+            "tokens": [
+                {
+                    "token_id": "abc123def456",
+                    "participant_id": "bob",
+                    "revoked": False,
+                    "created_at": "2026-10-30T00:00:00Z",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(main, "_server_post", fake)
+    out = CliRunner().invoke(
+        app, ["token", "revoke", "c1", "--participant", "bob", "--token", "op"]
+    )
+    assert out.exit_code == 0 and "revoked 2 token(s) for bob" in out.output
+    assert calls[-1] == ("/campaigns/c1/tokens/revoke", {"participant": "bob"})
+    out = CliRunner().invoke(app, ["token", "list", "c1", "--token", "op"])
+    assert out.exit_code == 0 and "abc123def456  bob" in out.output and "live" in out.output
+    assert calls[-1] == ("/campaigns/c1/tokens", None)  # a GET
+    both = CliRunner().invoke(
+        app, ["token", "revoke", "c1", "--participant", "bob", "--target", "t", "--token", "op"]
+    )
+    assert both.exit_code == 1
