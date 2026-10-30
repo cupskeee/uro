@@ -122,7 +122,6 @@ Uro is honest about being a PoC. Concretely, before you build on it:
 
 - **Postgres + pgvector is required** from the first command — there's no in-memory/SQLite mode.
 - **Some management is CLI-only.** The server exposes an authed REST surface (worlds, campaigns, roster, state, chronicle, join, time-skip, tokens) plus the WebSocket play channel and the outcome endpoint — but seed, branches, export/import, probes, and usage stay CLI-only for now.
-- **One ruleset per server process** (the embedding/CLI paths rebind per campaign; the server doesn't yet).
 - **The LLM-driven legs need your own key.** The thesis ablation and live alien-ruleset play are validated only in specific documented runs; world-pack AI backfill and capability probes are stub-tested only (never run live). The deterministic core needs no model to verify. `uro consistency` is a labeled *proxy* metric, not a full verification pass.
 
 The full proven / proxy / stub-only / deferred breakdown lives in [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).

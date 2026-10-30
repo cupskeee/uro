@@ -46,6 +46,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
     which credential a connection uses.
 
   A running server picks either change up on reload.
+- **One server hosts every ruleset.** `uro serve` played only the ruleset it was started with and
+  refused other campaigns. Each campaign now plays under the ruleset it pinned, as with `uro play`;
+  `--ruleset` only sets the default for unpinned campaigns. Other rulesets run on sibling engines
+  (`Engine.with_ruleset`) that share the router, so a reload reaches them, and the per-branch react
+  locks, so counter writes stay serialized (D-34).
 - **The server can import a world pack and seed its history.** `POST /worlds/create` (a `.zip` of the
   pack, `?backfill=true` to AI-fill gaps first) and `POST /worlds/{w}/seed?seed=N`, both
   operator-only. Before, only the CLI could import a pack: over the API a world couldn't come from a

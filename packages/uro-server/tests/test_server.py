@@ -223,10 +223,11 @@ def test_beat_failure_is_broadcast_not_a_ws_crash() -> None:
         assert _recv_until(ws, "beat_failed")[-1]["intent"] == "again"
 
 
-async def test_engine_deps_rejects_a_ruleset_mismatch_with_a_clear_error() -> None:
-    # engine_deps.run_beat must reject a campaign pinned to a DIFFERENT ruleset than the server's
-    # single Engine holds — with a diagnostic naming both, not a raw ValidationError from deep in
-    # sheet validation (P6 per-campaign pin x P5 one-ruleset server).
+async def test_engine_deps_plays_a_campaign_under_its_own_ruleset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One server hosts every ruleset (D-30): a campaign pinned to PbtA plays under PbtA on a server
+    # started with uro-basic. This used to be refused ("one ruleset per server process").
     from uro_core.pipeline.engine import Engine
     from uro_core.providers.adapters.stub import StubProvider
     from uro_core.providers.router import ProviderRouter
@@ -234,22 +235,32 @@ async def test_engine_deps_rejects_a_ruleset_mismatch_with_a_clear_error() -> No
     from uro_core.timeline.models import Campaign
     from uro_server.app import engine_deps
 
+    pins = {"camp-1": "uro-pbta", "camp-2": "", "camp-3": "srd51"}
+
     class _FakeStore:
         async def get_campaign(self, campaign_id: str) -> Campaign:
             return Campaign(
-                campaign_id=campaign_id,
-                world_id="w",
-                branch_id="b",
-                ruleset_id="uro-pbta",  # pinned to the alien ruleset
-                ruleset_version=">=0",
+                campaign_id=campaign_id, world_id="w", branch_id="b", ruleset_id=pins[campaign_id]
             )
 
+    played: list[tuple[str, int]] = []
+
+    async def fake_stream(self: Engine, campaign: Campaign, participant: str, text: str):  # type: ignore[no-untyped-def]
+        played.append((self.ruleset_id, id(self)))
+        yield "ok"
+
+    monkeypatch.setattr(Engine, "run_beat_stream", fake_stream)
     store = _FakeStore()
-    engine = Engine(store, ProviderRouter(bindings={}, default=StubProvider()), ruleset=UroBasic())
+    engine = Engine(store, ProviderRouter(bindings={}, default=StubProvider()), ruleset=UroBasic())  # type: ignore[arg-type]
     deps = engine_deps(store, engine, _TOKENS)  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="uro-pbta"):
-        async for _ in deps.run_beat("camp-1", "player-1", "I seize the vein"):
+    for campaign in ("camp-1", "camp-1", "camp-2"):
+        assert [c async for c in deps.run_beat(campaign, "player-1", "x")] == ["ok"]
+    assert [rid for rid, _ in played] == ["uro-pbta", "uro-pbta", "uro-basic"]
+    assert played[0][1] == played[1][1]  # the PbtA sibling is built once and reused
+    assert played[2][1] == id(engine)  # unpinned → the process's own engine
+    with pytest.raises(ValueError, match="srd51"):  # a ruleset this build doesn't have
+        async for _ in deps.run_beat("camp-3", "player-1", "x"):
             pass
 
 

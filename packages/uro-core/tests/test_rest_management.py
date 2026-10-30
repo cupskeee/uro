@@ -688,3 +688,29 @@ async def test_probe_and_backfill_follow_a_reloaded_router(store: PostgresEventS
     assert deps.probe is not None
     await deps.probe(manifest, 1)
     assert new.calls > 0 and old.calls == 0
+
+
+async def test_a_pbta_campaign_plays_on_a_uro_basic_server(store: PostgresEventStore) -> None:
+    # End to end: `uro serve` binds uro-basic, a REST world pins uro-pbta, and a beat plays under
+    # PbtA — the server no longer refuses it ("one ruleset per process").
+    from uro_core.rulesets.uro_basic import UroBasic
+
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()), ruleset=UroBasic())
+    deps = engine_deps(store, engine, {_TOK: "alice"}, admin_tokens={_TOK})
+    app = create_app(deps)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        r = await client.post(_q("/worlds"), json={"name": "Pbta2", "ruleset": "uro-pbta"})
+        made = await client.post(
+            _q(f"/worlds/{r.json()['world_id']}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "Ash"},
+        )
+    c = made.json()["campaign_id"]
+    chunks = [chunk async for chunk in deps.run_beat(c, "alice", "I look around the camp")]
+    assert chunks  # narrated, not refused
+    campaign = await store.get_campaign(c)
+    assert campaign is not None
+    beats = await store.recent_beats(campaign.branch_id, 5)
+    assert [b.intent_text for b in beats] == ["I look around the camp"]
+    pc = await store.campaign_pc(c)
+    assert "harm" in (await store.get_sheet(campaign.branch_id, pc) or {})  # type: ignore[arg-type]

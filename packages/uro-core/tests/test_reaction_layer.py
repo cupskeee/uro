@@ -1847,3 +1847,22 @@ def test_an_unsubstituted_trigger_ref_is_rejected_at_parse() -> None:
         "apply": [{**rumor, "subjects": ["$trigger.actor_id", "$n"]}],
     }
     RulePack(**pack([looped]))  # inside a for_each it IS substituted — still accepted
+
+
+def test_a_ruleset_sibling_shares_the_router_and_the_react_locks() -> None:
+    # A server hosting several rulesets runs a sibling engine per ruleset. The react lock serializes
+    # non-idempotent counter writes per branch (D-34), so siblings must hold the SAME lock — two
+    # locks for one branch would let two react passes interleave and lose an increment.
+    from uro_core.pipeline.engine import Engine
+    from uro_core.providers.adapters.stub import StubProvider
+    from uro_core.providers.router import ProviderRouter
+    from uro_core.rulesets import registry
+    from uro_core.rulesets.uro_basic import UroBasic
+
+    engine = Engine(None, ProviderRouter(bindings={}, default=StubProvider()), ruleset=UroBasic())  # type: ignore[arg-type]
+    pbta = engine.with_ruleset(registry.resolve("uro-pbta"))
+    assert pbta.ruleset_id == "uro-pbta" and engine.ruleset_id == "uro-basic"
+    assert pbta._react_lock("b1") is engine._react_lock("b1")
+    reloaded = ProviderRouter(bindings={}, default=StubProvider())
+    engine.rebind_router(reloaded)  # what POST /providers/reload does
+    assert pbta.router is reloaded
