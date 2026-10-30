@@ -140,3 +140,27 @@ Analysis queries (Claude, no key): `docker compose exec postgres psql -U uro -d 
 WHERE actor_id='a:ash';`, `SELECT event_type,payload FROM events e JOIN commits c ON
 c.commit_id=e.commit_id JOIN branches b ON b.world_id=c.world_id WHERE b.branch_id='<branch>'
 ORDER BY c.depth, e.seq;`.
+
+## 7. Extraction tuning — replay recorded narration (D-51)
+
+To judge an extractor change (prompt, context, gauntlet) without the narrator changing the story
+too, replay a played world's **recorded** narrations through the current extractor:
+
+```bash
+uv run python scripts/extraction_replay.py Solara --provider stub   # dry-run, no key
+uv run python scripts/extraction_replay.py Solara                   # the registry's extractor
+```
+
+Each beat replays in order onto a fresh `replay-<world>-<id>` world: recall is assembled as live
+(recent beats + state so far), the extractor runs on the recorded prose, the gauntlet commits. It
+prints what each beat committed and a summary beside the original run (entities, threads, edges,
+claims, exact claim repeats). Live mode uses the `extractor` role binding of the model-connection
+registry (D-47) — one call per beat plus re-asks, no narrator calls — and needs `URO_SECRET_KEY`
+(auto-loaded from `.env`). Reworded duplicates (one plot, several phrasings) aren't counted
+automatically: read the per-beat thread lines, or query the replay world in Postgres.
+
+To exercise the relational path (factions, `member_of`/`located_in`, edges) a story has to name
+groups and places. `scripts/relational_live.py` plays a fixed 15-intent session that steers the
+narrator there (a walled town, the order keeping its peace, a rival group, a shared trouble asked
+about three ways) on the registry's models, then prints each beat and a summary; replay its world
+afterwards to A/B a later extractor change on the same prose (`--provider stub` dry-runs it).

@@ -457,3 +457,155 @@ async def test_affiliation_off_wires_no_edge_to_existing_faction(store: Postgres
     ev = await run_gauntlet(store, branch, ex, policy=ExtractionPolicy(extract_factions=False))
     assert _of_type(ev, "EdgeAdded") == []  # no member_of edge, even to the existing faction
     assert len(_of_type(ev, "ActorCreated")) == 1  # the actor is still made
+
+
+# --- D-51: restatement guards (from the post-D-50 live sessions) ---------------------------
+
+
+async def test_restated_claim_is_not_recorded_again(store: PostgresEventStore) -> None:
+    # Live: "Tavi has a bracelet." was committed 4 times verbatim across consecutive beats.
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        await run_gauntlet(
+            store,
+            branch,
+            Extraction(
+                actors=[ProposedActor(name="Tavi")],
+                claims=[ProposedClaim(statement="Tavi has a bracelet.", about=["Tavi"])],
+            ),
+        ),
+    )
+    again = Extraction(claims=[ProposedClaim(statement="tavi has  a bracelet", about=["Tavi"])])
+    assert _of_type(await run_gauntlet(store, branch, again), "ClaimRecorded") == []
+    # new WORDS are new information, not a restatement — no similarity merging
+    reworded = Extraction(
+        claims=[ProposedClaim(statement="Tavi wears a metal bracelet.", about=["Tavi"])]
+    )
+    assert len(_of_type(await run_gauntlet(store, branch, reworded), "ClaimRecorded")) == 1
+
+
+async def test_narrator_confirming_a_rumor_still_records(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    rumor = ProposedClaim(statement="The mine is haunted.", provenance="dialogue", speaker="Jory")
+    await store.append_beat(branch, await run_gauntlet(store, branch, Extraction(claims=[rumor])))
+    fact = Extraction(claims=[ProposedClaim(statement="The mine is haunted.")])
+    claims = _of_type(await run_gauntlet(store, branch, fact), "ClaimRecorded")
+    assert len(claims) == 1 and claims[0].payload["truth"] == "true"  # truth differs → new info
+
+
+async def test_dialogue_restatement_links_belief_to_existing_claim(
+    store: PostgresEventStore,
+) -> None:
+    branch = await _branch(store)
+    first = await run_gauntlet(
+        store,
+        branch,
+        Extraction(
+            claims=[
+                ProposedClaim(
+                    statement="The ferry runs at dawn.", provenance="dialogue", speaker="Jory"
+                )
+            ]
+        ),
+    )
+    await store.append_beat(branch, first)
+    claim_id = _of_type(first, "ClaimRecorded")[0].payload["claim_id"]
+    ev = await run_gauntlet(
+        store,
+        branch,
+        Extraction(
+            claims=[
+                ProposedClaim(
+                    statement="The ferry runs at dawn.", provenance="dialogue", speaker="Mara"
+                )
+            ]
+        ),
+    )
+    assert _of_type(ev, "ClaimRecorded") == []  # no duplicate claim…
+    beliefs = _of_type(ev, "BeliefChanged")
+    assert len(beliefs) == 1 and beliefs[0].payload["claim_id"] == claim_id  # …Mara believes it
+
+
+async def test_same_beat_duplicates_collapse(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    ex = Extraction(
+        claims=[
+            ProposedClaim(statement="The bridge is out."),
+            ProposedClaim(statement="The bridge is out!"),
+        ],
+        threads=[ProposedThread(stakes="A war looms."), ProposedThread(stakes="a war looms")],
+    )
+    ev = await run_gauntlet(store, branch, ex)
+    assert len(_of_type(ev, "ClaimRecorded")) == 1
+    assert len(_of_type(ev, "ThreadCreated")) == 1
+
+
+async def test_exact_thread_restatement_is_dropped(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    plot = "Harrowmere's villagers vanished into the marsh."
+    await store.append_beat(
+        branch,
+        await run_gauntlet(store, branch, Extraction(threads=[ProposedThread(stakes=plot)])),
+    )
+    ex = Extraction(
+        threads=[
+            ProposedThread(stakes=plot.upper()),  # a verbatim repeat → dropped
+            ProposedThread(stakes="A war looms on the Ashfall border."),  # a new plot → kept
+        ]
+    )
+    created = _of_type(await run_gauntlet(store, branch, ex), "ThreadCreated")
+    assert [e.payload["stakes"] for e in created] == ["A war looms on the Ashfall border."]
+
+
+async def test_recall_surfaces_mentioned_factions(store: PostgresEventStore) -> None:
+    # The extractor's KNOWN FACTIONS come from recall: a faction the beat names is in view.
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        await run_gauntlet(
+            store, branch, Extraction(factions=[ProposedFaction(name="Iron Order")])
+        ),
+    )
+    recall = await assemble_recall(store, branch, "I salute the Iron Order's banner", 8)
+    assert [f.name for f in recall.factions] == ["Iron Order"]
+
+
+async def test_role_noun_is_never_minted_as_an_actor(store: PostgresEventStore) -> None:
+    # D-51, live: "the guard" was minted, then a DIFFERENT Riverwarden merged into it by name and
+    # gave it the wrong location. A role is not an identity; a capitalized title still is.
+    branch = await _branch(store)
+    ex = Extraction(
+        actors=[
+            ProposedActor(name="the guard", member_of="Riverwardens"),
+            ProposedActor(name="Ser Aldren Voss", member_of="Riverwardens"),
+            ProposedActor(name="the Duke"),
+        ],
+        claims=[ProposedClaim(statement="The guard wears heron colors.", about=["the guard"])],
+    )
+    events = await run_gauntlet(store, branch, ex)
+    assert {e.payload["name"] for e in _of_type(events, "ActorCreated")} == {
+        "Ser Aldren Voss",
+        "the Duke",
+    }
+    assert len(_of_type(events, "EdgeAdded")) == 1  # only Ser Aldren's member_of
+    claim = _of_type(events, "ClaimRecorded")[0]
+    assert claim.payload["subject_refs"] == ["name:guard"]  # the fact survives, unminted
+
+
+async def test_unnamed_speaker_keeps_testimony_without_a_belief(store: PostgresEventStore) -> None:
+    # The cost the guard accepts (D-51): no actor for "a hooded stranger", so no belief to hold.
+    branch = await _branch(store)
+    ex = Extraction(
+        claims=[
+            ProposedClaim(
+                statement="The boats were taken upriver.",
+                provenance="dialogue",
+                speaker="a hooded stranger",
+            )
+        ]
+    )
+    events = await run_gauntlet(store, branch, ex)
+    claims = _of_type(events, "ClaimRecorded")
+    assert len(claims) == 1 and claims[0].payload["truth"] == "unknown"
+    assert _of_type(events, "ActorCreated") == [] and _of_type(events, "BeliefChanged") == []
