@@ -451,3 +451,37 @@ async def test_a_fresh_rest_pc_gets_the_same_starting_gear_as_the_cli(
             ids = await store.items_owned_by(branch, pc)
             owned = [(await store.get_item(branch, i) or {}).get("name") for i in ids]
             assert owned == list(STARTING_GEAR), (pc, owned)
+
+
+async def test_branch_diff_endpoint(store: PostgresEventStore) -> None:
+    # Parity: `diff_branches` (docs/18 B5) had no surface at all; `uro branch diff` + this endpoint.
+    from uro_core.domain.events import actor_created
+
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    app = create_app(
+        engine_deps(store, engine, {_TOK: "alice", "tok-player": "bob"}, admin_tokens={_TOK})
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": "Diffed"})).json()["world_id"]
+        world = await store.get_world(world_id)
+        assert world is not None
+        head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+        fork = await store.fork_branch(world_id, head, "what-if")  # type: ignore[arg-type]
+        await store.append_beat(fork.branch_id, [actor_created(actor_id="a:g", name="Ghost")])
+
+        r = await client.get(_q(f"/worlds/{world_id}/diff?a=main&b=what-if&sections=actors"))
+        assert r.status_code == 200, r.text
+        added = r.json()["diff"]["actors"]["added"]
+        assert [a["name"] for a in added] == ["Ghost"]
+        full = await client.get(_q(f"/worlds/{world_id}/diff?a=main&b=what-if"))
+        assert set(full.json()["diff"]) == {"actors"}  # every section checked; only differing ones
+
+        player = await client.get(f"/worlds/{world_id}/diff?a=main&b=what-if&token=tok-player")
+        assert player.status_code == 403  # omniscient rows: operator-only (D-45)
+        assert (await client.get(_q(f"/worlds/{world_id}/diff?a=main"))).status_code == 400
+        missing = await client.get(_q(f"/worlds/{world_id}/diff?a=main&b=nope"))
+        assert missing.status_code == 404
+        typo = await client.get(_q(f"/worlds/{world_id}/diff?a=main&b=what-if&sections=nope"))
+        assert typo.status_code == 400
+        assert (await client.get(_q("/worlds/nope/diff?a=main&b=main"))).status_code == 404

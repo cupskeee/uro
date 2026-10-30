@@ -1872,6 +1872,19 @@ class PostgresEventStore:
         )
         if commit is not None:
             return str(commit)
+        # A unique commit-id PREFIX. Ids are ULIDs (alphanumeric, case-insensitive), so nothing
+        # else can be one. Their first 10 characters are a millisecond TIMESTAMP, so a short prefix
+        # often matches every commit made in the same second: two matches raise, never a guess.
+        if len(ref) >= 6 and ref.isalnum():
+            rows = await conn.fetch(
+                "SELECT commit_id FROM commits WHERE world_id = $1 AND commit_id LIKE $2 LIMIT 2",
+                world_id,
+                ref.upper() + "%",
+            )
+            if len(rows) == 1:
+                return str(rows[0]["commit_id"])
+            if rows:
+                raise KeyError(f"commit prefix {ref!r} is ambiguous — use more characters")
         raise KeyError(f"no marker or commit {ref!r} in world {world_id!r}")
 
     @staticmethod

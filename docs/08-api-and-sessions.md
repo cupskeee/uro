@@ -52,6 +52,7 @@ POST /worlds/{w}/markers         {name, branch?}                   name a branch
 GET  /worlds/{w}/export                                            whole world → hash-chained bundle (OPERATOR-only, D-45) (BE-8)
 POST /worlds/import              {…WorldBundle JSON…}              verify chain + instantiate a fresh world (OPERATOR-only, D-44) (BE-8)
 GET  /worlds/{w}/chronicle       [?branch=&limit=]                a named branch's recent beats (OPERATOR-only) (BE-10)
+GET  /worlds/{w}/diff            ?a=&b=[&sections=]               what differs between two branches, per projection (OPERATOR-only, D-45) (docs/18 B5)
 POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id, branch?, seed?}   start_campaign on any branch (name or id; default main)
 GET  /campaigns                  [?world_id=]                      list
 GET  /campaigns/{c}                                                one campaign
@@ -234,7 +235,13 @@ uro log <world> [--branch B]              # chronicle view — commit lineage (d
 uro world export ashfall -o ashfall.uwp   # hash-chain-stamped bundle;  uro world import ashfall.uwp verifies + instantiates
 uro serve --token alice --token bob       # run the server;  uro connect <campaign> --server URL --token alice  (WS client)
 uro serve --token dev --cors-origin http://localhost:5173   # allow a browser SPA (uro-loom) — see "Browser access" below
-uro usage <campaign>
+uro world list | uro campaign list [--world W] | uro campaign show <campaign>   # what exists, who sits where
+uro state <campaign> [--sections actors,claims,…]   # current projections (operator view: every section)
+uro chronicle <campaign> | uro chronicle --world W --branch B   # recent beats, oldest first
+uro events <world> [--branch --type --entity --caused-by]      # the raw event log (operator view, D-45)
+uro show <world> <commit|prefix|marker>   # one commit's events;  ids print in FULL (a ULID's first 10 chars are a timestamp)
+uro branch diff <world> <a> <b> [--sections]   # + added / - removed / ~ changed, per projection
+uro usage [--stage S]                     # LLM-call telemetry by stage;  uro ruleset list
 uro outbox status                         # committed beats waiting to be published (D-57)
 uro outbox relay --nats nats://localhost:4222 [--once]   # publish them to NATS JetStream
 ```

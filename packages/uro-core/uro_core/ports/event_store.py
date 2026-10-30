@@ -156,7 +156,8 @@ class EventStore(Protocol):
     async def list_markers(self, world_id: str) -> list[Marker]: ...
 
     async def resolve_ref(self, world_id: str, ref: str) -> str:
-        """A marker name or a raw commit_id → a commit_id (markers win on collision)."""
+        """A marker name, a commit_id, or a unique commit-id prefix (6+ characters) → a commit_id.
+        Markers win on collision; an ambiguous prefix raises KeyError, like an unknown ref."""
         ...
 
     async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:
