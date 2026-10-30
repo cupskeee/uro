@@ -13,15 +13,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **The extractor stops re-recording what it already knows (D-51, live-tuned).** In the two
   post-D-50 live sessions, the same plot became a new thread almost every beat (14 emergent threads
   for ~3 real plots — "something beneath the canoe" ×8) and known facts were re-committed verbatim
-  ("Tavi has a bracelet." 4 times verbatim, plus once reworded). The extractor now also receives **KNOWN FACTIONS** and **KNOWN
-  THREADS** alongside the known actors/places/claims; the prompt forbids restating any of them,
-  narrows a thread to a story-level plot (not the current scene's suspense), and treats a scene
-  event ("a figure fled") like a passing moment unless it leaves a lasting change. As a structural
-  backstop the gauntlet drops an **exact** restatement — a claim with the same wording (case,
-  spacing, trailing punctuation folded), subjects, and truth as an existing one, or an identical
-  thread; same-beat repeats collapse too. A dialogue restatement still records the speaker's
-  belief (in the existing claim), and a narrator confirming a rumor still commits. Reworded
-  restatements are only prompt-guarded — there is deliberately no similarity merge.
+  ("Tavi has a bracelet." 4 times verbatim, plus once reworded). The extractor now also receives
+  **KNOWN FACTIONS** and **KNOWN THREADS** alongside the known actors/places/claims; the prompt
+  forbids restating any of them, narrows a thread to a story-level plot (a passing scare counts only
+  once the characters act on it), treats a scene event ("a figure fled") like a passing moment
+  unless it leaves a lasting change, and captures a self-introduction by naming the actor rather
+  than as a claim. As a structural backstop the gauntlet drops an **exact** restatement — a claim
+  with the same wording (case, spacing, trailing punctuation folded), subjects, and truth as an
+  existing one, or an identical thread; same-beat repeats collapse too. A dialogue restatement still
+  records the speaker's belief (in the existing claim), and a narrator confirming a rumor still
+  commits. Reworded restatements are only prompt-guarded — there is deliberately no similarity
+  merge. Replaying the recorded Solara narration through the tuned extractor on the same model:
+  threads 10 → 1, claims 17 → 5, exact claim repeats 3 → 0 (Tamriel: threads 4 → 1). The new
+  `scripts/extraction_replay.py` runs such a replay for any played world.
 
 ### Fixed
 - **One `null` field no longer discards a whole beat's extraction (D-51).** The extractor's

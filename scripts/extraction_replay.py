@@ -25,7 +25,7 @@ from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.domain.events import DomainEvent, beat_resolved
+from uro_core.domain.events import DomainEvent, actor_created, beat_resolved
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.extraction import (
     _statement_key,
@@ -132,6 +132,22 @@ async def _main(source: str, provider: str) -> None:
         policy = await store.get_extraction_policy()
         replay = await store.create_world(f"replay-{source}-{new_id()}")
         branch = replay.main_branch_id
+        # Seed the source campaign's PCs (outside any beat): live, the PC is a KNOWN actor once
+        # named, so without it the replay would mint a duplicate the original never could.
+        async with store.pool.acquire() as conn:
+            pcs = await conn.fetch(
+                "SELECT a.name, a.role FROM proj_pcs p JOIN proj_actors a ON "
+                "a.branch_id = p.branch_id AND a.actor_id = p.actor_id WHERE p.branch_id = $1",
+                src_branch,
+            )
+        if pcs:
+            await store.append_beat(
+                branch,
+                [
+                    actor_created(actor_id=f"a:{new_id()}", name=r["name"], tier=2, role=r["role"])
+                    for r in pcs
+                ],
+            )
         print(f"replaying {n} beats of {source!r} → world {replay.name!r} ({provider})\n")
 
         calls = 0

@@ -15,10 +15,11 @@ Only a real organization the prose names — not a passing crowd or a common nou
 
 THREADS: put a live, STORY-LEVEL plot or conflict ("a war looms on the Ashfall border", "the lost
 heir may still live", "Harrowmere's villagers vanished into the marsh — why?") in `threads` as
-`stakes`: something that will still drive the story many scenes from now. The immediate suspense
-of THIS scene — a noise, a shadow, a figure running off, what lurks behind a door — is NOT a
-thread; it resolves within the scene. Never re-propose a KNOWN THREAD, even reworded or with new
-details: a development in a known plot is not a new plot.
+`stakes`: a mystery, threat, or goal the characters will have to deal with beyond this moment. A
+passing scare of THIS scene — a noise, a shadow, a figure darting off — is not a thread by itself;
+it becomes one only once the characters treat it as a threat or question that shapes what they do
+next (where to go, whom to trust). Record each plot ONCE: never re-propose a KNOWN THREAD, even
+reworded or with new details — a development in a known plot is not a new plot.
 
 AFFILIATIONS (only when the prose STATES them — never guess): on an actor, set `member_of` to the
 faction they belong to and `located_in` to where they are ("Ser Alden of the Iron Order, at Alder
@@ -57,7 +58,7 @@ EXAMPLES (from real over-extraction — study the OMIT column; these are the mis
   The causeway bridge has collapsed.          | A figure fled into the reeds.
   The marsh track ends at a timber causeway.  | You followed the wagon ruts into the marsh.
   Tavi wears a metal bracelet. (first time)   | Tavi has a bracelet. (already a KNOWN CLAIM)
-  Thread: Harrowmere's villagers vanished.    | Thread: what is clinking under the canoe.
+  Thread: Harrowmere's villagers vanished.    | Thread: a twig snapped somewhere nearby.
 
 Note the pattern: a standing trait/role/relationship/lasting-change/injury is durable; a
 one-moment expression, sensation, scene event, or crowd reaction is not — and the player
@@ -66,6 +67,7 @@ never extracted again.
 
 PROVENANCE: a fact the NARRATOR asserts as real → 'narrator'; something a CHARACTER says (quotes
 or reported speech) → 'dialogue' with that character as 'speaker' (it may be a lie). Name a new
-actor only if the prose explicitly names them. When a statement conflicts with a KNOWN CLAIM,
+actor only if the prose explicitly names them. A character giving their own name is captured by
+naming them in `actors` — never also record "X says their name is X" as a claim. When a statement conflicts with a KNOWN CLAIM,
 put that claim's id in 'contradicts'. Keep statements terse and self-contained. Output ONLY a
 JSON object.

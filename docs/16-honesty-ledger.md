@@ -350,14 +350,20 @@ A caller-supplied `BeatPlan` drives the planner→mechanics gate deterministical
 
 ## Post-PoC — D-50 live tuning (2026-10-30, D-51)
 
-Evidence: the two post-D-50 live sessions in the `uro` DB — Tamriel (13 beats) and Solara (28 beats), every chat role on Codex `gpt-5.6-luna`. Each beat's narration was read against what it committed.
+Evidence: the two post-D-50 live sessions in the `uro` DB — Tamriel (13 beats) and Solara (28 beats), every chat role on Codex `gpt-5.6-luna`. Each beat's narration was read against what it committed; then the SAME recorded narrations were replayed through the tuned extractor (`scripts/extraction_replay.py`, same model) — so the before/after differs only in the extractor.
+
+| Replayed (same prose, same model) | threads | claims | exact claim repeats |
+|---|---|---|---|
+| Solara — original → tuned | 10 → **1** | 17 → **5** | 3 → **0** |
+| Tamriel — original → tuned | 4 → **1** | 15 → **9** | 0 → 0 |
 
 | Capability | Status | Note |
 |---|---|---|
 | Exact restatement of a known claim or thread | **proven (structural)** | `test_restated_claim_is_not_recorded_again`, `test_exact_thread_restatement_is_dropped`, `test_same_beat_duplicates_collapse`; a dialogue restatement re-links the belief (`test_dialogue_restatement_links_belief_to_existing_claim`), a narrator confirming a rumor still commits. Live: "Tavi has a bracelet." was committed 4 times verbatim + once reworded — the guard catches the 3 verbatim repeats, not the rewording. |
-| REWORDED restatement (the live thread failure: one plot, 8 phrasings) | **prompt-only — not yet re-measured live** | the extractor now sees KNOWN THREADS/FACTIONS (`test_extractor_sees_known_factions_and_threads`) and is told not to restate them; whether the model complies is the open question. No similarity merge, by design. |
+| REWORDED restatement (the live thread failure: one plot, 8 phrasings) | **live-measured on replay (one model, two stories)** | prompt-level, via KNOWN THREADS/FACTIONS (`test_extractor_sees_known_factions_and_threads`): Solara's canoe plot now lands as ONE thread, at the beat it starts shaping the characters' choices, and is not re-proposed in the 6 beats after. No similarity merge, by design — a weaker model may still reword. |
 | One `null` field discards the beat's extraction | **fixed (proven)** | per-item salvage — `test_null_optional_fields_do_not_drop_the_beat`, `test_a_malformed_item_is_dropped_alone`. Whether it cost live beats is unproven: 46 extractor calls for 41 beats allows at most a few lost to exhausted re-asks; Solara beat 17 (three NPCs named, nothing committed) is the likeliest. |
-| Thread granularity (a scene's suspense recorded as a plot) | prompt-only | narrowed in `extractor.system.j2`; not re-measured live. |
-| Relational extraction (factions, `member_of`/`located_in`, edges) | **not live-tested** | 0 such events live — correctly: neither story named a group or placed anyone at a named location. Needs a session whose fiction names factions and places. |
+| Thread granularity (a scene's suspense recorded as a plot) | **live-measured on replay** | a first prompt pass ("a noise is NOT a thread") over-corrected — Solara 10 → 0, losing the canoe plot; the shipped wording (a passing scare becomes a thread once the characters treat it as shaping what they do next) gives 1. |
+| Self-introductions recorded as claims ("Mara says that her name is Mara") | **live-measured on replay** | surfaced by the first pass (4 of 10 claims); the prompt now captures an introduction by naming the actor — 0 in the second pass. |
+| Relational extraction (factions, `member_of`/`located_in`, edges) | **not live-tested** | 0 such events in the original sessions — correctly: neither story named a group or placed anyone at a named location. Needs a session whose fiction names factions and places. |
 | Closing a thread that play resolved | deferred | "the fleeing figure" stayed open after it turned out to be Tavi. Resolving a thread is a state mutation, outside D-50's creations-only whitelist — needs its own decision. |
 | Extractor observability | gap | raw extractor responses aren't logged and `llm_calls.model` is never populated, so a lost beat can't be diagnosed after the fact. |
