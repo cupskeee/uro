@@ -54,6 +54,7 @@ POST /worlds/{w}/markers         {name, branch?}                   name a branch
 GET  /worlds/{w}/export                                            whole world → hash-chained bundle (OPERATOR-only, D-45) (BE-8)
 POST /worlds/import              {…WorldBundle JSON…}              verify chain + instantiate a fresh world (OPERATOR-only, D-44) (BE-8)
 GET  /worlds/{w}/chronicle       [?branch=&limit=]                a named branch's recent beats (OPERATOR-only) (BE-10)
+GET  /worlds/{w}/state           [?branch= | ?at=][&sections=]    projections at a branch head or ANY commit, read-only (OPERATOR-only, D-45)
 GET  /worlds/{w}/diff            ?a=&b=[&sections=]               what differs between two branches, per projection (OPERATOR-only, D-45) (docs/18 B5)
 POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id, branch?, seed?}   start_campaign on any branch (name or id; default main)
 GET  /campaigns                  [?world_id=]                      list
@@ -117,10 +118,11 @@ world/campaign is a forward-only migration + threading campaign context through 
 (any-authed — public capability info). `GET /worlds/{w}/chronicle[?branch=&limit=]` is the
 **world-scoped** twin of the campaign chronicle: it reads ANY named branch's recent beats (incl.
 sibling what-if forks), so it's a GM/operator timeline-inspection surface (operator-only, same family
-as `/log`, `/events`). The world-scoped **`state?branch=&at=`** (materialize projections at an
-arbitrary commit — nearest-snapshot + replay) is **deferred to its own slice**: it's a new read-only
-materialize-at-commit core primitive (not the head-only `query_across` the campaign `/state` uses),
-which deserves a focused implementation + snapshot-correctness tests, not a bolt-on. **The AI
+as `/log`, `/events`). The world-scoped **`state?branch=&at=`** shipped 2026-10-30: `?branch=` reads a
+head (the `query_across` the campaign `/state` uses), and `?at=` materializes ANY commit through
+`store.state_at`, which runs the fork path (nearest snapshot + replay) into a scratch branch inside a
+transaction that is always rolled back. It's read-only by construction, and equal to what a fork at
+that commit starts from (tested, across a snapshot boundary). Operator-only, like `/log`/`/events`. **The AI
 world-authoring stages ship (BE-7):** `POST /worlds/backfill` previews a thin pack's AI gap-fill
 (the augmented seeds, each tagged `provenance=ai_backfill`, + before/after grade) and `POST
 /worlds/probe[?tries=]` returns the judge-scored model-capability report. Both are
@@ -243,7 +245,7 @@ uro world export ashfall -o ashfall.uwp   # hash-chain-stamped bundle;  uro worl
 uro serve --token alice --token bob       # run the server;  uro connect <campaign> --server URL --token alice  (WS client)
 uro serve --token dev --cors-origin http://localhost:5173   # allow a browser SPA (uro-loom) — see "Browser access" below
 uro world list | uro campaign list [--world W] | uro campaign show <campaign>   # what exists, who sits where
-uro state <campaign> [--sections actors,claims,…]   # current projections (operator view: every section)
+uro state <campaign> | uro state --world W [--branch B | --at REF] [--sections …]   # projections now, or at any past commit
 uro chronicle <campaign> | uro chronicle --world W --branch B   # recent beats, oldest first
 uro events <world> [--branch --type --entity --caused-by]      # the raw event log (operator view, D-45)
 uro show <world> <commit|prefix|marker>   # one commit's events;  ids print in FULL (a ULID's first 10 chars are a timestamp)

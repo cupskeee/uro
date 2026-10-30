@@ -125,3 +125,44 @@ def test_world_new_takes_a_ruleset(world: SimpleNamespace) -> None:
     code, out = _uro("state", campaign, "--sections", "sheets")
     assert '"wounds"' in out  # a Uro Pool sheet
     assert _uro("world", "new", f"x-{new_id()}", "--ruleset", "srd51")[0] == 1
+
+
+async def test_state_at_any_commit_matches_a_fork_and_leaves_no_trace(
+    store: PostgresEventStore,
+) -> None:
+    # World state at a past commit: the SAME path a fork materializes by, then rolled back.
+    store._snapshot_every = 3  # cross a snapshot boundary: restore + replay, not replay alone
+    w = await store.create_world(f"state-at-{new_id()}")
+    main = w.main_branch_id
+    commits = []
+    for i in range(7):
+        c = await store.append_beat(main, [actor_created(actor_id=f"a:{i}", name=f"N{i}")])
+        commits.append(c.commit_id)
+    await store.create_marker(w.world_id, "fourth", main)  # names the head: 7 actors
+
+    at, state = await store.state_at(w.world_id, commits[4], ["actors"])
+    assert at == commits[4] and sorted(a["actor_id"] for a in state["actors"]) == [
+        f"a:{i}" for i in range(5)
+    ]
+    fork = await store.fork_branch(w.world_id, commits[4], "check")
+    forked = (await store.query_across([fork.branch_id], ["actors"]))[fork.branch_id]
+    assert state == forked  # identical to what a fork there starts from
+    _, by_marker = await store.state_at(w.world_id, "fourth", ["actors"])
+    assert len(by_marker["actors"]) == 7
+
+    names = [b.name for b in await store.list_branches(w.world_id)]
+    assert sorted(names) == ["check", "main"]  # no scratch branch survived
+    with pytest.raises(KeyError):
+        await store.state_at(w.world_id, "nope", ["actors"])
+    with pytest.raises(ValueError, match="unknown section"):
+        await store.state_at(w.world_id, commits[0], ["nope"])
+
+
+def test_cli_state_of_a_world_at_a_past_commit(world: SimpleNamespace) -> None:
+    code, out = _uro("state", "--world", world.name, "--at", world.commit, "--sections", "actors")
+    assert code == 0 and f"at commit {world.commit}" in out and '"Mara"' in out
+    code, out = _uro("state", "--world", world.name, "--branch", "what-if", "--sections", "actors")
+    assert code == 0 and '"Ghost"' in out
+    code, out = _uro("state", "--world", world.name, "--sections", "actors")
+    assert code == 0 and '"Ghost"' not in out  # main never saw the fork's actor
+    assert _uro("state", "--world", world.name, "--at", "x", "--branch", "main")[0] == 1

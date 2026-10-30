@@ -46,6 +46,10 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
     which credential a connection uses.
 
   A running server picks either change up on reload.
+- **World state at any past commit.** `GET /worlds/{w}/state?at=<commit|marker|prefix>` (or
+  `?branch=` for a head) and `uro state --world W --at REF` show the projections as they stood
+  then. `store.state_at` runs the same materialization a fork uses, in a transaction that is always
+  rolled back, so it writes nothing and matches what a fork at that commit would start from.
 - **One server hosts every ruleset.** `uro serve` played only the ruleset it was started with and
   refused other campaigns. Each campaign now plays under the ruleset it pinned, as with `uro play`;
   `--ruleset` only sets the default for unpinned campaigns. Other rulesets run on sibling engines
