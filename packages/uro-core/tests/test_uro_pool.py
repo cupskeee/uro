@@ -179,3 +179,62 @@ async def test_a_uro_pool_fight_through_the_pipeline(store: PostgresEventStore) 
     bane = Sheet.model_validate(await store.get_sheet(main, "a:bane"))
     ash = Sheet.model_validate(await store.get_sheet(main, "a:ash"))
     assert not bane.in_fight or not ash.in_fight  # a decisive, ruleset-shaped result persisted
+
+
+# --- holistic-review fixes (2026-10-30) ----------------------------------------------------
+
+
+def test_a_round_close_keeps_every_strike_in_the_turn_trace() -> None:
+    # Review: the runner kept only the FIRST effect's trace, so in a simultaneous round the other
+    # fighter's strike never reached the narrator.
+    fighters = [
+        Combatant(actor_id="a:ash", team="party", sheet=_sheet(might=2, nerve=2)),
+        Combatant(actor_id="a:bane", team="foes", sheet=_sheet(might=2, nerve=2)),
+    ]
+    events, _ = run_encounter(POOL, fighters, Rng(3), encounter_id="e3")
+    closing = next(
+        e for e in events if e.event_type == "EncounterTurnTaken" and e.payload["trace"]
+    )  # the first round's closing commit
+    assert "a:ash strikes a:bane" in closing.payload["trace"]
+    assert "a:bane strikes a:ash" in closing.payload["trace"]
+
+
+async def test_a_mutual_knockout_wounds_both_sides_and_loots_nothing(
+    store: PostgresEventStore,
+) -> None:
+    from uro_core.domain.events import item_created
+    from uro_core.rulesets.base import EncounterOutcome
+
+    world = await store.create_world(f"Pool-{new_id()}")
+    branch = world.main_branch_id
+    await store.append_beat(
+        branch,
+        [
+            actor_created(actor_id="a:ash", name="Ash"),
+            actor_created(actor_id="a:bane", name="Bane"),
+            item_created(item_id="i:knife", name="knife", owner_ref="a:bane"),
+        ],
+    )
+    fighters = [
+        Combatant(actor_id="a:ash", team="party", sheet={}),
+        Combatant(actor_id="a:bane", team="foes", sheet={}),
+    ]
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Scripted(plan_json="{}")))
+    events = await engine._combat_consequences(
+        branch, EncounterOutcome(winner_team=None, out_of_fight=["a:ash", "a:bane"]), fighters
+    )
+    wounded = {e.payload["subject_refs"][0] for e in events if e.event_type == "ClaimRecorded"}
+    assert wounded == {"a:ash", "a:bane"}  # both went down — both carry the injury
+    assert [e for e in events if e.event_type == "ItemTransferred"] == []  # nobody left to loot
+
+
+def test_check_difficulties_reach_the_dice() -> None:
+    # Review: no affordance set a difficulty, so every in-play check rolled against 4+.
+    from uro_core.pipeline.mechanics import resolve_mechanics
+    from uro_core.pipeline.plan import BeatPlan, PlanMechanic
+
+    targets = {a.id: a.difficulty for a in POOL.affordances() if not a.starts_encounter}
+    assert targets == {"investigate": "hard", "talk_down": "normal", "hold_firm": "easy"}
+    plan = BeatPlan(mechanics=[PlanMechanic(affordance="investigate")])
+    [result] = resolve_mechanics(POOL, plan, {"a:pc": _sheet(wits=3)}, "a:pc", Rng(0))
+    assert result.detail["target"] == 5  # "hard" → 5+
