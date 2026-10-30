@@ -17,9 +17,10 @@ just fmt                            # ruff format + --fix
 uv run uro world new "Name"         # → a campaign id
 uv run uro play <campaign>          # interactive; --provider stub|local|openai|anthropic ; --bare = ablation
 uv run uro consistency <campaign>   # thesis proxy metric T2
+uv run uro provider add|bind|list   # D-47 DB-backed model-connection registry (what `uro serve` resolves)
 ```
 
-`just test` needs Postgres up; DB-requiring tests auto-skip if it's down. **CI never makes live LLM calls** — provider-dependent tests use recorded/mock transports or the deterministic stub. No credentials or Ollama were available in the build environment, so the live-model run is pending (commands in `docs/10` Thesis section).
+`just test` needs Postgres up; DB-requiring tests auto-skip if it's down, and run against a dedicated `uro_test` database (created on first run), never the instance's `uro` DB. **CI never makes live LLM calls** — provider-dependent tests use recorded/mock transports or the deterministic stub. Live-model runs are the owner's (their keys aren't visible to Claude's bash) — runbook in `docs/live-run.md`.
 
 ## Non-negotiable conventions
 
@@ -150,4 +151,15 @@ The whole games-driven backlog (`docs/18`) was worked issue-by-issue as branch�
 - **#14 — P3 small trio (B4/B5):** place/faction claim recall (recall's `relevant()` matches on-stage `place_id`/`faction_id`) + `current_world_time_batch` + `uro branch list day=`. A fork-relative snapshot cadence was **built then reverted** as a validated deferral (the absolute cadence already bounds replay to < N — `docs/18`).
 - **#25 — RL-6 quantified/relational reaction triggers (D-42):** a `$trigger.<field>`-aware `when` (bound from the trigger payload, evaluated PER matching event = a true existential) + `trigger.per_event` (count-each). Trust untouched (conditions are reads); parse fences the ref (string-scalar field, ref slot only) and eval fails the whole `when` closed on an unbound/null ref. `RULES_API_VERSION` 4→5. Chosen via a lightweight design check (3 blind proposers + 1 adversary that killed the naive first-event-only shape).
 
-Next: **#15 (distribution)** when the owner un-parks it, the staged **C6 / computed-delta (OQ-1)** on evidence, or the rest of the **Post-PoC horizon** (docs/10). Diminishing returns on the remaining strands.
+## Post-PoC — DISTRIBUTION, THE LOOM SURFACE, THE MODEL REGISTRY, EMERGENT WORLD-BUILDING (D-43..D-50, 2026-07-19 → 07-22, 535 tests green)
+
+Releases: **v0.2.0 is on PyPI** (2026-07-19); **v0.3.0 is a GitHub Release only** (2026-07-21) — its PyPI publish (the owner-activated `publish` workflow) was never run, so PyPI still serves 0.2.0. Everything from the Codex provider onward (below) is **unreleased on `main`**. Migrations through 022.
+
+- **#15 — distribution (D-43):** Postgres + pgvector stays the ONE store (no embedded second backend); `uro-core` base install is the pure engine, adapters behind extras (`postgres`/`llm`/`all`); docker-first runtime; PyPI publishing is owner-activated plumbing (one GitHub environment per package).
+- **The Loom management surface (BE-1…BE-11, #33–#43, tracker #44):** the HTTP API the separate [uro-loom](https://github.com/cupskeee/uro-loom) web console consumes — branches/fork/log/markers, event-log + commit detail, dry-run + consistency, pack upload/validate, backfill/probe, seed + export/import, campaign end + codex, usage + ruleset registry + world-scoped chronicle, `uro serve --cors-origin`, the reconciled WS wire contract. Authority: **D-44** operator-gates structural-write and cost-bearing endpoints (`is_admin`); **D-45** the raw event log + full export are operator-only (the epistemic layer is never bypassed by a player-facing read); **D-46** the holistic-review hardening that made both exhaustive.
+- **D-47 — model connections are DB rows** (`docs/20`, migration 020): an instance-level registry (connections / Fernet-encrypted credentials under the `URO_SECRET_KEY` KEK / role bindings) off the event axis, over `uro provider …` and `/providers`; `uro serve` resolves roles registry-first (→ `uro.toml` → `--provider` → stub default, `docs/20`). Then (unreleased): a **`codex` provider kind** (ChatGPT-subscription via OAuth device login, `uro provider codex-login`), OpenAI o-series support, `.env` auto-load, the test suite isolated to `uro_test`.
+- **D-48 — opt-in NPC-speech routing:** a planner-classified `dialogue` beat narrates through the `dialogue` role iff it's explicitly bound (off by default); the router warns loudly at serve/reload when the `embedder` role resolves to a chat-only provider (semantic memory off).
+- **D-49 — emergent places + per-category extraction policy** (migration 021): the extractor proposes standing places (`PlaceCreated`, deduped like actors); an operator-only `GET/PATCH /extraction-policy` gates which emergent categories play may create, enforced structurally in the gauntlet.
+- **D-50 — relational emergent world-building** (migration 022): the extractor also proposes factions + threads; actors/places carry affiliations, the gauntlet cascade-creates named factions/places and wires `member_of`/`located_in` edges; dedup is affiliation-aware (same name + conflicting house = distinct actors). Whitelist still structural (creations + those two edge kinds only). **Open:** it widens what the model invents most — a live prompt-tuning pass is still owed.
+
+Next: **cut v0.4.0 and run the PyPI publish** (0.3.0 never reached PyPI); the **D-50 live tuning pass** (owner runs keyed play, Claude analyzes from Postgres); the staged **C6 / computed-delta (OQ-1)** on evidence; or the rest of the **Post-PoC horizon** (docs/10). Diminishing returns on the remaining strands.
