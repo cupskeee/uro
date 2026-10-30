@@ -1,0 +1,19 @@
+- id: "a:maren"
+  name: "Maren Coil"
+  aliases: ["Maren"]
+  tier: 2
+  role: "harbour-warden"
+  faction: "f:wardens"
+  location: "p:brinehold"
+- id: "a:tobin"
+  name: "Tobin Reave"
+  aliases: ["Tobin"]
+  tier: 2
+  role: "salvage-captain"
+  faction: "f:salvagers"
+  location: "p:brinehold"
+- id: "a:ilse"
+  name: "Ilse"
+  tier: 1
+  role: "net-mender"
+  location: "p:brinehold"

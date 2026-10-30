@@ -51,7 +51,8 @@ epoch_label = "After the Sundering"   # single epoch for date rendering. Named n
 id = "uro-basic"             # resolved via the ruleset registry (06, D-30); "uro-pbta" for the
 version = ">=0.1"            #   alien PbtA build. A campaign started on the world PINS this, so
 [ruleset.config]             #   play/fork rebinds the same ruleset. Example: worlds/emberfell
-                             #   (id="uro-pbta") plays under the 2d6 system, worlds/ashfall d20.
+                             #   (id="uro-pbta") plays under the 2d6 system, worlds/ashfall d20,
+                             #   worlds/brinehold (id="uro-pool") the d6 dice pool (D-55).
 
 [history]
 seed_era = "aftermath-of-empire"   # hint to the History service

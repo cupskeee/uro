@@ -88,6 +88,7 @@ forbidden_modules = [
     "uro_core.providers.adapters",
     "uro_core.rulesets.uro_basic",
     "uro_core.rulesets.uro_pbta",
+    "uro_core.rulesets.uro_pool",
 ]
 
 [[tool.importlinter.contracts]]

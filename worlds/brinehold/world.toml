@@ -1,0 +1,23 @@
+# Brinehold — the example pack bound to the third built-in ruleset (uro_pool, an original d6 dice
+# pool — D-55). Proves a pack selects it and a campaign plays under it end-to-end, like Emberfell
+# does for uro_pbta. Grades "runnable" (3 actors, a conflict seed, tone, seeded history).
+
+[world]
+name = "Brinehold"
+tone = ["salt-stained", "tense", "close-knit"]
+
+[content]
+rating = "mature"
+enabled = ["violence"]
+
+[calendar]
+days_per_year = 360
+seasons = ["thaw", "high-tide", "gales", "ice"]
+
+[ruleset]
+id = "uro-pool"
+version = "0"
+
+[history]
+seed_era = "the-year-the-seawall-broke"
+simulate_years = 30
