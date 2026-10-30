@@ -7,8 +7,9 @@ Enforced by construction (structural — cannot be bypassed):
 - Whitelist: the schema permits only actors, places, factions, threads, claims — and, via
   affiliations, `member_of`/`located_in` edges between them (D-50). The extractor is structurally
   incapable of proposing damage/death/loss events; every emergent entity is a benign CREATION.
-  The one mutation it may propose is resolving a live EMERGENT thread the narration settles
-  (D-52) — never an authored thread, never any other state change.
+  It may propose exactly two bounded mutations: resolving a live EMERGENT thread the narration
+  settles (D-52) and recording an alias on a known actor (D-56) — never an authored thread, never
+  damage/death/loss or any other state change.
 - Tier ceiling: the gauntlet always creates actors at T1.
 - Role-noun guard (D-51): an actor is never MINTED from a description ("the guard" — all
   lowercase once its article is stripped); under D-50 it would become a name key every later
@@ -46,7 +47,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, Field
 
@@ -150,15 +151,13 @@ def _is_role_noun(name: str) -> bool:
     return re.sub(r"^(the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE).islower()
 
 
-# Partial-name resolution (D-56): articles and personal honorifics carry no identity, so they are
-# dropped before comparing names. Organisation words ("House", "Order") and "Old"/"Young" are KEPT —
-# they ARE identity ("Iron Order" vs "Iron Fist"; "Old Weck" vs "Young Weck").
-_NON_NAME_WORDS = frozenset(
+# Partial-name resolution (D-56, tightened by D-58): articles carry no identity anywhere; a personal
+# honorific only does as a LEADING title ("Brother Aldo" is a title, "Aldo's brother" a relation).
+# Organisation words ("House", "Order") and "Old"/"Young" are KEPT — they ARE identity ("Iron Order"
+# vs "Iron Fist"; "Old Weck" vs "Young Weck").
+_ARTICLES = frozenset({"the", "a", "an", "of"})
+_HONORIFICS = frozenset(
     {
-        "the",
-        "a",
-        "an",
-        "of",
         "ser",
         "sir",
         "lady",
@@ -175,30 +174,68 @@ _NON_NAME_WORDS = frozenset(
         "doctor",
     }
 )
+# a possessive ("Mira's", "Thomas'") — straight or curly apostrophe (models emit both)
+_POSSESSIVE = re.compile("[^\\W\\d_]['\u2019]s\\b|s['\u2019](?=\\s|$)", re.IGNORECASE)
 
 
-def _name_words(name: str) -> frozenset[str]:
-    """The distinctive words of a name (D-56): lowercased, honorifics/articles dropped, a plural
-    folded — "Ser Aldren Voss" → {aldren, voss}, "the Veyrs" → {veyr}."""
-    out: set[str] = set()
+class _Name(NamedTuple):
+    words: frozenset[str]  # the distinctive words
+    titles: frozenset[str]  # the leading honorifics
+
+
+def _name_parts(name: str) -> _Name:
+    """A name's distinctive words and leading titles: "Ser Aldren Voss" → ({aldren, voss}, {ser}),
+    "the Veyrs" → ({veyr}, {}) — articles dropped, a trailing plural folded."""
+    words: set[str] = set()
+    titles: set[str] = set()
+    leading = True
     for w in re.findall(r"[^\W\d_]+", name.lower()):  # letter runs, any script
-        if len(w) < 2 or w in _NON_NAME_WORDS:
+        if len(w) < 2 or w in _ARTICLES:
             continue
-        out.add(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w)
-    return frozenset(out)
+        if leading and w in _HONORIFICS:
+            titles.add(w)
+            continue
+        leading = False
+        words.add(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w)
+    return _Name(frozenset(words), frozenset(titles))
 
 
-def _partial_match(words: frozenset[str], index: dict[str, list[frozenset[str]]]) -> str | None:
-    """The ONE known entity whose name/alias words contain the mention's, or are contained by them
-    ("Aldren" ↔ "Ser Aldren Voss"); None if there is none OR several — ambiguity never links."""
-    if not words:
+def _partial_match(mention: _Name, index: dict[str, list[_Name]]) -> str | None:
+    """The ONE known entity whose name (or alias) words CONTAIN the mention's — "Aldren" →
+    "Ser Aldren Voss" — and whose title, if both have one, agrees; None if there is none OR several.
+    Subset direction only (D-58): a mention that ADDS words ("Vel Market", "Tobin's wife") names
+    something else, so it never links to the shorter name."""
+    if not mention.words:
         return None
-    hits = {
-        eid
-        for eid, word_sets in index.items()
-        if any(ws and (words <= ws or ws <= words) for ws in word_sets)
-    }
+
+    def fits(known: _Name) -> bool:
+        if not known.words or not mention.words <= known.words:
+            return False
+        # different titles name different people ("Lady Crowe" is not "Lord Haldane Crowe")
+        return not (mention.titles and known.titles and not mention.titles & known.titles)
+
+    hits = {eid for eid, names in index.items() if any(fits(n) for n in names)}
     return next(iter(hits)) if len(hits) == 1 else None
+
+
+def _claims_fail_closed(items: Any) -> Any:
+    """A null on a claim's TRUST fields never takes the trusting default (D-58): a null `provenance`
+    means the extractor didn't say whose words these are — dialogue if a speaker is named, else the
+    claim is dropped — and a null `durable` means not durable. Defaults stay for keys left out."""
+    if not isinstance(items, list):
+        return items
+    out = []
+    for item in items:
+        if isinstance(item, dict):
+            if "provenance" in item and item["provenance"] is None:
+                if not item.get("speaker"):
+                    logger.warning("extractor: dropped a claim with no provenance: %.200r", item)
+                    continue
+                item = {**item, "provenance": "dialogue"}
+            if "durable" in item and item["durable"] is None:
+                item = {**item, "durable": False}
+        out.append(item)
+    return out
 
 
 def build_extractor_messages(
@@ -262,7 +299,9 @@ def parse_extraction(raw: str) -> Extraction | None:
                 places=_salvage(data, "places", ProposedPlace),
                 factions=_salvage(data, "factions", ProposedFaction),
                 threads=_salvage(data, "threads", ProposedThread),
-                claims=_salvage(data, "claims", ProposedClaim),
+                claims=_salvage(
+                    {"claims": _claims_fail_closed(data.get("claims"))}, "claims", ProposedClaim
+                ),
                 resolves=_salvage_ids(data, "resolves"),
             )
     return None
@@ -338,9 +377,9 @@ async def run_gauntlet(
     places_by_key = {canonical_name(p.name): p.place_id for p in places}
     factions_by_key = {canonical_name(f.name): f.faction_id for f in factions}
     # D-56 partial-name indices: entity id → the word sets of its name (+ aliases)
-    place_words = {p.place_id: [_name_words(p.name)] for p in places}
-    faction_words = {f.faction_id: [_name_words(f.name)] for f in factions}
-    actor_words: dict[str, list[frozenset[str]]] = {}
+    place_words = {p.place_id: [_name_parts(p.name)] for p in places}
+    faction_words = {f.faction_id: [_name_parts(f.name)] for f in factions}
+    actor_words: dict[str, list[_Name]] = {}
     actors_by_key: dict[str, list[str]] = {}  # canonical name OR alias → actor ids (may be several)
     for a in await store.list_actors(branch_id):
         # Index by name AND aliases — a pack-authored "Mera" [alias "the barkeep"] must resolve when
@@ -349,7 +388,7 @@ async def run_gauntlet(
         for k in {canonical_name(a.name), *(canonical_name(al) for al in a.aliases)}:
             if k:
                 actors_by_key.setdefault(k, []).append(a.actor_id)
-        actor_words[a.actor_id] = [_name_words(n) for n in (a.name, *a.aliases)]
+        actor_words[a.actor_id] = [_name_parts(n) for n in (a.name, *a.aliases)]
     aff: dict[str, dict[str, str]] = {}  # actor_id → {"member_of"|"located_in": dst id}
     for e in await store.list_edges(branch_id):
         if e.rel_type in ("member_of", "located_in"):
@@ -362,7 +401,7 @@ async def run_gauntlet(
             return None
         if key in factions_by_key:
             return factions_by_key[key]
-        known = _partial_match(_name_words(name), faction_words)  # D-56: "the Veyrs" → House Veyr
+        known = _partial_match(_name_parts(name), faction_words)  # D-56: "the Veyrs" → House Veyr
         if known is not None:
             factions_by_key[key] = known
             return known
@@ -373,7 +412,7 @@ async def run_gauntlet(
             faction_created(faction_id=fid, name=name.strip(), description=description.strip())
         )
         factions_by_key[key] = fid
-        faction_words[fid] = [_name_words(name)]
+        faction_words[fid] = [_name_parts(name)]
         return fid
 
     def resolve_place(name: str, *, description: str = "", parent: str = "") -> str | None:
@@ -382,7 +421,7 @@ async def run_gauntlet(
             return None
         if key in places_by_key:
             return places_by_key[key]
-        known = _partial_match(_name_words(name), place_words)  # D-56: "Riverkeep fortress"
+        known = _partial_match(_name_parts(name), place_words)  # "the Lantern" → Gilded Lantern
         if known is not None:
             places_by_key[key] = known
             return known
@@ -393,7 +432,7 @@ async def run_gauntlet(
             place_created(place_id=pid, name=name.strip(), description=description.strip())
         )
         places_by_key[key] = pid
-        place_words[pid] = [_name_words(name)]
+        place_words[pid] = [_name_parts(name)]
         if parent.strip():  # cascade the containing place + a located_in edge
             parent_id = resolve_place(parent)
             if parent_id is not None and parent_id != pid:
@@ -436,8 +475,8 @@ async def run_gauntlet(
         # same-name actor of a different house is distinct — D-50 — not a partial match).
         partial = (
             None
-            if key in actors_by_key or _is_role_noun(name)
-            else _partial_match(_name_words(name), actor_words)
+            if key in actors_by_key or _is_role_noun(name) or _POSSESSIVE.search(name)
+            else _partial_match(_name_parts(name), actor_words)
         )
         if partial is not None:
             ca = aff.get(partial, {})
@@ -446,7 +485,7 @@ async def run_gauntlet(
             ):
                 events.append(entity_alias_added(entity_id=partial, alias=name.strip()))
                 actors_by_key[key] = [partial]
-                actor_words[partial].append(_name_words(name))
+                actor_words[partial].append(_name_parts(name))
                 _enrich(partial, "member_of", fid)
                 _enrich(partial, "located_in", pid)
                 name_to_ref[key] = partial
@@ -462,7 +501,7 @@ async def run_gauntlet(
         aid = f"a:{new_id()}"
         events.append(actor_created(actor_id=aid, name=name.strip(), tier=1, role=role.strip()))
         actors_by_key.setdefault(key, []).append(aid)
-        actor_words[aid] = [_name_words(name)]
+        actor_words[aid] = [_name_parts(name)]
         name_to_ref[key] = aid
         _enrich(aid, "member_of", fid)
         _enrich(aid, "located_in", pid)
@@ -478,7 +517,9 @@ async def run_gauntlet(
         ids = actors_by_key.get(key)
         if ids:
             return ids[0]
-        return None if _is_role_noun(name) else _partial_match(_name_words(name), actor_words)
+        if _is_role_noun(name) or _POSSESSIVE.search(name):  # "Mira's mother" is not Mira (D-58)
+            return None
+        return _partial_match(_name_parts(name), actor_words)
 
     for pa in extraction.actors:
         resolve_actor(pa.name, role=pa.role, member_of=pa.member_of, located_in=pa.located_in)
@@ -488,7 +529,10 @@ async def run_gauntlet(
         resolve_faction(pf.name, description=pf.description)
     if policy.extract_threads:
         threads = await store.list_threads(branch_id)
-        known_stakes = {_statement_key(t.stakes) for t in threads}
+        # Only LIVE threads (D-58): a plot that ended may legitimately recur in the same words.
+        known_stakes = {
+            _statement_key(t.stakes) for t in threads if t.state not in ("resolved", "dead")
+        }
         for pt in extraction.threads:
             stakes = pt.stakes.strip()
             if stakes and _statement_key(stakes) not in known_stakes:
@@ -531,10 +575,19 @@ async def run_gauntlet(
 
     # Restatement guard (D-51): live play re-proposed a KNOWN claim verbatim, beat after beat
     # ("Tavi has a bracelet.", 4 times) — it was in KNOWN CLAIMS and repeated anyway.
+    # Module rumors (origin=module) are left out (D-58): an in-world claim must never be absorbed
+    # into one — `expire_claims` can retract a module rumor, and would take the claim with it.
     claim_ids: dict[tuple[str, frozenset[str], str], str] = {
         (_statement_key(c.statement), frozenset(c.subject_refs), c.truth): c.claim_id
         for c in await store.list_claims(branch_id)
+        if c.origin != "module"
     }
+    believed: dict[str, set[str]] = {}  # actor → claim ids they already hold a belief in
+
+    async def holds(actor_id: str, claim_id: str) -> bool:
+        if actor_id not in believed:
+            believed[actor_id] = {b.claim_id for b in await store.beliefs_of(branch_id, actor_id)}
+        return claim_id in believed[actor_id]
 
     for pc in extraction.claims:
         if not pc.durable:
@@ -553,6 +606,10 @@ async def run_gauntlet(
 
         key = (_statement_key(statement), frozenset(subject_refs), truth)
         existing_id = claim_ids.get(key)
+        if existing_id is None and truth == "unknown":
+            # A character repeating an established FACT (D-58): their belief attaches to the fact,
+            # rather than a duplicate unknown-truth claim of the same words.
+            existing_id = claim_ids.get((key[0], key[1], "true"))
         if existing_id is not None:
             claim_id = existing_id  # a restatement: nothing new to record
         else:
@@ -570,7 +627,12 @@ async def run_gauntlet(
 
         if pc.provenance == "dialogue" and pc.speaker and pc.speaker.strip():
             speaker_ref = resolve_actor(pc.speaker)
-            if speaker_ref is not None:
+            # A restatement never overwrites a belief the speaker ALREADY holds (D-58): that row may
+            # carry a propagated rumor's decayed confidence and its `learned_from` chain (P5).
+            if speaker_ref is not None and not (
+                existing_id is not None and await holds(speaker_ref, claim_id)
+            ):
+                believed.setdefault(speaker_ref, set()).add(claim_id)
                 confidence = (
                     pc.confidence
                     if (pc.confidence is not None and 0.0 <= pc.confidence <= 1.0)

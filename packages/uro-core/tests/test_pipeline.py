@@ -12,6 +12,7 @@ from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import (
     DomainEvent,
     actor_created,
+    belief_changed,
     claim_recorded,
     thread_created,
 )
@@ -771,7 +772,7 @@ async def test_partial_names_resolve_places_and_factions_but_keep_organisation_w
             store,
             branch,
             Extraction(
-                places=[ProposedPlace(name="Riverkeep")],
+                places=[ProposedPlace(name="The Gilded Lantern"), ProposedPlace(name="Vel")],
                 factions=[ProposedFaction(name="House Veyr"), ProposedFaction(name="Iron Order")],
             ),
         ),
@@ -780,9 +781,102 @@ async def test_partial_names_resolve_places_and_factions_but_keep_organisation_w
         store,
         branch,
         Extraction(
-            places=[ProposedPlace(name="Riverkeep fortress")],
+            places=[
+                ProposedPlace(name="the Lantern"),
+                ProposedPlace(name="Vel Market", parent="Vel"),
+            ],
             factions=[ProposedFaction(name="the Veyrs"), ProposedFaction(name="Iron Fist")],
         ),
     )
-    assert _of_type(ev, "PlaceCreated") == []  # "Riverkeep fortress" is Riverkeep
+    # "the Lantern" is the Gilded Lantern; "Vel Market" ADDS a word, so it is a new place inside
+    # Vel (D-58 — the superset direction used to collapse every district into its city)
+    assert [e.payload["name"] for e in _of_type(ev, "PlaceCreated")] == ["Vel Market"]
+    assert len(_of_type(ev, "EdgeAdded")) == 1  # Vel Market located_in Vel
     assert [e.payload["name"] for e in _of_type(ev, "FactionCreated")] == ["Iron Fist"]
+
+
+# --- D-58: holistic-review fixes to D-51/D-52/D-56 -------------------------------------------
+
+
+async def test_relatives_and_retitled_names_never_merge_into_a_known_actor(
+    store: PostgresEventStore,
+) -> None:
+    # Review HIGH: "Mira's mother" linked to Mira (a PC!) and "Lady Crowe" to Lord Haldane Crowe.
+    branch = await _branch(store)
+    first = await run_gauntlet(
+        store,
+        branch,
+        Extraction(actors=[ProposedActor(name="Mira"), ProposedActor(name="Lord Haldane Crowe")]),
+    )
+    await store.append_beat(branch, first)
+    mira = next(
+        e.payload["actor_id"]
+        for e in _of_type(first, "ActorCreated")
+        if e.payload["name"] == "Mira"
+    )
+    ev = await run_gauntlet(
+        store,
+        branch,
+        Extraction(
+            actors=[ProposedActor(name="Mira's mother"), ProposedActor(name="Lady Crowe")],
+            claims=[
+                ProposedClaim(statement="Mira's mother died of fever.", about=["Mira's mother"])
+            ],
+        ),
+    )
+    assert _of_type(ev, "EntityAliasAdded") == []
+    assert {e.payload["name"] for e in _of_type(ev, "ActorCreated")} == {
+        "Mira's mother",
+        "Lady Crowe",
+    }
+    assert mira not in _of_type(ev, "ClaimRecorded")[0].payload["subject_refs"]
+
+
+async def test_restatements_respect_facts_rumors_and_existing_beliefs(
+    store: PostgresEventStore,
+) -> None:
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            actor_created(actor_id="a:mara", name="Mara"),
+            claim_recorded(
+                claim_id="c:fact", statement="Tavi has a bracelet.", truth="true", origin="narrator"
+            ),
+            claim_recorded(claim_id="c:rumor", statement="The mill burned.", origin="module"),
+            claim_recorded(claim_id="c:feat", statement="The wizard felled the champion."),
+            belief_changed(
+                actor_id="a:mara", claim_id="c:feat", confidence=0.27, learned_from="a:witness"
+            ),
+        ],
+    )
+
+    def said(text: str) -> ProposedClaim:
+        return ProposedClaim(statement=text, provenance="dialogue", speaker="Mara")
+
+    ev = await run_gauntlet(
+        store,
+        branch,
+        Extraction(
+            claims=[
+                said("Tavi has a bracelet."),  # repeats a FACT → belief on the fact, no new claim
+                said("The mill burned."),  # repeats a MODULE rumor → its own claim (not absorbed)
+                said("The wizard felled the champion."),  # repeats a rumor Mara already holds
+            ]
+        ),
+    )
+    recorded = _of_type(ev, "ClaimRecorded")
+    assert [c.payload["statement"] for c in recorded] == ["The mill burned."]
+    beliefs = {b.payload["claim_id"] for b in _of_type(ev, "BeliefChanged")}
+    assert "c:fact" in beliefs and "c:feat" not in beliefs  # the propagated belief is left alone
+    await store.append_beat(branch, ev)
+    held = {b.claim_id: b for b in await store.beliefs_of(branch, "a:mara")}
+    assert (held["c:feat"].confidence, held["c:feat"].learned_from) == (0.27, "a:witness")
+
+
+async def test_a_resolved_plot_can_recur(store: PostgresEventStore) -> None:
+    branch = await _branch(store)
+    tid = await _emergent_thread(store, branch, "Raiders threaten the ford.")
+    await store.append_beat(branch, await run_gauntlet(store, branch, Extraction(resolves=[tid])))
+    again = Extraction(threads=[ProposedThread(stakes="Raiders threaten the ford.")])
+    assert len(_of_type(await run_gauntlet(store, branch, again), "ThreadCreated")) == 1
