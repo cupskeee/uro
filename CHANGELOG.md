@@ -26,6 +26,18 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   player holds (the server stores a hash), and nothing listed tokens. New: `GET /campaigns/{c}/tokens`
   and `uro token list` (metadata only; a player sees only their own), and revoke by participant
   (`{participant}` on `/tokens/revoke`, `uro token revoke --participant`).
+- **CLI commands for the server's admin writes.** The CLI now covers:
+  - `uro extraction-policy show|set` (D-49);
+  - `uro provider enable|disable|refresh|test`;
+  - `uro provider credential add`;
+  - `uro provider reload`, which asks a running server to pick up registry edits;
+  - `uro campaign time-skip`, which advances the campaign's own branch (the CLI could only skip time
+    by forking);
+  - `uro campaign outcome <bundle.json>`, which records a Chronicler outcome through the same gate as
+    the endpoint.
+
+  Connection refresh and test moved from the server into core (`refresh_connection_models`,
+  `probe_connection`), so both surfaces run one implementation.
 - **A commit reference can be a unique id prefix.** Anything that takes a commit (fork `--at`,
   `uro show`, the fork endpoint) accepts a prefix of 6 or more characters. An ambiguous prefix is an
   error, never a guess.

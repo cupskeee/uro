@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Any
 
 import asyncpg
 import httpx
@@ -272,3 +273,94 @@ async def discover_models(
         data = resp.json().get("data", [])
     ids = sorted({d["id"] for d in data if isinstance(d, dict) and isinstance(d.get("id"), str)})
     return [{"id": i, "modality": classify_modality(conn.provider, i)} for i in ids]
+
+
+# The `test`-probe output ceiling. Small enough to be ~free on a chat model (it stops after a
+# one-word reply anyway) but large enough that an o-series reasoning model — which spends the budget
+# on hidden reasoning tokens BEFORE any output — clears its minimum and can 200 rather than failing
+# the very probe this is meant to make pass.
+_PROBE_MAX_TOKENS = 256
+
+# A known-good CHAT model to probe when `test` is called without one (D-47 slice 3). See
+# `_default_probe_model` — for local/openai_compat the connection's own discovered models are a
+# better canary than any pinned default.
+_DEFAULT_PROBE_MODEL = {
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-sonnet-5",
+    "local": "llama3.1",
+    "stub": "stub-chat",
+    "codex": "gpt-5",  # fallback if a codex connection's models weren't discovered (review)
+}
+
+
+def default_probe_model(conn: ModelConnection) -> str:
+    """Pick a canary model for a connection-level liveness probe when the caller passes none.
+
+    Prefer the provider's known-good chat default — NOT `cached_models[0]`: `discover_models`
+    returns the list SORTED, so OpenAI's leads with `babbage-002`, a legacy base-completion model
+    the chat-probe can't call → a false ✗ (the reported bug). For `local`/`openai_compat` (where
+    there is no reliable pinned chat default — the local one may not even be pulled) fall back to
+    the connection's OWN first discovered model, which `classify_modality` then routes correctly to
+    embed-vs-complete. A precise per-MODEL check lives on each role binding instead.
+    """
+    if conn.provider in ("local", "openai_compat", "codex"):
+        for m in conn.cached_models or []:
+            mid = m.get("id")
+            if mid:
+                return str(mid)
+    return _DEFAULT_PROBE_MODEL.get(conn.provider, "")
+
+
+async def refresh_connection_models(
+    store: ModelRegistry, connection_id: str
+) -> list[dict[str, str]]:
+    """Discover a connection's models (a LIVE provider call) and cache them with their modality
+    (D-47 slice 3) — `POST /providers/{id}/refresh` and `uro provider refresh`. KeyError if the
+    connection doesn't exist; a provider/network failure raises."""
+    conn = await store.get_connection(connection_id)
+    if conn is None:
+        raise KeyError(connection_id)
+    models = await discover_models(conn, await _access_token(store, conn))
+    await store.set_connection_models(connection_id, models)
+    return models
+
+
+async def probe_connection(
+    store: ModelRegistry, connection_id: str, model: str = ""
+) -> dict[str, Any]:
+    """A 1-call liveness probe of a connection (D-47 slice 3) — `POST /providers/{id}/test` and
+    `uro provider test`. Returns `{ok, detail}`: a provider failure is `ok: False`, not an error.
+    KeyError if the connection doesn't exist."""
+    from uro_core.providers.base import CompletionRequest, Message
+
+    conn = await store.get_connection(connection_id)
+    if conn is None:
+        raise KeyError(connection_id)
+    probe_model = model or default_probe_model(conn)
+    provider = provider_from_connection(conn, probe_model, await _access_token(store, conn))
+    try:
+        if classify_modality(conn.provider, probe_model) == "embedding":
+            await provider.embed(["ping"])
+        else:
+            await provider.complete(
+                CompletionRequest(
+                    messages=[Message(role="user", content="ping")],
+                    stage_tag="test",
+                    # A ceiling, not a target (see _PROBE_MAX_TOKENS): ~free on a chat model,
+                    # but gives a reasoning model room past its hidden-reasoning spend.
+                    max_tokens=_PROBE_MAX_TOKENS,
+                )
+            )
+    except Exception as exc:
+        # NEVER echo the raw provider/httpx exception text: it can carry the plaintext key (e.g.
+        # "Illegal header value b'Bearer sk-…'") — report only the exception TYPE (review). The
+        # exception is codex, whose adapter builds its ProviderError token-free (status + the
+        # backend's error body), so surfacing it makes a rejected Responses call diagnosable.
+        logger.warning("provider test failed for %s: %s", conn.provider, type(exc).__name__)
+        if conn.provider == "codex" and isinstance(exc, ProviderError):
+            return {"ok": False, "detail": f"{conn.provider}:{probe_model} failed — {exc}"}
+        return {
+            "ok": False,
+            "detail": f"{conn.provider}:{probe_model} failed ({type(exc).__name__})",
+        }
+    return {"ok": True, "detail": f"{conn.provider}:{probe_model} responded"}

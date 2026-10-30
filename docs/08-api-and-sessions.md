@@ -244,6 +244,10 @@ uro events <world> [--branch --type --entity --caused-by]      # the raw event l
 uro show <world> <commit|prefix|marker>   # one commit's events;  ids print in FULL (a ULID's first 10 chars are a timestamp)
 uro branch diff <world> <a> <b> [--sections]   # + added / - removed / ~ changed, per projection
 uro usage [--stage S]                     # LLM-call telemetry by stage;  uro ruleset list
+uro campaign time-skip <campaign> --days N   # advance the campaign's OWN branch + fire downtime agendas (fork: `branch fork --time-skip-days`)
+uro campaign outcome <campaign> bundle.json  # record an external game's outcome (Chronicler, D-25/D-32) — same gate as the endpoint
+uro extraction-policy show | set --no-places …   # which emergent categories play may create (D-49)
+uro token list <campaign> | uro token revoke <campaign> --participant P   # against a running server
 uro outbox status                         # committed beats waiting to be published (D-57)
 uro outbox relay --nats nats://localhost:4222 [--once]   # publish them to NATS JetStream
 ```

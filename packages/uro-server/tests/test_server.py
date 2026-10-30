@@ -2024,7 +2024,7 @@ def test_default_probe_model_skips_the_sorted_discovery_head() -> None:
     # The connection-level test canary must NOT be cached_models[0]: discovery returns a SORTED
     # list, so OpenAI's leads with the legacy `babbage-002` the chat-probe can't call (the bug).
     from uro_core.ports.model_registry import ModelConnection
-    from uro_server.app import _default_probe_model
+    from uro_core.providers.registry import default_probe_model as _default_probe_model
 
     oai = ModelConnection(
         id="c1",
