@@ -29,12 +29,13 @@ from uro_core.domain.events import ThreadState
 # D-34). The additions are purely additive, so v1 packs (no counters) remain valid — the engine
 # accepts the whole SUPPORTED set; a pack outside it fails loud at parse. A counter-using pack
 # should declare 2 so an old (v1) engine rejects it with a clear version error.
-RULES_API_VERSION = 6
+RULES_API_VERSION = 7
+# v7 (C6, D-54): a rule may trigger on CounterChanged — the bounded reaction cascade.
 # v6 (OQ-1, D-53): computed counter writes — set_counter.value / adjust_counter.delta take an
 # integer EXPRESSION over other counters. v5 (RL-6): $trigger.<field>-aware `when` +
 # trigger.per_event. v4 (for_each/roll_table/expire_claims), v3 multi-ref, v2 counters all still
 # valid (a literal int is still an expression, so no older pack changes meaning).
-_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
+_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
 
 
 def _event_payload_fields() -> dict[str, frozenset[str]]:
@@ -49,9 +50,7 @@ def _event_payload_fields() -> dict[str, frozenset[str]]:
             out[name[: -len("Payload")]] = frozenset(obj.model_fields)
     out.setdefault("EdgeUpdated", out.get("EdgeAdded", frozenset()))  # reuses EdgeAddedPayload
     # CounterChanged is emitted ONLY by the reaction gauntlet, so it appears only in module beats —
-    # which react() does not re-process (single-hop, no cascade until C6). A trigger on it would be
-    # accepted-but-inert, so it is NOT triggerable yet (remove this line when C6 lands cascade).
-    out.pop("CounterChanged", None)
+    # since C6 (D-54) those are re-evaluated by the bounded cascade, so it is triggerable.
     return out
 
 

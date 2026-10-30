@@ -167,4 +167,6 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
 
 - **D-53 — computed counter writes:** `set_counter`/`adjust_counter` take a bounded integer expression over other counters (economy formulas), parse-capped, fail-closed on divide-by-zero/overflow, stored absolute. `RULES_API_VERSION` 5→6.
 
-Next (owner-agreed stretch, 2026-10-30): C6 bounded cascade, an ORIGINAL third ruleset (srd51 declined — it recreates D&D 5e), the entity_index (OQ-3), NATS-backed distribution — then ONE holistic adversarial review (Opus 5.5, medium); the staged **C6 / computed-delta (OQ-1)** on evidence; or the rest of the **Post-PoC horizon** (docs/10). Diminishing returns on the remaining strands.
+- **D-54 — the bounded reaction cascade (C6):** `CounterChanged` is triggerable; after a module pass, CounterChanged-triggered rules run for up to 3 more hops (fail-closed past the cap). Only those rules join a hop, so pre-C6 packs are unchanged. `RULES_API_VERSION` 6→7.
+
+Next (owner-agreed stretch, 2026-10-30): an ORIGINAL third ruleset (srd51 declined — it recreates D&D 5e), the entity_index (OQ-3), NATS-backed distribution — then ONE holistic adversarial review (Opus 5.5, medium); the staged **C6 / computed-delta (OQ-1)** on evidence; or the rest of the **Post-PoC horizon** (docs/10). Diminishing returns on the remaining strands.

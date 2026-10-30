@@ -16,6 +16,11 @@
 > still stored ABSOLUTE, so replay and forks never re-evaluate it. Structured data — no parser, no eval,
 > no float — so "what NOT to build" below still holds. `RULES_API_VERSION` 5→6. OQ-1 below is settled.
 >
+> **Update (2026-10-30, D-54):** INC-C6, the bounded cascade, SHIPPED (owner opted in). `CounterChanged` is
+> triggerable; after a module pass, CounterChanged-triggered rules run for up to 3 more hops, then stop
+> fail-closed. Only those rules take part, so pre-C6 packs are unchanged. Its dedicated cross-phase
+> review (cascade × fork-replay × export × party) is folded into the stretch's single holistic review.
+>
 > **Decided (owner):** OQ-1 → ship the counter core first, **defer computed-delta arithmetic** (the
 > economy-formula half) as the reserved tier's sharper gate. OQ-2 → the multi-ref scope (C2) will be
 > a **`world` scope** (explicit whole-realm jurisdiction — the thing Sable/Ironwake hacked around
@@ -153,7 +158,7 @@ games flagged) — ship it *with* the numbers.
    > `created_day` was missing from `_SNAPSHOT_TABLES["claims"]` (a snapshot-fork zeroed rumor age).
    > Plus: empty-`roll_table` ZeroDivision, a subject-less-rumor scope hole, `_substitute` `do`-corruption,
    > and the dead `where` filter (removed). No wire/canon-retraction leak found.
-6. **INC-C6 (M, HIGHEST-RISK, LAST, dedicated cross-phase review):** bounded fail-closed cascade
+6. **INC-C6 — SHIPPED (D-54, 2026-10-30; review folded into the stretch's holistic pass):** bounded fail-closed cascade
    re-entry + make `CounterChanged` triggerable. Covers RL-12. **Still deferred** (touches `react()`'s
    single-hop invariant; its own review).
 7. **Computed-delta arithmetic — SHIPPED (D-53, 2026-10-30).** The economy-formula half, as a bounded
