@@ -22,6 +22,13 @@ Enforced by policy (correct as far as the extractor classifies honestly):
   sensory/atmospheric description out entirely; a claim it marks `durable=false` (or
   any that slips through) is dropped by the gauntlet — flavor never becomes canon.
   Real models over-extract atmosphere as fact without this (found in the first live run).
+- Restatement (D-51): the extractor sees the KNOWN threads/claims and is told not to repeat
+  them; a claim or thread that restates a known one EXACTLY (after normalizing case, spacing,
+  and trailing punctuation) is dropped structurally. A reworded restatement still commits —
+  only the prompt guards that (a similarity merge would risk fusing two distinct facts/plots).
+
+Parsing salvages per ITEM (D-51): a null optional field takes its default and one malformed
+item is dropped alone — it never discards the rest of the beat's extracted state.
 
 NOT yet implemented (docs/13, deferred): evidence-span/consequence gating and the
 "a truth=true claim must not merely restate a character's assertion" guard. So
@@ -33,8 +40,9 @@ narrator being the trusted tier. Do not read this as a hard security boundary.
 from __future__ import annotations
 
 import json
+import logging
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -55,6 +63,8 @@ from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.providers.base import Message
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_BELIEF_CONFIDENCE = 0.8  # placeholder until belief-strength modeling (docs/11)
 
@@ -78,7 +88,9 @@ class ProposedFaction(BaseModel):
 
 
 class ProposedThread(BaseModel):
-    stakes: str  # the plot/conflict at stake — SOFT (never deduped; two similar plots may coexist)
+    # the plot/conflict at stake — SOFT: never merged on similarity (two similar plots may
+    # coexist); only an EXACT restatement of a known thread is dropped (D-51)
+    stakes: str
 
 
 class ProposedClaim(BaseModel):
@@ -116,18 +128,29 @@ def _name_token(name: str) -> str:
     return f"name:{canonical_name(name)}"
 
 
+def _statement_key(text: str) -> str:
+    """Exact-restatement key (D-51): case, inner whitespace, and trailing punctuation folded —
+    "Tavi has a bracelet." == "tavi  has a bracelet" — but any change of WORDS is a new key."""
+    return " ".join(text.lower().split()).rstrip(" .!?;:")
+
+
 def build_extractor_messages(
     recall: RecallBundle, narration: str, *, env: PromptEnv | None = None
 ) -> list[Message]:
     known_actors = "\n".join(f"- {a.name} [{a.actor_id}]" for a in recall.actors) or "(none known)"
     known_places = "\n".join(f"- {p.name} [{p.place_id}]" for p in recall.places) or "(none)"
+    known_factions = "\n".join(f"- {f.name} [{f.faction_id}]" for f in recall.factions) or "(none)"
+    # Live play showed the extractor re-proposing the SAME plot every beat ("something beneath
+    # the canoe", 8 times) because it never saw which threads already existed (D-51).
+    known_threads = "\n".join(f"- {t.stakes}" for t in recall.active_threads) or "(none)"
     known_claims = (
         "\n".join(f"- [{c.claim_id}] ({c.truth}) {c.statement}" for c in recall.claims) or "(none)"
     )
     user = (
         f"KNOWN ACTORS:\n{known_actors}\n\nKNOWN PLACES:\n{known_places}\n\n"
+        f"KNOWN FACTIONS:\n{known_factions}\n\nKNOWN THREADS:\n{known_threads}\n\n"
         f"KNOWN CLAIMS:\n{known_claims}\n\nNARRATION:\n{narration}\n\n"
-        "Return JSON: {"
+        "Return JSON (omit any key you have no value for — never null): {"
         '"actors": [{"name", "role", "member_of": faction name (optional), '
         '"located_in": place name (optional)}], '
         '"places": [{"name", "description", "parent": larger place name (optional)}], '
@@ -145,18 +168,60 @@ def build_extractor_messages(
 
 
 def parse_extraction(raw: str) -> Extraction | None:
-    """Parse an extractor response into a validated Extraction, or None if unusable."""
+    """Parse an extractor response into a validated Extraction, or None if it holds no JSON
+    object (the engine re-asks on None).
+
+    Salvages per ITEM (D-51): validating the whole object at once let ONE bad field — a
+    `"member_of": null` a model writes for an "(optional)" key — silently discard every actor,
+    place, and claim in the beat. Now a null takes the field's default and a malformed item is
+    dropped on its own (logged), so the rest of the beat's state survives.
+    """
     text = raw.strip()
     for candidate in (text, _slice_json_object(text)):
         if candidate is None:
             continue
         # Best-effort parse: a bad extraction must never crash the beat and lose the
-        # narration (JSONDecodeError, ValidationError, RecursionError on deep nesting, …).
+        # narration (JSONDecodeError, RecursionError on deep nesting, …).
         try:
-            return Extraction.model_validate(json.loads(candidate))
+            data = json.loads(candidate)
         except Exception:
             continue
+        if isinstance(data, dict):
+            return Extraction(
+                actors=_salvage(data, "actors", ProposedActor),
+                places=_salvage(data, "places", ProposedPlace),
+                factions=_salvage(data, "factions", ProposedFaction),
+                threads=_salvage(data, "threads", ProposedThread),
+                claims=_salvage(data, "claims", ProposedClaim),
+            )
     return None
+
+
+def _salvage[M: BaseModel](data: dict[str, Any], key: str, model: type[M]) -> list[M]:
+    """Validate `data[key]` item by item: nulls fall back to defaults, a bad item is dropped."""
+    raw_items = data.get(key)
+    if raw_items is None:
+        return []
+    if not isinstance(raw_items, list):
+        logger.warning("extractor: '%s' is not a list; ignored", key)
+        return []
+    kept: list[M] = []
+    for item in raw_items:
+        if isinstance(item, dict):  # a null means "no value" — let the field default apply
+            item = {
+                k: [x for x in v if x is not None] if isinstance(v, list) else v
+                for k, v in item.items()
+                if v is not None
+            }
+        try:
+            kept.append(model.model_validate(item))
+        except Exception:  # ValidationError, or anything odd — a bad item never crashes the beat
+            continue
+    if len(kept) < len(raw_items):
+        logger.warning(
+            "extractor: dropped %d malformed '%s' item(s)", len(raw_items) - len(kept), key
+        )
+    return kept
 
 
 def _slice_json_object(text: str) -> str | None:
@@ -182,7 +247,13 @@ async def run_gauntlet(
     (`located_in`) the same way. Identity is (name + affiliation), so two same-named actors of
     DIFFERENT houses stay DISTINCT — a soft, relationship-aware dedup, not a blunt name-merge (an
     affiliation the proposal states but an existing same-name actor lacks just ENRICHES that actor).
-    Factions dedup by name; threads are NEVER deduped (two similar plots may legitimately coexist).
+    Factions dedup by name; threads never merge on similarity (two similar plots may legitimately
+    coexist) — only an EXACT restatement of an existing thread is dropped (D-51).
+
+    Claims (D-51): one whose wording (`_statement_key`), subjects, AND truth all match an existing
+    claim is a restatement and commits nothing new — a dialogue restatement still records the
+    speaker's belief, in the EXISTING claim. A narrator confirming a rumor differs in truth, so it
+    still commits.
     """
     policy = policy or ExtractionPolicy()
     events: list[DomainEvent] = []
@@ -297,9 +368,11 @@ async def run_gauntlet(
     for pf in extraction.factions:
         resolve_faction(pf.name, description=pf.description)
     if policy.extract_threads:
+        known_stakes = {_statement_key(t.stakes) for t in await store.list_threads(branch_id)}
         for pt in extraction.threads:
             stakes = pt.stakes.strip()
-            if stakes:
+            if stakes and _statement_key(stakes) not in known_stakes:
+                known_stakes.add(_statement_key(stakes))  # a same-beat repeat collapses too
                 events.append(
                     thread_created(
                         thread_id=f"t:{new_id()}",
@@ -320,6 +393,13 @@ async def run_gauntlet(
         if pc.durable and pc.provenance == "dialogue" and pc.speaker and pc.speaker.strip():
             resolve_actor(pc.speaker)
 
+    # Restatement guard (D-51): live play re-proposed a KNOWN claim verbatim, beat after beat
+    # ("Tavi has a bracelet.", 4 times) — it was in KNOWN CLAIMS and repeated anyway.
+    claim_ids: dict[tuple[str, frozenset[str], str], str] = {
+        (_statement_key(c.statement), frozenset(c.subject_refs), c.truth): c.claim_id
+        for c in await store.list_claims(branch_id)
+    }
+
     for pc in extraction.claims:
         if not pc.durable:
             continue  # flavor / atmosphere — not canon (docs/05 promotion rules)
@@ -335,16 +415,22 @@ async def run_gauntlet(
                     truth = "unknown"  # can't hold two contradictory truths
                     break
 
-        claim_id = f"c:{new_id()}"
-        events.append(
-            claim_recorded(
-                claim_id=claim_id,
-                statement=statement,
-                subject_refs=subject_refs,
-                truth=truth,
-                origin=pc.provenance,
+        key = (_statement_key(statement), frozenset(subject_refs), truth)
+        existing_id = claim_ids.get(key)
+        if existing_id is not None:
+            claim_id = existing_id  # a restatement: nothing new to record
+        else:
+            claim_id = f"c:{new_id()}"
+            claim_ids[key] = claim_id  # a same-beat repeat collapses too
+            events.append(
+                claim_recorded(
+                    claim_id=claim_id,
+                    statement=statement,
+                    subject_refs=subject_refs,
+                    truth=truth,
+                    origin=pc.provenance,
+                )
             )
-        )
 
         if pc.provenance == "dialogue" and pc.speaker and pc.speaker.strip():
             speaker_ref = resolve_actor(pc.speaker)

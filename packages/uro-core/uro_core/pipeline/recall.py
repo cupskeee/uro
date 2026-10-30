@@ -25,6 +25,7 @@ from uro_core.timeline.models import (
     ActorView,
     BeliefView,
     ClaimView,
+    FactionView,
     ParticipantNote,
     PlaceView,
     ThreadView,
@@ -51,6 +52,9 @@ class RecallBundle(BaseModel):
     # current state (docs/04 gap B4: a place changing hands or being DESTROYED was invisible; the
     # meteor's crater, a holding that changed owner). Closes the last structured-recall deferral.
     places: list[PlaceView] = Field(default_factory=list)
+    # FACTIONS the beat mentions (name-matched, like places) — shown to the extractor as KNOWN
+    # FACTIONS so it reuses an existing faction's exact name instead of minting a variant (D-51).
+    factions: list[FactionView] = Field(default_factory=list)
     # The acting player's out-of-world notes (B8) — knowledge that survives a fork (time-loop/NG+),
     # rendered as the player's private recollection ONLY; never canon, never an NPC belief.
     participant_notes: list[ParticipantNote] = Field(default_factory=list)
@@ -161,6 +165,7 @@ async def assemble_recall(
         belief_claims=belief_claims,
         active_threads=active_threads,
         places=places,
+        factions=factions,
         participant_notes=participant_notes,
     )
 

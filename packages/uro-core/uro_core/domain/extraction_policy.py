@@ -20,5 +20,5 @@ class ExtractionPolicy(BaseModel):
     extract_actors: bool = True
     extract_places: bool = True
     extract_factions: bool = True  # also gates the actor→member_of cascade (D-50)
-    extract_threads: bool = True  # emergent plots (D-50; never deduped)
+    extract_threads: bool = True  # emergent plots (D-50; exact restatements dropped, D-51)
     extract_claims: bool = True  # includes beliefs; the engine relies on these for recall

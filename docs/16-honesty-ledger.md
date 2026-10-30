@@ -32,7 +32,7 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 |---|---|---|
 | Structured (entity-triggered) recall | proven | word-boundary matching, dead-actor exclusion; `test_recall.py`. **Scope: on-stage actors + their beliefs, plus every claim about an on-stage actor/place/faction (by id) or a mentioned `name:` token; mentioned place-state; active/offered threads; the acting participant's out-of-world notes.** (docs/04's original narrower claim was superseded as these channels landed — P4 place-state, P9 module-rumor `p:`/`f:` claim matching, B8 notes.) |
 | Semantic / pgvector recall | proven | branch-scoped cosine, degrades to structured-only; `test_memory.py`. Tests use the stub embedder (a bag-of-words proxy); real embeddings run live once. |
-| Extractor whitelist (only actors + claims proposable) | **proven (by construction)** | the `Extraction` schema can't *express* damage/death/terrain — the load-bearing anti-hallucination defense. |
+| Extractor whitelist (creations only: actors, places, factions, threads, claims + `member_of`/`located_in` edges — D-49/D-50) | **proven (by construction)** | the `Extraction` schema can't *express* damage/death/terrain — the load-bearing anti-hallucination defense. |
 | Extractor tier ceiling (new actors ≤ T1) + player-text isolation | proven | `tier=1` always; the extractor sees narration only, never the raw intent. |
 | Provenance labeling (narrator→`truth=true`, dialogue→testimony+belief) | proven (by policy) | correct insofar as the extractor classifies provenance honestly. |
 | Contradiction downgrade (would-be `truth=true` → `unknown`) | partial | only claims the extractor **self-flagged** vs recalled `truth=true`; a full narration-vs-state cross-check is deferred. |
@@ -347,3 +347,17 @@ A caller-supplied `BeatPlan` drives the planner→mechanics gate deterministical
 | Trust posture — `plan=` is a TRUSTED in-process input | **by design (documented)** | the caller is inside the trust boundary (it can drive the store directly), so NO D-32 protection ceiling is applied. The ceiling fences the EXTERNAL Chronicler POST (`distill_outcome`); a future network-exposed `plan=` MUST route through it first — this is not that path (D-37). |
 | Not gated under no-ruleset / `--bare` | **by design (now loud)** | correctly runs no mechanics (nothing to gate / ablation integrity), but LOGS a warning rather than silently voiding a supplied plan (review fix). |
 | Wired to `serve`/CLI · rule-based fallback planner · `CheckResolved` event trace | deferred (reserved) | library API only for the MVP; the fallback planner + a per-check event are reserved behind #8 (D-37). |
+
+## Post-PoC — D-50 live tuning (2026-10-30, D-51)
+
+Evidence: the two post-D-50 live sessions in the `uro` DB — Tamriel (13 beats) and Solara (28 beats), every chat role on Codex `gpt-5.6-luna`. Each beat's narration was read against what it committed.
+
+| Capability | Status | Note |
+|---|---|---|
+| Exact restatement of a known claim or thread | **proven (structural)** | `test_restated_claim_is_not_recorded_again`, `test_exact_thread_restatement_is_dropped`, `test_same_beat_duplicates_collapse`; a dialogue restatement re-links the belief (`test_dialogue_restatement_links_belief_to_existing_claim`), a narrator confirming a rumor still commits. Live: "Tavi has a bracelet." was committed 4 times verbatim + once reworded — the guard catches the 3 verbatim repeats, not the rewording. |
+| REWORDED restatement (the live thread failure: one plot, 8 phrasings) | **prompt-only — not yet re-measured live** | the extractor now sees KNOWN THREADS/FACTIONS (`test_extractor_sees_known_factions_and_threads`) and is told not to restate them; whether the model complies is the open question. No similarity merge, by design. |
+| One `null` field discards the beat's extraction | **fixed (proven)** | per-item salvage — `test_null_optional_fields_do_not_drop_the_beat`, `test_a_malformed_item_is_dropped_alone`. Whether it cost live beats is unproven: 46 extractor calls for 41 beats allows at most a few lost to exhausted re-asks; Solara beat 17 (three NPCs named, nothing committed) is the likeliest. |
+| Thread granularity (a scene's suspense recorded as a plot) | prompt-only | narrowed in `extractor.system.j2`; not re-measured live. |
+| Relational extraction (factions, `member_of`/`located_in`, edges) | **not live-tested** | 0 such events live — correctly: neither story named a group or placed anyone at a named location. Needs a session whose fiction names factions and places. |
+| Closing a thread that play resolved | deferred | "the fleeing figure" stayed open after it turned out to be Tavi. Resolving a thread is a state mutation, outside D-50's creations-only whitelist — needs its own decision. |
+| Extractor observability | gap | raw extractor responses aren't logged and `llm_calls.model` is never populated, so a lost beat can't be diagnosed after the fact. |

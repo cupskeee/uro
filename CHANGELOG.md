@@ -9,6 +9,29 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Changed
+- **The extractor stops re-recording what it already knows (D-51, live-tuned).** In the two
+  post-D-50 live sessions, the same plot became a new thread almost every beat (14 emergent threads
+  for ~3 real plots — "something beneath the canoe" ×8) and known facts were re-committed verbatim
+  ("Tavi has a bracelet." 4 times verbatim, plus once reworded). The extractor now also receives **KNOWN FACTIONS** and **KNOWN
+  THREADS** alongside the known actors/places/claims; the prompt forbids restating any of them,
+  narrows a thread to a story-level plot (not the current scene's suspense), and treats a scene
+  event ("a figure fled") like a passing moment unless it leaves a lasting change. As a structural
+  backstop the gauntlet drops an **exact** restatement — a claim with the same wording (case,
+  spacing, trailing punctuation folded), subjects, and truth as an existing one, or an identical
+  thread; same-beat repeats collapse too. A dialogue restatement still records the speaker's
+  belief (in the existing claim), and a narrator confirming a rumor still commits. Reworded
+  restatements are only prompt-guarded — there is deliberately no similarity merge.
+
+### Fixed
+- **One `null` field no longer discards a whole beat's extraction (D-51).** The extractor's
+  response was validated as a single object, and the D-50 affiliation fields (`member_of`,
+  `located_in`, `parent`) plus `role`/`description` rejected `null` — exactly what a model writes for
+  a key the prompt marks "(optional)", and unchecked on providers without structured output (e.g.
+  Codex). One such null silently dropped every actor, place, thread, and claim for that beat.
+  Parsing now salvages per item: a null takes the field's default and a malformed item is dropped
+  on its own (logged); only a response with no JSON object at all triggers a re-ask.
+
 ## [0.4.0] - 2026-10-30
 
 0.3.0 was cut as a GitHub Release but never published to PyPI, so on PyPI this release follows
