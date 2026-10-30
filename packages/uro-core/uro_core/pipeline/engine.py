@@ -160,6 +160,11 @@ class Engine:
         self._router = router
 
     @property
+    def router(self) -> ProviderRouter:
+        """The current provider router — read it at call time, since `rebind_router` replaces it."""
+        return self._router
+
+    @property
     def ruleset_id(self) -> str:
         """The id of the bound ruleset ('' if none). Lets a caller (e.g. the server) detect a
         campaign pinned to a DIFFERENT ruleset than this Engine holds, and reject gracefully

@@ -164,16 +164,21 @@ def db_migrate() -> None:
 
 
 @world_app.command("new")
-def world_new(name: str) -> None:
+def world_new(
+    name: str,
+    ruleset: str = typer.Option(
+        "", "--ruleset", help="a built-in ruleset id (`uro ruleset list`); default uro-basic"
+    ),
+) -> None:
     """Create a world (+ its main branch) and a ready-to-play campaign with a default,
     sheeted PC. Prints the campaign id."""
 
     async def _run() -> None:
+        sheet, ruleset_id = _build_pc_sheet(ruleset)  # an unknown id fails here, before any write
         store = build_store()
         await connect_store(store)
         try:
-            world = await store.create_world(name)
-            sheet, ruleset_id = _build_pc_sheet()
+            world = await store.create_world(name, ruleset_id=ruleset)
             campaign = await store.start_campaign(
                 world.world_id,
                 world.main_branch_id,
@@ -240,50 +245,26 @@ def world_create(
 
     async def _run() -> None:
         from uro_core.errors import PackError
-        from uro_core.rulesets import registry
-        from uro_core.worldpack.backfill import backfill_gaps
-        from uro_core.worldpack.importer import pack_to_events
+        from uro_core.worldpack.create import import_pack
         from uro_core.worldpack.parse import parse_pack
         from uro_core.worldpack.sufficiency import check_sufficiency
 
+        store = build_store()
         try:
             pack = parse_pack(path)
+            # build the provider only when a gap needs it: a runnable pack needs no key
+            needs_fill = backfill and check_sufficiency(pack).grade != "runnable"
+            router = build_router(provider, model) if needs_fill else None
+            await connect_store(store)
+            result = await import_pack(store, pack, backfill_router=router)
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
-        # Fail loudly HERE if the pack names a ruleset the build can't resolve — else the world
-        # commits fine and only blows up as a raw KeyError at `campaign new` (phase-6 review).
-        if pack.manifest.ruleset.id not in registry.available():
-            typer.echo(
-                f"error: pack declares unknown ruleset {pack.manifest.ruleset.id!r} "
-                f"(installed: {registry.available()})",
-                err=True,
-            )
-            raise typer.Exit(1)
-        report = check_sufficiency(pack)
-        added: list[str] = []
-        if backfill and report.grade != "runnable":
-            pack, added = await backfill_gaps(pack, build_router(provider, model), report=report)
-            report = check_sufficiency(pack)
-        if report.grade == "insufficient":
-            typer.echo(f"error: pack is INSUFFICIENT to run: {'; '.join(report.gaps)}", err=True)
-            raise typer.Exit(1)
-        store = build_store()
-        await connect_store(store)
-        try:
-            world = await store.create_world(
-                pack.manifest.name,
-                tone=pack.manifest.tone,
-                prompt_overrides=pack.prompts,
-                ruleset_id=pack.manifest.ruleset.id,
-                ruleset_version=pack.manifest.ruleset.version,
-                rule_pack=pack.rule_pack.model_dump() if pack.rule_pack else {},
-                extra_events=pack_to_events(pack),
-            )
         finally:
             await store.close()
-        typer.echo(f"world: {world.world_id}  ({pack.manifest.name}, grade {report.grade})")
-        for a in added:
+        world = result.world
+        typer.echo(f"world: {world.world_id}  ({world.name}, grade {result.grade})")
+        for a in result.backfilled:
             typer.echo(f"  backfilled + committed: {a}")
         typer.echo(f"seed history:  uro world seed {path} --seed 42")
 
@@ -299,39 +280,30 @@ def world_seed(
     history on identical geography."""
 
     async def _run() -> None:
-        from uro_core.engines.history import seed_history
         from uro_core.errors import PackError
-        from uro_core.rulesets.rng import Rng
+        from uro_core.worldpack.create import seed_world
         from uro_core.worldpack.parse import parse_pack
 
+        store = build_store()
         try:
             pack = parse_pack(path)
+            await connect_store(store)
+            world = await store.get_world_by_name(pack.manifest.name)
+            if world is None:
+                raise PackError(
+                    f"no imported world named {pack.manifest.name!r} — "
+                    f"run `uro world create {path}` first"
+                )
+            result = await seed_world(store, world, pack, seed)
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
-        events = seed_history(pack.manifest, Rng(seed))
-        store = build_store()
-        await connect_store(store)
-        try:
-            world = await store.get_world_by_name(pack.manifest.name)
-            if world is None:
-                typer.echo(
-                    f"no imported world named {pack.manifest.name!r} — "
-                    f"run `uro world create {path}` first",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            commit = await store.append_beat(world.main_branch_id, events)
         finally:
             await store.close()
-        dynasties = sum(1 for e in events if e.event_type == "FactionCreated")
-        wars = sum(
-            1
-            for e in events
-            if e.event_type == "EdgeAdded" and e.payload.get("rel_type") == "at_war_with"
+        typer.echo(f"seeded {world.name!r} with seed {seed} → commit {result.commit_id}")
+        typer.echo(
+            f"  {result.dynasties} dynasties, {result.wars} wars (on the pack's authored geography)"
         )
-        typer.echo(f"seeded {pack.manifest.name!r} with seed {seed} → commit {commit.commit_id}")
-        typer.echo(f"  {dynasties} dynasties, {wars} wars (on the pack's authored geography)")
 
     _run_async(_run)
 

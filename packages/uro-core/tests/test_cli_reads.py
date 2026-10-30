@@ -113,3 +113,15 @@ async def test_resolve_ref_takes_a_unique_commit_prefix(store: PostgresEventStor
     other = await store.create_world(f"prefix-other-{new_id()}")
     with pytest.raises(KeyError):  # a prefix only resolves within its own world
         await store.resolve_ref(other.world_id, commit.commit_id[:10])
+
+
+def test_world_new_takes_a_ruleset(world: SimpleNamespace) -> None:
+    name = f"pool-{new_id()}"
+    code, out = _uro("world", "new", name, "--ruleset", "uro-pool")
+    assert code == 0, out
+    campaign = out.split("campaign: ")[1].split()[0]
+    code, out = _uro("campaign", "show", campaign)
+    assert "ruleset  uro-pool@" in out
+    code, out = _uro("state", campaign, "--sections", "sheets")
+    assert '"wounds"' in out  # a Uro Pool sheet
+    assert _uro("world", "new", f"x-{new_id()}", "--ruleset", "srd51")[0] == 1

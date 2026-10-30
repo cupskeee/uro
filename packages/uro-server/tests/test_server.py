@@ -2276,3 +2276,12 @@ def test_a_revoked_token_stops_acting_on_its_open_socket() -> None:
         with pytest.raises(WebSocketDisconnect) as excinfo:
             _recv_until(ws, "beat_committed")
     assert excinfo.value.code == 4401 and beats == ["first"]
+
+
+def test_the_upload_size_guard_covers_the_new_pack_routes() -> None:
+    from uro_server.app import _is_pack_upload
+
+    assert _is_pack_upload("/worlds/create") and _is_pack_upload("/worlds/w1/seed")
+    assert _is_pack_upload("/worlds/validate")
+    assert not _is_pack_upload("/worlds/import")  # a large JSON bundle, legitimately
+    assert not _is_pack_upload("/worlds/w1/branches") and not _is_pack_upload("/worlds/seed")

@@ -5,10 +5,12 @@ transport (auth/broadcast) with fake deps. Deterministic — no LLM (management 
 """
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
+from uro_core.domain.ids import new_id
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.stub import hashing_embedding
 from uro_core.providers.base import CompletionRequest
@@ -575,3 +577,114 @@ async def test_a_credential_is_rotated_in_place_and_a_connection_relinked(
         await store.delete_connection(conn)
         await store.delete_credential(old)
         await store.delete_credential(spare)
+
+
+async def test_a_rest_world_can_choose_its_ruleset(store: PostgresEventStore) -> None:
+    # Parity: a pack declares its ruleset, but POST /worlds couldn't, so a REST-created world could
+    # only ever play the default.
+    async with _client(store) as client:
+        r = await client.post(_q("/worlds"), json={"name": "Pbta", "ruleset": "uro-pbta"})
+        assert r.status_code == 200, r.text
+        world_id = r.json()["world_id"]
+        made = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"), json={"participant": "alice", "new_pc_name": "Ash"}
+        )
+        c = made.json()["campaign_id"]
+        assert (await client.get(_q(f"/campaigns/{c}"))).json()["ruleset_id"] == "uro-pbta"
+        sheets = (await client.get(_q(f"/campaigns/{c}/state?sections=sheets"))).json()
+        assert "harm" in sheets["state"]["sheets"][0]["sheet"]  # a PbtA sheet, not a d20 one
+        unknown = await client.post(_q("/worlds"), json={"name": "X", "ruleset": "srd51"})
+        assert unknown.status_code == 400
+        typed = await client.post(_q("/worlds"), json={"name": "X", "ruleset": ["uro-pbta"]})
+        assert typed.status_code == 400
+
+
+async def test_version_endpoint_is_authed(store: PostgresEventStore) -> None:
+    async with _client(store) as client:
+        r = await client.get(_q("/version"))
+        assert r.status_code == 200 and set(r.json()) == {"uro-server", "uro-core"}
+        assert (await client.get("/version")).status_code == 401
+        assert (await client.get("/healthz")).json() == {"status": "ok"}  # advertises nothing
+
+
+def _zip_pack(src: Path, *, rename: str | None = None) -> bytes:
+    """A pack directory as an upload; `rename` swaps the manifest's name (a different world)."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for f in sorted(src.rglob("*")):
+            if f.is_file():
+                data = f.read_bytes()
+                if rename and f.name == "world.toml":
+                    data = data.replace(b'name = "Emberfell"', f'name = "{rename}"'.encode())
+                zf.writestr(f.relative_to(src).as_posix(), data)
+    return buf.getvalue()
+
+
+async def test_a_pack_is_imported_and_seeded_over_the_api(store: PostgresEventStore) -> None:
+    # Parity: `uro world create` / `uro world seed` had no endpoint — so over the API a world
+    # couldn't come from a pack, carry its ruleset, or get a history.
+    pack_dir = Path(__file__).resolve().parents[3] / "worlds" / "emberfell"
+    name = f"Emberfell-{new_id()}"
+    upload = {"pack": ("emberfell.zip", _zip_pack(pack_dir, rename=name), "application/zip")}
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    app = create_app(
+        engine_deps(store, engine, {_TOK: "alice", "tok-player": "bob"}, admin_tokens={_TOK})
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        r = await client.post(_q("/worlds/create"), files=upload)
+        assert r.status_code == 200, r.text
+        made = r.json()
+        assert made["name"] == name and made["grade"] in ("runnable", "thin")
+        assert await store.world_ruleset(made["main_branch_id"]) == ("uro-pbta", ">=0")
+        player = await client.post("/worlds/create?token=tok-player", files=upload)
+        assert player.status_code == 403  # a structural write: operator-only (D-44)
+        flag = await client.post(_q("/worlds/create?backfill=yes"), files=upload)
+        assert flag.status_code == 400
+
+        w = made["world_id"]
+        seeded = await client.post(_q(f"/worlds/{w}/seed?seed=7"), files=upload)
+        assert seeded.status_code == 200, seeded.text
+        assert seeded.json()["dynasties"] > 0
+        other = {"pack": ("e.zip", _zip_pack(pack_dir, rename=f"Other-{new_id()}"), "x/zip")}
+        wrong = await client.post(_q(f"/worlds/{w}/seed"), files=other)
+        assert wrong.status_code == 400  # another world's pack would seed its history here
+        assert (await client.post(_q(f"/worlds/{w}/seed?seed=x"), files=upload)).status_code == 400
+        assert (await client.post(_q("/worlds/nope/seed"), files=upload)).status_code == 404
+
+
+async def test_the_pack_import_refuses_an_unknown_ruleset(store: PostgresEventStore) -> None:
+    from uro_core.errors import PackError
+    from uro_core.worldpack.create import import_pack
+    from uro_core.worldpack.parse import parse_pack
+
+    pack = parse_pack(Path(__file__).resolve().parents[3] / "worlds" / "emberfell")
+    pack.manifest.ruleset.id = "srd51"
+    with pytest.raises(PackError, match="unknown ruleset"):
+        await import_pack(store, pack)
+
+
+async def test_probe_and_backfill_follow_a_reloaded_router(store: PostgresEventStore) -> None:
+    # They captured the startup router, so after POST /providers/reload they kept calling the old
+    # connections while beats used the new ones.
+    from uro_core.worldpack.parse import parse_pack
+
+    class _Recording(_Stub):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete(self, req: CompletionRequest) -> str:
+            self.calls += 1
+            return "{}"
+
+    old, new = _Recording(), _Recording()
+    engine = Engine(store, ProviderRouter(bindings={}, default=old))
+    deps = engine_deps(store, engine, {_TOK: "alice"}, router=engine.router)
+    engine.rebind_router(ProviderRouter(bindings={}, default=new))  # what /providers/reload does
+    manifest = parse_pack(Path(__file__).resolve().parents[3] / "worlds" / "ashfall").manifest
+    assert deps.probe is not None
+    await deps.probe(manifest, 1)
+    assert new.calls > 0 and old.calls == 0
