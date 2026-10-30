@@ -38,6 +38,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   exchanges where everyone commits before the round resolves. Bind it with `ruleset = "uro-pool"`;
   `worlds/brinehold` is an example pack. (Checks don't change sheets in any ruleset yet, so a
   check-time push is recorded but its strain isn't kept; in encounters it is.)
+- **Partial names resolve to the entity they mean (D-56).** "Aldren" now links to an existing
+  "Ser Aldren Voss", "Captain Tobin" to "Tobin Reave", "the Veyrs" to "House Veyr", instead of
+  minting a duplicate — but only when exactly one entity matches and stated affiliations agree, so
+  "Hessa" with two Hessas around stays unlinked, and "Iron Order" never merges with "Iron Fist". An
+  actor link is recorded as an alias (`EntityAliasAdded`, now implemented), which recall also uses.
+  The planned embedding index was measured first and dropped: name embeddings scored two
+  different people higher than one person's own name variants.
 
 ### Changed
 - **The extractor stops re-recording what it already knows (D-51, live-tuned).** In the two

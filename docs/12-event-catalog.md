@@ -55,7 +55,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Identity & resolution
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `EntityAliasAdded` | entity_id, alias | X P S | "Old Weck" = "Weck the fisher" = "the old fisherman"; resolution matches on name + aliases + embedding before any `*Created` is accepted (`13`) |
+| `EntityAliasAdded` | entity_id, alias | X P S | LIVE via X (D-56): when a partial-name mention ("Aldren") resolves to a known actor ("Ser Aldren Voss"), the gauntlet records it as an alias — auditable, and the next exact mention or recall finds the actor. Projector appends to `proj_actors.aliases` (idempotent; a no-op for non-actors). Resolution matches on name + aliases + partial name before any `*Created` is accepted (`13`); the embedding leg was rejected on data |
 | `EntityMerged` | survivor_id, merged_id, rationale | P S | never extractor-emitted. Projections re-point through a **merge map**; historical events stay untouched; queries resolve merged ids to survivors. Duplicates *will* slip past resolution — this is the correction path |
 
 ### Factions & relations

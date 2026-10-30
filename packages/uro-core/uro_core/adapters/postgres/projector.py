@@ -69,6 +69,18 @@ async def _claim_truth_changed(conn: asyncpg.Connection, branch_id: str, p: dict
     )
 
 
+async def _entity_alias_added(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # Actors carry aliases; places/factions have no alias column, so for them this is a no-op.
+    # Idempotent: an alias already present is not appended twice.
+    await conn.execute(
+        "UPDATE proj_actors SET aliases = array_append(aliases, $3) "
+        "WHERE branch_id = $1 AND actor_id = $2 AND NOT ($3 = ANY(aliases))",
+        branch_id,
+        p["entity_id"],
+        p["alias"],
+    )
+
+
 async def _belief_changed(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     await conn.execute(
         "INSERT INTO proj_beliefs (branch_id, actor_id, claim_id, confidence, learned_from) "
@@ -318,6 +330,7 @@ async def _counter_changed(conn: asyncpg.Connection, branch_id: str, p: dict[str
 
 _HANDLERS = {
     "ActorCreated": _actor_created,
+    "EntityAliasAdded": _entity_alias_added,
     "ActorPromoted": _actor_promoted,
     "ClaimRecorded": _claim_recorded,
     "ClaimTruthChanged": _claim_truth_changed,

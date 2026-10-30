@@ -209,6 +209,27 @@ def actor_created(
     )
 
 
+class EntityAliasAddedPayload(BaseModel):
+    """Another name an existing entity goes by (docs/12). Emitted by the extractor gauntlet when a
+    partial-name mention resolves to a known actor (D-56) — so the link is auditable and the next
+    exact mention (and recall's on-stage match) finds the actor directly."""
+
+    v: int = 1
+    entity_id: str
+    alias: str
+
+
+def entity_alias_added(
+    *, entity_id: str, alias: str, caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="EntityAliasAdded",
+        entity_refs=[entity_id],
+        caused_by=_default_cause(caused_by),
+        payload=EntityAliasAddedPayload(entity_id=entity_id, alias=alias).model_dump(),
+    )
+
+
 def actor_promoted(
     *, actor_id: str, from_tier: int, to_tier: int, reason: str, caused_by: CausedBy | None = None
 ) -> DomainEvent:

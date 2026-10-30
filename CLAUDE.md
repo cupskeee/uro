@@ -171,4 +171,6 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
 
 - **D-55 — a third built-in ruleset, `uro_pool`:** an original d6 dice pool (target numbers, push-for-strain, wounds that shrink pools, SIMULTANEOUS exchanges) — hosted by the port with zero changes; `worlds/brinehold` binds it. srd51 was declined (it would recreate D&D 5e). Found: free-roam check consequences never reach sheets in any ruleset (`progression` is never called).
 
-Next (owner-agreed stretch, 2026-10-30): the entity_index (OQ-3), NATS-backed distribution — then ONE holistic adversarial review (Opus 5.5, medium); the staged **C6 / computed-delta (OQ-1)** on evidence; or the rest of the **Post-PoC horizon** (docs/10). Diminishing returns on the remaining strands.
+- **D-56 — partial-name entity resolution (the entity_index, measured and rejected):** name embeddings can't separate variants from near-names (30 labelled pairs, overlapping), so a deterministic rule ships — a mention links to the ONE entity whose distinctive name words contain it (honorifics dropped, org words kept), if affiliations agree; actor links emit `EntityAliasAdded` (now implemented). Fresh pairs: 8/10 linked, 0/10 false merges.
+
+Next (owner-agreed stretch, 2026-10-30): NATS-backed distribution — then ONE holistic adversarial review (Opus 5.5, medium); the staged **C6 / computed-delta (OQ-1)** on evidence; or the rest of the **Post-PoC horizon** (docs/10). Diminishing returns on the remaining strands.

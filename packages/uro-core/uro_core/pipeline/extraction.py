@@ -57,6 +57,7 @@ from uro_core.domain.events import (
     belief_changed,
     claim_recorded,
     edge_added,
+    entity_alias_added,
     faction_created,
     place_created,
     thread_created,
@@ -147,6 +148,57 @@ def _is_role_noun(name: str) -> bool:
     "the guard", "tallest hooded stranger". A capitalized title ("the Duke") reads as a name, and a
     script without letter case can't be judged, so both pass (`islower` needs a cased letter)."""
     return re.sub(r"^(the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE).islower()
+
+
+# Partial-name resolution (D-56): articles and personal honorifics carry no identity, so they are
+# dropped before comparing names. Organisation words ("House", "Order") and "Old"/"Young" are KEPT —
+# they ARE identity ("Iron Order" vs "Iron Fist"; "Old Weck" vs "Young Weck").
+_NON_NAME_WORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "of",
+        "ser",
+        "sir",
+        "lady",
+        "lord",
+        "dame",
+        "brother",
+        "sister",
+        "father",
+        "mother",
+        "master",
+        "mistress",
+        "captain",
+        "doc",
+        "doctor",
+    }
+)
+
+
+def _name_words(name: str) -> frozenset[str]:
+    """The distinctive words of a name (D-56): lowercased, honorifics/articles dropped, a plural
+    folded — "Ser Aldren Voss" → {aldren, voss}, "the Veyrs" → {veyr}."""
+    out: set[str] = set()
+    for w in re.findall(r"[^\W\d_]+", name.lower()):  # letter runs, any script
+        if len(w) < 2 or w in _NON_NAME_WORDS:
+            continue
+        out.add(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w)
+    return frozenset(out)
+
+
+def _partial_match(words: frozenset[str], index: dict[str, list[frozenset[str]]]) -> str | None:
+    """The ONE known entity whose name/alias words contain the mention's, or are contained by them
+    ("Aldren" ↔ "Ser Aldren Voss"); None if there is none OR several — ambiguity never links."""
+    if not words:
+        return None
+    hits = {
+        eid
+        for eid, word_sets in index.items()
+        if any(ws and (words <= ws or ws <= words) for ws in word_sets)
+    }
+    return next(iter(hits)) if len(hits) == 1 else None
 
 
 def build_extractor_messages(
@@ -281,10 +333,14 @@ async def run_gauntlet(
     events: list[DomainEvent] = []
 
     # Pre-load existing entities once (branches are small) for cross-beat resolution + dedup.
-    places_by_key = {canonical_name(p.name): p.place_id for p in await store.list_places(branch_id)}
-    factions_by_key = {
-        canonical_name(f.name): f.faction_id for f in await store.list_factions(branch_id)
-    }
+    places = await store.list_places(branch_id)
+    factions = await store.list_factions(branch_id)
+    places_by_key = {canonical_name(p.name): p.place_id for p in places}
+    factions_by_key = {canonical_name(f.name): f.faction_id for f in factions}
+    # D-56 partial-name indices: entity id → the word sets of its name (+ aliases)
+    place_words = {p.place_id: [_name_words(p.name)] for p in places}
+    faction_words = {f.faction_id: [_name_words(f.name)] for f in factions}
+    actor_words: dict[str, list[frozenset[str]]] = {}
     actors_by_key: dict[str, list[str]] = {}  # canonical name OR alias → actor ids (may be several)
     for a in await store.list_actors(branch_id):
         # Index by name AND aliases — a pack-authored "Mera" [alias "the barkeep"] must resolve when
@@ -293,6 +349,7 @@ async def run_gauntlet(
         for k in {canonical_name(a.name), *(canonical_name(al) for al in a.aliases)}:
             if k:
                 actors_by_key.setdefault(k, []).append(a.actor_id)
+        actor_words[a.actor_id] = [_name_words(n) for n in (a.name, *a.aliases)]
     aff: dict[str, dict[str, str]] = {}  # actor_id → {"member_of"|"located_in": dst id}
     for e in await store.list_edges(branch_id):
         if e.rel_type in ("member_of", "located_in"):
@@ -305,6 +362,10 @@ async def run_gauntlet(
             return None
         if key in factions_by_key:
             return factions_by_key[key]
+        known = _partial_match(_name_words(name), faction_words)  # D-56: "the Veyrs" → House Veyr
+        if known is not None:
+            factions_by_key[key] = known
+            return known
         if not policy.extract_factions:
             return None
         fid = f"f:{new_id()}"
@@ -312,6 +373,7 @@ async def run_gauntlet(
             faction_created(faction_id=fid, name=name.strip(), description=description.strip())
         )
         factions_by_key[key] = fid
+        faction_words[fid] = [_name_words(name)]
         return fid
 
     def resolve_place(name: str, *, description: str = "", parent: str = "") -> str | None:
@@ -320,6 +382,10 @@ async def run_gauntlet(
             return None
         if key in places_by_key:
             return places_by_key[key]
+        known = _partial_match(_name_words(name), place_words)  # D-56: "Riverkeep fortress"
+        if known is not None:
+            places_by_key[key] = known
+            return known
         if not policy.extract_places:
             return None
         pid = f"p:{new_id()}"
@@ -327,6 +393,7 @@ async def run_gauntlet(
             place_created(place_id=pid, name=name.strip(), description=description.strip())
         )
         places_by_key[key] = pid
+        place_words[pid] = [_name_words(name)]
         if parent.strip():  # cascade the containing place + a located_in edge
             parent_id = resolve_place(parent)
             if parent_id is not None and parent_id != pid:
@@ -363,6 +430,27 @@ async def run_gauntlet(
                 _enrich(cand, "located_in", pid)
                 name_to_ref[key] = cand
                 return cand
+        # D-56: no actor has this exact name — a PARTIAL name ("Aldren", "Captain Tobin") links to
+        # the ONE known actor whose name words contain it, if affiliations agree, and records the
+        # mention as an alias. Never for a role noun, and never when an exact name exists (a
+        # same-name actor of a different house is distinct — D-50 — not a partial match).
+        partial = (
+            None
+            if key in actors_by_key or _is_role_noun(name)
+            else _partial_match(_name_words(name), actor_words)
+        )
+        if partial is not None:
+            ca = aff.get(partial, {})
+            if (fid is None or ca.get("member_of") in (None, fid)) and (
+                pid is None or ca.get("located_in") in (None, pid)
+            ):
+                events.append(entity_alias_added(entity_id=partial, alias=name.strip()))
+                actors_by_key[key] = [partial]
+                actor_words[partial].append(_name_words(name))
+                _enrich(partial, "member_of", fid)
+                _enrich(partial, "located_in", pid)
+                name_to_ref[key] = partial
+                return partial
         if not policy.extract_actors:
             return None
         # D-51: never MINT an identity from a role ("the guard") — under D-50 it becomes a name key
@@ -374,6 +462,7 @@ async def run_gauntlet(
         aid = f"a:{new_id()}"
         events.append(actor_created(actor_id=aid, name=name.strip(), tier=1, role=role.strip()))
         actors_by_key.setdefault(key, []).append(aid)
+        actor_words[aid] = [_name_words(name)]
         name_to_ref[key] = aid
         _enrich(aid, "member_of", fid)
         _enrich(aid, "located_in", pid)
@@ -387,7 +476,9 @@ async def run_gauntlet(
         if key in name_to_ref:
             return name_to_ref[key]
         ids = actors_by_key.get(key)
-        return ids[0] if ids else None
+        if ids:
+            return ids[0]
+        return None if _is_role_noun(name) else _partial_match(_name_words(name), actor_words)
 
     for pa in extraction.actors:
         resolve_actor(pa.name, role=pa.role, member_of=pa.member_of, located_in=pa.located_in)
