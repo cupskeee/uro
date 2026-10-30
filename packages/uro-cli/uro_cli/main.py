@@ -63,6 +63,10 @@ outbox_app = typer.Typer(
     help="The transactional outbox — publish committed beats to other processes (D-57).",
 )
 ruleset_app = typer.Typer(no_args_is_help=True, help="The built-in ruleset registry (docs/06).")
+policy_app = typer.Typer(
+    no_args_is_help=True,
+    help="Which emergent world state play may create — the instance's extraction policy (D-49).",
+)
 app.add_typer(db_app, name="db")
 app.add_typer(world_app, name="world")
 app.add_typer(branch_app, name="branch")
@@ -73,6 +77,7 @@ app.add_typer(provider_app, name="provider")
 provider_app.add_typer(credential_app, name="credential")
 app.add_typer(outbox_app, name="outbox")
 app.add_typer(ruleset_app, name="ruleset")
+app.add_typer(policy_app, name="extraction-policy")
 
 # The engine roles a connection can back (resolved by the ProviderRouter) — shared with the server.
 _ROLES = tuple(sorted(ROLES))
@@ -1334,6 +1339,60 @@ def campaign_new(
     _run_async(_run)
 
 
+@campaign_app.command("time-skip")
+def campaign_time_skip(
+    campaign_id: str,
+    days: int = typer.Option(..., "--days", min=1, help="in-fiction days to advance"),
+) -> None:
+    """Advance time ON the campaign's own branch and fire the world's downtime agenda rules (D-33).
+    To skip time on a NEW branch instead, use `uro branch fork --time-skip-days`."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            # agenda_tick needs no LLM (module rules only), so a stub router suffices
+            await Engine(store, build_router("stub", None)).agenda_tick(c.branch_id, days)
+            day = await store.current_world_time(c.branch_id)
+        finally:
+            await store.close()
+        typer.echo(f"advanced {days} day(s); the campaign is now on day {day}")
+
+    _run_async(_run)
+
+
+@campaign_app.command("outcome")
+def campaign_outcome(
+    campaign_id: str,
+    bundle_path: str = typer.Argument(..., help="an outcome bundle (JSON) from an external game"),
+) -> None:
+    """Record an external game's encounter outcome (Chronicler mode, D-25/D-32) — the same
+    trust-scoped distillation as the server's outcome endpoint, then the reaction rules."""
+
+    async def _run() -> None:
+        from pathlib import Path
+
+        from uro_core.chronicler import OutcomeBundle, distill_outcome_with_receipt
+
+        bundle = OutcomeBundle.model_validate_json(Path(bundle_path).read_text())
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            result = await distill_outcome_with_receipt(store, c.branch_id, bundle)
+            # commit + react in one call (B1): a pack rule on ActorDied must fire here too
+            engine = Engine(store, build_router("stub", None))
+            commit = await engine.append_and_react(c, result.events)
+        finally:
+            await store.close()
+        typer.echo(f"committed {len(result.events)} event(s) → {commit.commit_id}")
+        for r in result.receipt:
+            typer.echo(f"  {_row(r.model_dump())}")
+
+    _run_async(_run)
+
+
 @campaign_app.command("end")
 def campaign_end(
     campaign_id: str,
@@ -1670,6 +1729,164 @@ def provider_credential_rm(
         typer.echo("deleted")
         if linked:
             typer.echo(f"unlinked (now unauthenticated): {', '.join(linked)}")
+
+    _run_async(_run)
+
+
+@provider_app.command("enable")
+def provider_enable(connection_id: str) -> None:
+    """Enable a connection (a disabled one is skipped when the router is built)."""
+    _set_enabled(connection_id, True)
+
+
+@provider_app.command("disable")
+def provider_disable(connection_id: str) -> None:
+    """Disable a connection without deleting it or its role bindings."""
+    _set_enabled(connection_id, False)
+
+
+def _set_enabled(connection_id: str, enabled: bool) -> None:
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            ok = await store.set_connection_enabled(connection_id, enabled)
+        finally:
+            await store.close()
+        if not ok:
+            raise ValueError(f"no such connection: {connection_id}")
+        typer.echo(f"{'enabled' if enabled else 'disabled'} {connection_id}")
+
+    _run_async(_run)
+
+
+@provider_app.command("refresh")
+def provider_refresh(connection_id: str) -> None:
+    """Discover a connection's models (a LIVE provider call) and cache them with their modality."""
+
+    async def _run() -> None:
+        import httpx  # via uro-core[llm]
+        from uro_core.providers.registry import refresh_connection_models
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            if await store.get_connection(connection_id) is None:
+                raise ValueError(f"no such connection: {connection_id}")
+            try:
+                models = await refresh_connection_models(store, connection_id)
+            except (httpx.HTTPError, OSError) as exc:
+                # The exception text can carry the plaintext key (the server's holistic HIGH):
+                # report only its type.
+                raise RuntimeError(f"model discovery failed ({type(exc).__name__})") from exc
+        finally:
+            await store.close()
+        typer.echo(f"{len(models)} model(s):")
+        for m in models:
+            typer.echo(f"  {m['id']}  ({m.get('modality', '?')})")
+
+    _run_async(_run)
+
+
+@provider_app.command("test")
+def provider_test(
+    connection_id: str,
+    model: str = typer.Option("", "--model", help="the model to probe (default: a known-good one)"),
+) -> None:
+    """Probe a connection with one tiny call. Exits 1 if the provider refuses it."""
+
+    async def _run() -> None:
+        from uro_core.providers.registry import probe_connection
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            if await store.get_connection(connection_id) is None:
+                raise ValueError(f"no such connection: {connection_id}")
+            result = await probe_connection(store, connection_id, model)
+        finally:
+            await store.close()
+        typer.echo(("ok: " if result["ok"] else "failed: ") + result["detail"])
+        if not result["ok"]:
+            raise typer.Exit(1)
+
+    _run_async(_run)
+
+
+@provider_app.command("reload")
+def provider_reload(
+    server: str = typer.Option("http://127.0.0.1:8000", help="server base URL"),
+    token: str = typer.Option(..., help="an operator --admin-token"),
+) -> None:
+    """Make a RUNNING `uro serve` rebuild its router from the registry. The `uro provider` commands
+    edit the database; a server only sees the change after a reload (or a restart)."""
+    out = _server_post(server, "/providers/reload", token, {})
+    typer.echo("reloaded" if out.get("reloaded") else f"not reloaded: {out.get('detail', out)}")
+
+
+@credential_app.command("add")
+def provider_credential_add(
+    provider: str = typer.Option(..., "--provider", help="the provider kind it authenticates"),
+    api_key: str = typer.Option(..., "--api-key", help="stored ENCRYPTED (needs URO_SECRET_KEY)"),
+) -> None:
+    """Store an API key on its own, to link to connections with `provider add --credential`."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            cred = await store.add_credential(provider=provider, access_token=api_key)
+        finally:
+            await store.close()
+        typer.echo(f"credential: {cred}  (encrypted at rest)")
+
+    _run_async(_run)
+
+
+@policy_app.command("show")
+def policy_show() -> None:
+    """Show which emergent categories play may create."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            policy = await store.get_extraction_policy()
+        finally:
+            await store.close()
+        for name, on in policy.model_dump().items():
+            typer.echo(f"{name.removeprefix('extract_'):<9} {'on' if on else 'off'}")
+
+    _run_async(_run)
+
+
+@policy_app.command("set")
+def policy_set(
+    actors: bool = typer.Option(None, "--actors/--no-actors"),
+    places: bool = typer.Option(None, "--places/--no-places"),
+    factions: bool = typer.Option(None, "--factions/--no-factions"),
+    threads: bool = typer.Option(None, "--threads/--no-threads"),
+    claims: bool = typer.Option(
+        None, "--claims/--no-claims", help="claims and beliefs; recall degrades without them"
+    ),
+) -> None:
+    """Turn emergent categories on or off; unnamed ones are left as they are."""
+    flags = {"actors": actors, "places": places, "factions": factions, "threads": threads}
+    flags["claims"] = claims
+    updates = {f"extract_{k}": v for k, v in flags.items() if v is not None}
+
+    async def _run() -> None:
+        if not updates:
+            raise ValueError("name at least one category, e.g. --no-places")
+        store = build_store()
+        await connect_store(store)
+        try:
+            policy = (await store.get_extraction_policy()).model_copy(update=updates)
+            await store.set_extraction_policy(policy)
+        finally:
+            await store.close()
+        for name, on in policy.model_dump().items():
+            typer.echo(f"{name.removeprefix('extract_'):<9} {'on' if on else 'off'}")
 
     _run_async(_run)
 
