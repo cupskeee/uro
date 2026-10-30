@@ -21,6 +21,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.format]
+# ruff >= 0.16 also formats Python blocks inside Markdown; the docs' snippets keep their
+# hand-aligned comments, so the formatter stays on .py files.
+exclude = ["*.md"]
+
 # ---------------------------------------------------------------- mypy (D-18)
 [tool.mypy]
 python_version = "3.12"
