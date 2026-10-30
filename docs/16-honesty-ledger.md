@@ -52,7 +52,7 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 | Materialization (nearest snapshot + replay-forward) | proven | `test_branching.py` (window==1 over depth-6). |
 | Deterministic time-skip (`TimeAdvanced` + honest `AdaptationApplied` header) | proven | no LLM ripple — the header is a no-op marker. |
 | Mid-play thread consequences / adaptation ripple (History emitter H) | **deferred** | no engine advances thread state; the meteor's `PlaceDestroyed` is author/test-driven, not History-emitted (docs/12 & OQ-8 overstated; reconciled). |
-| Ruleset port is game-agnostic (D-30) | proven | two structurally-opposite built-ins (`uro_basic` d20, `uro_pbta` 2d6) through one port+runner. |
+| Ruleset port is game-agnostic (D-30) | proven | three structurally different built-ins (`uro_basic` d20, `uro_pbta` 2d6, `uro_pool` d6 dice pool with SIMULTANEOUS exchanges — D-55) through one port+runner, the third with no port changes (`test_uro_pool.py`, incl. a full fight through the engine pipeline; live: `uro world create worlds/brinehold` → a campaign bound to `uro-pool@0` whose PC sheet is `{traits, wounds, strain, milestones}`). Free-roam check consequences still don't reach sheets (any ruleset). |
 | Seeded-RNG byte-identical replay · encounter auto-resolve (D-29) · lost-fight consequences | proven | `test_ruleset.py`/`test_encounter.py`. |
 | Planner + plan-validation + mechanics gate (D-28) | proven | 15 deterministic tests; wired into every ruleset-bound beat. |
 | Character progression (level-up / advance-by-failing) | **stub-only** | implemented + unit-tested on both rulesets but **no production caller** — no XP/leveling ever fires in a beat. |

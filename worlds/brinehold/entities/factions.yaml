@@ -1,0 +1,10 @@
+- id: "f:wardens"
+  name: "The Harbour Wardens"
+  kind: "faction"
+  description: "Keep the seawall, the tide-bells, and the toll on every hull that docks."
+  at_war_with: ["f:salvagers"]
+- id: "f:salvagers"
+  name: "The Wreck Crews"
+  kind: "faction"
+  description: "Salvagers who strip what the storms throw onto the shoals, toll or no toll."
+  at_war_with: ["f:wardens"]

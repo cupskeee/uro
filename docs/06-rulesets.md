@@ -81,6 +81,22 @@ forced-change list is the leak report in D-30). A narrate-only null ruleset woul
 counted — it exercises no encounter path, exactly where d20 leaks hid. The two built-ins now run
 through the identical port + runner, which is the actual game-agnosticism proof.
 
+A **third** built-in, `uro_pool` (D-55) — an original d6 dice-pool system — probes the axes neither
+of those touches, and the port hosted it with **no changes**:
+
+- **Target-number pools:** roll trait-many d6; the difficulty sets the target each die must reach
+  (3+…6); count marks → `fail` / `success` / `triumph` (3+ marks).
+- **Push-your-luck strain:** a failed roll is rerolled once at +1 strain, a standing resource.
+- **Capability-degrading harm:** wounds shrink every pool (never below one die); 3 wounds = out.
+- **Simultaneous exchanges:** every fighter commits, then the round resolves at once — most
+  actions produce NO effect until the round closes, and two fighters can wound each other.
+- **Milestones** from surviving encounters, not levels or failures.
+
+Honest limit, shared by every ruleset: the pipeline never applies a *free-roam check's*
+consequences to the sheet (`progression` isn't called; PbtA's XP-on-a-miss is likewise not live),
+so a push during a check is recorded only in its detail; a push in an encounter persists via the
+final `SheetUpdated`.
+
 ## Encounters as the federation seam
 
 An encounter is "hand authority to a resolver, receive effects back as events." Usually the resolver is the in-process ruleset, turn by turn — but the port deliberately allows **out-of-band resolution**: an encounter may be parked with an external resolver (a real game engine running its own battle), and resolution arrives later as an **outcome bundle** — validated like any other untrusted input (external trust tier, `13-contracts.md`). This is Chronicler mode's mechanical door (D-25): Final Fantasy Tactics keeps its battle feel; Uro gets the war story. The full ingestion contract (domain declarations, bundle schema, distillation rules) is OQ-12 and stays unbuilt beyond the Phase 5 toy proof until a real external game demands it.

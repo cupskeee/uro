@@ -3,10 +3,10 @@
 
 This lives in the ruleset PORT package, NOT the core ring: it is a COMPOSITION concern (it must
 know the concrete built-ins), so the import-linter contract permits it to import `uro_basic`/
-`uro_pbta` while the ring (`pipeline`/`domain`/…) still imports only `rulesets.base`. The
+`uro_pbta`/`uro_pool` while the ring (`pipeline`/`domain`/…) still imports only `rulesets.base`. The
 composition roots (CLI wiring, server deps) call `resolve`; the pipeline never touches it.
 
-The PoC ships an explicit registry of the two built-ins. Real entry-point discovery
+The PoC ships an explicit registry of the three built-ins. Real entry-point discovery
 (`entry_points(group="uro.rulesets")`, so an external pip package can register its own ruleset)
 is the documented extension seam — `register()` is the same hook such discovery would call.
 """
@@ -19,6 +19,7 @@ from typing import Any
 from uro_core.rulesets.base import Ruleset
 from uro_core.rulesets.uro_basic import UroBasic
 from uro_core.rulesets.uro_pbta import UroPbtA
+from uro_core.rulesets.uro_pool import UroPool
 
 DEFAULT_RULESET_ID = "uro-basic"
 
@@ -27,6 +28,7 @@ DEFAULT_RULESET_ID = "uro-basic"
 _FACTORIES: dict[str, Callable[[], Ruleset]] = {
     "uro-basic": UroBasic,
     "uro-pbta": UroPbtA,
+    "uro-pool": UroPool,
 }
 
 
@@ -48,7 +50,7 @@ def resolve(
 
     `version` is the campaign's pinned version; the PoC records it (so a fork rebinds the same
     ruleset) but does not hard-enforce compatibility — version gating is future work (docs/06).
-    `config` is reserved for ruleset-specific knobs (the manifest's `[ruleset.config]`); the two
+    `config` is reserved for ruleset-specific knobs (the manifest's `[ruleset.config]`); the
     built-ins take none yet.
     """
     rid = ruleset_id or DEFAULT_RULESET_ID

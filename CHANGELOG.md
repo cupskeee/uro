@@ -32,6 +32,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   cascade — at most 3 extra hops, after which further firing is dropped and logged — and only
   CounterChanged-triggered rules take part, so existing packs behave exactly as before.
   `rules_api_version: 7`.
+- **A third built-in ruleset, Uro Pool (D-55).** An original d6 dice-pool system: roll a trait's
+  dice against a difficulty-set target and count marks (fail / success / triumph), push a failed
+  roll once at the cost of strain, take wounds that shrink every pool, and fight in simultaneous
+  exchanges where everyone commits before the round resolves. Bind it with `ruleset = "uro-pool"`;
+  `worlds/brinehold` is an example pack. (Checks don't change sheets in any ruleset yet, so a
+  check-time push is recorded but its strain isn't kept; in encounters it is.)
 
 ### Changed
 - **The extractor stops re-recording what it already knows (D-51, live-tuned).** In the two

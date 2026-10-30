@@ -16,6 +16,7 @@ from uro_core.rulesets.base import CharSpec
 from uro_core.rulesets.rng import Rng
 from uro_core.rulesets.uro_basic import UroBasic
 from uro_core.rulesets.uro_pbta import UroPbtA
+from uro_core.rulesets.uro_pool import UroPool
 from uro_core.worldpack.parse import parse_pack
 from uro_core.worldpack.sufficiency import check_sufficiency
 
@@ -96,3 +97,10 @@ async def test_blank_world_defaults_to_uro_basic(store: PostgresEventStore) -> N
     world = await store.create_world(f"Blank-{new_id()}")
     assert await store.world_ruleset(world.main_branch_id) == ("", "")
     assert isinstance(registry.resolve(""), UroBasic)  # empty → default
+
+
+def test_brinehold_pack_declares_the_uro_pool_ruleset() -> None:
+    pack = parse_pack(WORLDS / "brinehold")
+    assert pack.manifest.ruleset.id == "uro-pool"
+    assert check_sufficiency(pack).grade == "runnable"
+    assert isinstance(registry.resolve(pack.manifest.ruleset.id), UroPool)

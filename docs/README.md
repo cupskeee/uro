@@ -49,7 +49,7 @@ Each phase ships a passing acceptance test:
 - **P3 — mechanics:** a pluggable, deterministic ruleset port + Uro Basic (d20, seeded RNG, encounter mode); a fight replays from its seed — the **insult→combat→consequences** acceptance.
 - **P4 — worlds:** the world-pack format + sufficiency check + AI backfill, import + procedural History seeding (seed 42 ≠ 43 on identical geography), prompt-template packs, capability probes.
 - **P5 — server & federation:** a WS play server (broadcast, token auth), export/import with hash-chain verification, off-screen belief/rumor propagation, and Chronicler mode — the **war-story test** (an external battle's feat ripples to witnesses; a tavern NPC retells a traceable rumor).
-- **P6 — the alien ruleset:** a deliberately non-d20 second built-in (`uro_pbta`: 2d6, harm clock, moves) through the *same* port — proving the ruleset port is genuinely game-agnostic (D-30).
+- **P6 — the alien ruleset:** a deliberately non-d20 second built-in (`uro_pbta`: 2d6, harm clock, moves; a third, the original d6 dice pool `uro_pool`, followed in D-55) through the *same* port — proving the ruleset port is genuinely game-agnostic (D-30).
 - **P7 — multiplayer:** per-participant PCs + a round-robin `PartyArbiter` behind the `TurnArbiter` port (D-31).
 - **P8 — Chronicler hardening:** `distill_outcome` is trust-scoped — an external bundle can't kill/loot/first-hand-witness a PC or a higher-tier actor, loot needs real ownership, replays are idempotent (D-32).
 - **P9 — the reaction layer:** pack-authored reactive behavior as *declarative data* (`rules.yaml` / `agendas.yaml`), never code — a closed grammar that can't name a mechanical/lethal/canon event (D-33).
