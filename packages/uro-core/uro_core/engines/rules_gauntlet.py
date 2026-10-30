@@ -271,16 +271,22 @@ async def _translate(
         if a.do == "reset_counter":
             new_value = 0
         else:  # set (value) or adjust (delta) — a literal or a computed expression (D-53)
-            amount = await _eval_expr(
-                a.value if a.do == "set_counter" else a.delta, store, branch_id, pending
-            )
-            if isinstance(amount, str):  # undefined: fail CLOSED — drop the write, audited
-                return _drop(drops, fired, a.scope_ref, amount)
+            raw = a.value if a.do == "set_counter" else a.delta
+            if isinstance(raw, int):  # a LITERAL keeps the pre-D-53 path: clamped, never dropped
+                amount = raw
+            else:
+                computed = await _eval_expr(raw, store, branch_id, pending)
+                if isinstance(computed, str):  # undefined: fail CLOSED — drop, audited
+                    return _drop(drops, fired, a.scope_ref, computed)
+                amount = computed
             new_value = amount if a.do == "set_counter" else pending[k] + amount
         clamped = _clamp(new_value)
         if clamped != new_value:
             logger.warning("rule %r: counter %s clamped to +/-_MAX_COUNTER", fired.rule_id, k)
+        unchanged = clamped == pending[k]
         pending[k] = clamped
+        if unchanged:  # a no-op write emits nothing — so it can't wake the cascade (D-59)
+            return []
         return [
             counter_changed(
                 scope_ref=a.scope_ref,

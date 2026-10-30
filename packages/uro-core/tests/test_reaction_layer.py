@@ -1767,3 +1767,83 @@ async def test_the_cascade_runs_after_a_downtime_agenda_tick(store: PostgresEven
     campaign = await _cascade_world(store, [_WAR_AT_TWO], agendas=[grow])
     await _engine(store).agenda_tick(campaign.branch_id, 10)
     assert (await _states(store, campaign.branch_id))["t:war"] == "active"
+
+
+# --- D-59: holistic-review fixes to the computation tier --------------------------------------
+
+
+async def test_a_no_op_counter_write_emits_nothing_and_cannot_drive_the_cascade(
+    store: PostgresEventStore,
+) -> None:
+    # Review: a "cap" rule that rewrote an unchanged value still emitted CounterChanged, re-firing
+    # itself every hop until _MAX_CASCADE_HOPS.
+    cap = {
+        "id": "cap-x-at-3",
+        "trigger": {"event": "CounterChanged", "where": {"key": "x"}},
+        "then": [
+            {
+                "do": "set_counter",
+                "scope_ref": "f:houses",
+                "key": "x",
+                "value": {"op": "min", "args": [_c("f:houses", "x"), 3]},
+            }
+        ],
+        "scope": _WORLD,
+    }
+    kick = {
+        **_TENSION_UP,
+        "then": [{"do": "adjust_counter", "scope_ref": "f:houses", "key": "x", "delta": 1}],
+    }
+    campaign = await _cascade_world(store, [kick, cap])
+    await _death(store, campaign, "a:one")
+    async with store.pool.acquire() as conn:
+        writes = await conn.fetchval(
+            "SELECT count(*) FROM events e JOIN commits c USING (commit_id) JOIN branches b "
+            "ON b.world_id = c.world_id WHERE b.branch_id = $1 AND e.event_type = 'CounterChanged'",
+            campaign.branch_id,
+        )
+    assert writes == 1  # only the kick's real change; the cap's no-op is silent, so no hop runs
+
+
+async def test_a_literal_counter_amount_still_clamps(store: PostgresEventStore) -> None:
+    # v1-v5 packs are unchanged: a LITERAL over 10^18 clamps (as before D-53) instead of dropping.
+    branch = await _counters(store, {("f:h", "gold"): 1})
+    result = await _compute(
+        store, branch, {"do": "adjust_counter", "scope_ref": "f:h", "key": "gold", "delta": 10**19}
+    )
+    assert result.drops == [] and await store.get_counter(branch, "f:h", "gold") == 1_000_000_000
+
+
+def test_an_unsubstituted_trigger_ref_is_rejected_at_parse() -> None:
+    # Review: `$trigger.<field>` binds only inside a for_each; elsewhere it became a literal ref.
+    def pack(then: list, *, agenda: bool = False) -> dict:  # type: ignore[type-arg]
+        if agenda:
+            return {
+                "rules_api_version": 7,
+                "agendas": [{"id": "a", "every_days": 1, "then": then, "scope": _WORLD}],
+            }
+        return {
+            "rules_api_version": 7,
+            "rules": [
+                {"id": "r", "trigger": {"event": "ActorDied"}, "then": then, "scope": _WORLD}
+            ],
+        }
+
+    rumor = {"do": "record_rumor", "text": "word spreads", "subjects": ["$trigger.actor_id"]}
+    read = {
+        "do": "adjust_counter",
+        "scope_ref": "f:h",
+        "key": "k",
+        "delta": _c("$trigger.actor_id", "k"),
+    }
+    for bad in (pack([rumor]), pack([read]), pack([rumor], agenda=True)):
+        with pytest.raises(ValidationError, match="never substituted"):
+            RulePack(**bad)
+    looped = {
+        "do": "for_each",
+        "traverse": "knows",
+        "from": "$trigger.actor_id",
+        "as": "$n",
+        "apply": [{**rumor, "subjects": ["$trigger.actor_id", "$n"]}],
+    }
+    RulePack(**pack([looped]))  # inside a for_each it IS substituted — still accepted
