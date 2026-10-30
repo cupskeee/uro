@@ -96,6 +96,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   still unparseable after re-asks) now logs the first 500 characters of the last response, and a
   dropped malformed item logs its content — previously a lost beat couldn't be diagnosed. The docs
   (07/08/13) no longer claim `llm_calls` stores responses or tokens.
+- **Extraction fails closed on trust fields (D-58).** Per-item salvage (D-51) had let a `null`
+  `provenance` take its default, so an NPC's line with `"provenance": null` committed as narrator
+  canon. A null provenance now means dialogue when a speaker is named (otherwise the claim is
+  dropped), and a null `durable` means not durable.
+- **Partial names no longer fuse relatives into a known character (D-58).** "Mira's mother" was
+  linking to Mira — even a player character — and "Vel Market" to Vel. A mention now links only to
+  a longer known name containing all its words, a possessive or a conflicting title ("Lady Crowe"
+  vs "Lord Haldane Crowe") never links, and honorifics count only as leading titles. Trade-off:
+  "Riverkeep fortress" now becomes its own place.
+- **Restatements no longer erase or launder (D-58).** A character repeating a known rumor kept
+  overwriting their belief, losing who they heard it from and how unsure they were; repeating a
+  fact minted a duplicate claim; repeating a module rumor folded the claim into it, so rumor expiry
+  could retract it. All three are fixed, and a plot that ended may now recur in the same words.
 
 ## [0.4.0] - 2026-10-30
 

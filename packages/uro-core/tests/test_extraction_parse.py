@@ -139,11 +139,11 @@ def test_resolves_keeps_only_id_strings() -> None:
 def test_partial_name_rule_links_variants_and_refuses_near_names() -> None:
     # D-56. The rule was validated on pairs written BEFORE it ran (not its tuning set); kept as a
     # regression guard. Precision over recall: a miss duplicates an entity, a false merge fuses two.
-    from uro_core.pipeline.extraction import _name_words, _partial_match
+    from uro_core.pipeline.extraction import _name_parts, _partial_match
 
     def links(existing: list[str], mention: str) -> bool:
-        index = {f"e{i}": [_name_words(n)] for i, n in enumerate(existing)}
-        return _partial_match(_name_words(mention), index) is not None
+        index = {f"e{i}": [_name_parts(n)] for i, n in enumerate(existing)}
+        return _partial_match(_name_parts(mention), index) is not None
 
     for known, mention in [
         ("Magister Olwen Tarr", "Olwen"),
@@ -161,6 +161,29 @@ def test_partial_name_rule_links_variants_and_refuses_near_names() -> None:
         ("Old Tom", "Young Tom"),  # "Old"/"Young" are identity, not honorifics
         ("Iron Order", "Iron Fist"),  # organisation words are kept
         ("Ser Aldren Voss", "Ser Aldric Vane"),  # the pair the embedding index scored 0.741
+        # D-58 (holistic review): a mention that ADDS words names something else …
+        ("Vel", "Vel Market"),
+        ("Captain Tobin", "Old Tobin"),
+        ("Captain Tobin", "Tobin's wife"),
+        # … and a different leading title names a different person
+        ("Lord Haldane Crowe", "Lady Crowe"),
     ]:
         assert not links([known], mention), (known, mention)
     assert not links(["Hessa Drummond", "Hessa Vale"], "Hessa")  # ambiguity never links
+
+
+def test_a_null_trust_field_fails_closed() -> None:
+    # D-58 (holistic review): `null` on provenance/durable must never take the TRUSTING default —
+    # before per-item salvage that null failed the parse (re-ask); it must not now mint canon.
+    ex = parse_extraction(
+        '{"claims":['
+        '{"statement":"The king is dead.","provenance":null,"speaker":"Grell"},'
+        '{"statement":"Nobody said this.","provenance":null},'
+        '{"statement":"The fog is thick.","durable":null}]}'
+    )
+    assert ex is not None
+    assert [(c.statement, c.provenance) for c in ex.claims[:1]] == [
+        ("The king is dead.", "dialogue")
+    ]
+    assert len(ex.claims) == 2  # the speakerless null-provenance claim is dropped
+    assert ex.claims[1].durable is False  # unknown durability → flavor, which the gauntlet drops
