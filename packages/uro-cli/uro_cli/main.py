@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import sys
 import time
 import webbrowser
@@ -61,6 +62,7 @@ outbox_app = typer.Typer(
     no_args_is_help=True,
     help="The transactional outbox — publish committed beats to other processes (D-57).",
 )
+ruleset_app = typer.Typer(no_args_is_help=True, help="The built-in ruleset registry (docs/06).")
 app.add_typer(db_app, name="db")
 app.add_typer(world_app, name="world")
 app.add_typer(branch_app, name="branch")
@@ -70,6 +72,7 @@ app.add_typer(token_app, name="token")
 app.add_typer(provider_app, name="provider")
 provider_app.add_typer(credential_app, name="credential")
 app.add_typer(outbox_app, name="outbox")
+app.add_typer(ruleset_app, name="ruleset")
 
 # The engine roles a connection can back (resolved by the ProviderRouter) — shared with the server.
 _ROLES = tuple(sorted(ROLES))
@@ -322,9 +325,7 @@ def world_seed(
             for e in events
             if e.event_type == "EdgeAdded" and e.payload.get("rel_type") == "at_war_with"
         )
-        typer.echo(
-            f"seeded {pack.manifest.name!r} with seed {seed} → commit {commit.commit_id[:8]}"
-        )
+        typer.echo(f"seeded {pack.manifest.name!r} with seed {seed} → commit {commit.commit_id}")
         typer.echo(f"  {dynasties} dynasties, {wars} wars (on the pack's authored geography)")
 
     _run_async(_run)
@@ -851,14 +852,14 @@ def branch_list(world: str) -> None:
         typer.echo(f"world: {w.world_id}  ({w.name})")
         typer.echo("branches:")
         for b in branches:
-            forked = f"  forked@{b.forked_from[:8]}" if b.forked_from else ""
-            head = b.head_commit[:8] if b.head_commit else "-"
+            forked = f"  forked@{b.forked_from}" if b.forked_from else ""
+            head = b.head_commit if b.head_commit else "-"
             day = days.get(b.branch_id, 0)
             typer.echo(f"  {b.name:<16} head={head} depth={b.head_depth} day={day}{forked}")
         if markers:
             typer.echo("markers:")
             for m in markers:
-                typer.echo(f"  {m.name:<16} → {m.commit_id[:8]}")
+                typer.echo(f"  {m.name:<16} → {m.commit_id}")
 
     _run_async(_run)
 
@@ -887,7 +888,7 @@ def branch_fork(
                 await engine.agenda_tick(branch.branch_id, time_skip_days)
         finally:
             await store.close()
-        forked = branch.forked_from[:8] if branch.forked_from else "-"
+        forked = branch.forked_from if branch.forked_from else "-"
         typer.echo(f"forked branch {name!r}: {branch.branch_id}")
         typer.echo(f"  from {forked}  (head = {forked})")
         if time_skip_days > 0:
@@ -916,7 +917,7 @@ def branch_mark(
             marker = await store.create_marker(w.world_id, name, b.branch_id)
         finally:
             await store.close()
-        typer.echo(f"marker {marker.name!r} → commit {marker.commit_id[:8]} on branch {branch!r}")
+        typer.echo(f"marker {marker.name!r} → commit {marker.commit_id} on branch {branch!r}")
 
     _run_async(_run)
 
@@ -944,7 +945,300 @@ def log(
         typer.echo(f"world {w.name}  branch {branch!r}  (head depth {b.head_depth})")
         for e in entries:
             marks = f"  [{', '.join(e.markers)}]" if e.markers else ""
-            typer.echo(f"  {e.depth:>4} {e.commit_id[:8]}  {e.summary}{marks}")
+            typer.echo(f"  {e.depth:>4} {e.commit_id}  {e.summary}{marks}")
+
+    _run_async(_run)
+
+
+def _row(row: dict[str, Any]) -> str:
+    """One projection/event row as a compact JSON line (dates and ids stringified)."""
+    return json.dumps(row, default=str, ensure_ascii=False)
+
+
+async def _branch_or_exit(store: PostgresEventStore, world: World, branch: str) -> Any:
+    b = await store.get_branch_by_name(world.world_id, branch)
+    if b is None:
+        typer.echo(f"no such branch: {branch}", err=True)
+        raise typer.Exit(1)
+    return b
+
+
+async def _campaign_or_exit(store: PostgresEventStore, campaign_id: str) -> Any:
+    c = await store.get_campaign(campaign_id)
+    if c is None:
+        typer.echo(f"no such campaign: {campaign_id}", err=True)
+        raise typer.Exit(1)
+    return c
+
+
+@world_app.command("list")
+def world_list() -> None:
+    """List every world — the names `uro log`/`uro branch …`/`uro campaign new` take."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            worlds = await store.list_worlds()
+        finally:
+            await store.close()
+        if not worlds:
+            typer.echo("(no worlds — create one with `uro world new` or `uro world create`)")
+        for w in worlds:
+            typer.echo(f"{w.world_id}  {w.name}")
+
+    _run_async(_run)
+
+
+@app.command()
+def events(
+    world: str,
+    branch: str = typer.Option("main", "--branch", help="branch to read (default main)"),
+    event_type: str = typer.Option(None, "--type", help="only this event type"),
+    entity: str = typer.Option(None, "--entity", help="only events touching this entity ref"),
+    caused_by: str = typer.Option(None, "--caused-by", help="only this cause kind"),
+    limit: int = typer.Option(50, "--limit", min=0, help="max events"),
+) -> None:
+    """The raw event log along a branch, newest first (docs/12) — omniscient: claim truth values,
+    hidden beliefs and sheets included (the operator view, D-45)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            w = await _world_or_exit(store, world)
+            b = await _branch_or_exit(store, w, branch)
+            evs = await store.branch_events(
+                b.branch_id,
+                event_type=event_type,
+                entity_ref=entity,
+                caused_by=caused_by,
+                limit=limit,
+            )
+        finally:
+            await store.close()
+        for e in evs:
+            refs = f" [{', '.join(e.entity_refs)}]" if e.entity_refs else ""
+            typer.echo(f"{e.event_type}{refs}  {_row(e.payload)}")
+
+    _run_async(_run)
+
+
+@app.command()
+def show(
+    world: str,
+    ref: str = typer.Argument(
+        ..., help="a commit id (as `uro log` prints it, or a unique prefix) or a marker"
+    ),
+) -> None:
+    """One commit's ordered events + metadata (the operator view, D-45)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            w = await _world_or_exit(store, world)
+            commit_id = await store.resolve_ref(w.world_id, ref)
+            detail = await store.commit_detail(w.world_id, commit_id)
+        finally:
+            await store.close()
+        if detail is None:
+            typer.echo(f"no such commit: {ref}", err=True)
+            raise typer.Exit(1)
+        parent = detail.parent_id or "(genesis)"
+        typer.echo(f"commit {detail.commit_id}  depth {detail.depth}  parent {parent}")
+        for e in detail.events:
+            refs = f" [{', '.join(e.entity_refs)}]" if e.entity_refs else ""
+            typer.echo(f"  {e.seq:>3} {e.event_type}{refs}  {_row(e.payload)}")
+
+    _run_async(_run)
+
+
+@app.command()
+def state(
+    campaign_id: str,
+    sections: str = typer.Option(
+        "actors,threads,places,factions",
+        "--sections",
+        help="comma-separated projections, e.g. actors,claims,beliefs,sheets,items,edges,counters",
+    ),
+) -> None:
+    """A campaign's current world state, one JSON row per entity — every section, including the
+    omniscient ones (claim truth values, hidden beliefs, sheets): the operator view (D-45)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            names = [s.strip() for s in sections.split(",") if s.strip()]
+            across = await store.query_across([c.branch_id], names)
+        finally:
+            await store.close()
+        for section, rows in across.get(c.branch_id, {}).items():
+            typer.echo(f"{section} ({len(rows)}):")
+            for r in rows:
+                typer.echo(f"  {_row(r)}")
+
+    _run_async(_run)
+
+
+@app.command()
+def chronicle(
+    campaign_id: str = typer.Argument(None, help="a campaign (or pass --world for any branch)"),
+    world: str = typer.Option(None, "--world", help="read a world branch instead of a campaign"),
+    branch: str = typer.Option("main", "--branch", help="with --world: the branch (default main)"),
+    limit: int = typer.Option(10, "--limit", min=0, help="max beats"),
+) -> None:
+    """The recent beats of a campaign — or, with --world, of any named branch — oldest first."""
+
+    async def _run() -> None:
+        if (campaign_id is None) == (world is None):
+            typer.echo("give a campaign id, or --world <world> [--branch]", err=True)
+            raise typer.Exit(1)
+        store = build_store()
+        await connect_store(store)
+        try:
+            if campaign_id is not None:
+                branch_id = (await _campaign_or_exit(store, campaign_id)).branch_id
+            else:
+                w = await _world_or_exit(store, world)
+                branch_id = (await _branch_or_exit(store, w, branch)).branch_id
+            beats = await store.recent_beats(branch_id, limit)
+        finally:
+            await store.close()
+        if not beats:
+            typer.echo("(no beats yet)")
+        for beat in beats:
+            typer.echo(f"> [{beat.participant_id}] {beat.intent_text}")
+            typer.echo(f"{beat.narration}\n")
+
+    _run_async(_run)
+
+
+@app.command()
+def usage(stage: str = typer.Option(None, "--stage", help="only this pipeline stage")) -> None:
+    """LLM-call telemetry by stage: calls, models, tokens (0 until metered), average latency."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            rows = await store.usage_by_stage(stage)
+        finally:
+            await store.close()
+        typer.echo(f"total calls: {sum(int(r['calls']) for r in rows)}")
+        for r in rows:
+            typer.echo(f"  {_row(r)}")
+
+    _run_async(_run)
+
+
+@ruleset_app.command("list")
+def ruleset_list() -> None:
+    """The built-in rulesets a world can declare (`ruleset = "id@version"` in world.toml)."""
+    from uro_core.rulesets import registry
+
+    for rid in registry.available():
+        rs = registry.resolve(rid)
+        typer.echo(
+            f"{rs.id}@{rs.version}  sheet: {', '.join(rs.sheet_schema().get('properties', {}))}"
+        )
+
+
+@campaign_app.command("list")
+def campaign_list(
+    world: str = typer.Option(None, "--world", help="only this world's campaigns (name or id)"),
+) -> None:
+    """List campaigns with their world, branch, and ruleset."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            world_id = (await _world_or_exit(store, world)).world_id if world else None
+            campaigns = await store.list_campaigns(world_id)
+            worlds = {w.world_id: w.name for w in await store.list_worlds()}
+            branches = {}
+            for c in campaigns:
+                b = await store.get_branch(c.branch_id)
+                branches[c.branch_id] = b.name if b else c.branch_id
+        finally:
+            await store.close()
+        if not campaigns:
+            typer.echo("(no campaigns)")
+        for c in campaigns:
+            typer.echo(
+                f"{c.campaign_id}  world={worlds.get(c.world_id, c.world_id)}  "
+                f"branch={branches[c.branch_id]}  ruleset={c.ruleset_id or '-'}"
+            )
+
+    _run_async(_run)
+
+
+@campaign_app.command("show")
+def campaign_show(campaign_id: str) -> None:
+    """One campaign: its world, branch, ruleset, seed, in-fiction day, and seated PCs."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            w = await store.get_world(c.world_id)
+            b = await store.get_branch(c.branch_id)
+            day = await store.current_world_time(c.branch_id)
+            seats = []
+            for participant in await store.pc_seats(campaign_id):
+                pc = await store.pc_for_participant(campaign_id, participant)
+                actor = await store.get_actor(c.branch_id, pc) if pc else None
+                seats.append((participant, pc, actor.name if actor else "?"))
+        finally:
+            await store.close()
+        typer.echo(f"campaign {c.campaign_id}")
+        typer.echo(f"  world    {w.name if w else c.world_id}")
+        typer.echo(f"  branch   {b.name if b else c.branch_id}")
+        rs = f"{c.ruleset_id}@{c.ruleset_version}" if c.ruleset_id else "-"
+        typer.echo(f"  ruleset  {rs}   seed {c.seed}   day {day}")
+        typer.echo("  seats:" if seats else "  seats: (none — the campaign has ended)")
+        for participant, pc, name in seats:
+            typer.echo(f"    {participant} → {pc} ({name})")
+
+    _run_async(_run)
+
+
+@branch_app.command("diff")
+def branch_diff(
+    world: str,
+    a: str = typer.Argument(..., help="the base branch"),
+    b: str = typer.Argument(..., help="the branch to compare against it"),
+    sections: str = typer.Option(None, "--sections", help="comma-separated projections"),
+) -> None:
+    """What differs from branch A to branch B, per projection: + added in B, - removed from A,
+    ~ changed (the B-side row). Omniscient (claim truth, beliefs, sheets) — the operator view."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            w = await _world_or_exit(store, world)
+            ba = await _branch_or_exit(store, w, a)
+            bb = await _branch_or_exit(store, w, b)
+            names = [x.strip() for x in sections.split(",") if x.strip()] if sections else None
+            diff = await store.diff_branches(ba.branch_id, bb.branch_id, names)
+        finally:
+            await store.close()
+        changed = False
+        for section, parts in diff.items():
+            rows = [("+", r) for r in parts["added"]] + [("-", r) for r in parts["removed"]]
+            rows += [("~", r) for r in parts["changed"]]
+            if rows:
+                changed = True
+                typer.echo(f"{section}:")
+                for mark, r in rows:
+                    typer.echo(f"  {mark} {_row(r)}")
+        if not changed:
+            typer.echo(f"no differences between {a!r} and {b!r}")
 
     _run_async(_run)
 
@@ -1023,7 +1317,7 @@ def campaign_end(
             m = await store.end_campaign(campaign_id, marker, outcome=outcome)
         finally:
             await store.close()
-        typer.echo(f"campaign ended; marker {m.name!r} → commit {m.commit_id[:8]}")
+        typer.echo(f"campaign ended; marker {m.name!r} → commit {m.commit_id}")
 
     _run_async(_run)
 

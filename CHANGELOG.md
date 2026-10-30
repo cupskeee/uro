@@ -13,6 +13,18 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **The server can start a campaign on any branch.** `POST /worlds/{w}/campaigns` takes an optional
   `branch` (a name or id, default `main`), like `uro campaign new --branch`. Before, every REST
   campaign started on `main`, so a branch forked over the API could not be played.
+- **CLI read commands matching the server's reads.** The CLI could list neither worlds nor campaigns,
+  and showed no state; a campaign id was visible only when it was created. New: `uro world list`,
+  `uro campaign list [--world]`, `uro campaign show`, `uro state <campaign> [--sections]`,
+  `uro chronicle <campaign>` (or `--world W --branch B`), `uro events <world>`,
+  `uro show <world> <commit>`, `uro usage` and `uro ruleset list`. These read the database directly,
+  like `uro log`, so they show every section, including the operator-only ones.
+- **Branch diff on both surfaces.** `diff_branches` (docs/18 B5) had no CLI command or endpoint.
+  New: `uro branch diff <world> <a> <b>` and `GET /worlds/{w}/diff?a=&b=` (operator-only, D-45,
+  since the rows include claim truth values and sheets).
+- **A commit reference can be a unique id prefix.** Anything that takes a commit (fork `--at`,
+  `uro show`, the fork endpoint) accepts a prefix of 6 or more characters. An ambiguous prefix is an
+  error, never a guess.
 - **`uro provider credential rm <id>`.** Deleting a connection keeps its credential (one credential
   can back several connections), and the CLI had no way to remove one; only the operator API did.
   The command refuses a credential that a connection still uses, naming those connections. With
@@ -23,6 +35,10 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **A PC seated over the server now gets the same starting gear as one seated by the CLI** (a
   traveler's knife, which a lost fight can loot). REST-created and REST-joined PCs started with
   nothing. The default lives in one place, `uro_core.timeline.models.STARTING_GEAR`.
+- **The CLI prints full commit ids.** `uro log`, `uro branch list`, `branch mark`, `campaign end` and
+  `world seed` printed 8 characters. Commit ids are ULIDs, whose first 10 characters are a
+  millisecond timestamp, so 8 characters matched every commit made in the same second: the printed id
+  was often ambiguous and couldn't be used to fork from.
 
 ## [0.5.0] - 2026-10-30
 

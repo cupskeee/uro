@@ -1250,6 +1250,33 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such commit")
         return detail.model_dump()
 
+    @app.get("/worlds/{world_id}/diff")
+    async def world_branch_diff(world_id: str, request: Request) -> dict[str, Any]:
+        """What differs between two branches of a world, per projection section (docs/18 B5,
+        `uro branch diff`): `{section: {added, removed, changed}}` keyed by each section's primary
+        key, from `?a=` to `?b=` (branch names; `?sections=` narrows). OPERATOR-only (D-45): the
+        rows are omniscient state — claim truth values, hidden beliefs, sheets."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        ids = []
+        for side in ("a", "b"):
+            name = request.query_params.get(side)
+            if not name:
+                raise HTTPException(status_code=400, detail=f"missing ?{side}= (a branch name)")
+            b = await store.get_branch_by_name(world_id, name)
+            if b is None:
+                raise HTTPException(status_code=404, detail=f"no such branch: {name}")
+            ids.append(b.branch_id)
+        raw = request.query_params.get("sections")
+        sections = [x for x in raw.split(",") if x] if raw else None
+        try:
+            diff = await store.diff_branches(ids[0], ids[1], sections)
+        except ValueError as exc:  # an unknown section — typo-loud → 400
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"a": request.query_params["a"], "b": request.query_params["b"], "diff": diff}
+
     @app.get("/worlds/{world_id}/chronicle")
     async def world_chronicle(world_id: str, request: Request) -> dict[str, Any]:
         """A branch's recent beats, world-scoped (BE-10, docs/08) — the world twin of the
