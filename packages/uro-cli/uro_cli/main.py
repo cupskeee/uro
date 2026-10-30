@@ -20,7 +20,7 @@ from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets.base import CharSpec
 from uro_core.rulesets.rng import Rng
-from uro_core.timeline.models import World
+from uro_core.timeline.models import STARTING_GEAR, World
 
 from uro_cli.wiring import (
     build_router,
@@ -172,7 +172,7 @@ def world_new(name: str) -> None:
                 participant_id=PARTICIPANT,
                 new_pc_name="Adventurer",
                 pc_sheet=sheet,
-                starting_items=["a traveler's knife"],
+                starting_items=list(STARTING_GEAR),
                 ruleset_id=ruleset_id,
             )
         finally:
@@ -994,7 +994,7 @@ def campaign_new(
                 adopt_actor_id=adopt,
                 new_pc_name=pc,
                 pc_sheet=pc_sheet,
-                starting_items=["a traveler's knife"] if pc is not None else None,
+                starting_items=list(STARTING_GEAR) if pc is not None else None,
                 ruleset_id=ruleset_id,
                 ruleset_version=world_rver,
                 seed=seed,
@@ -1062,7 +1062,7 @@ def campaign_join(
                 adopt_actor_id=adopt,
                 new_pc_name=pc,
                 pc_sheet=pc_sheet,
-                starting_items=["a traveler's knife"] if pc is not None else None,
+                starting_items=list(STARTING_GEAR) if pc is not None else None,
                 ruleset_id=campaign.ruleset_id,
             )
         finally:

@@ -386,3 +386,68 @@ async def test_holistic_review_authority_and_epistemic_fixes(store: PostgresEven
         # roster on an unknown campaign is 404 (was 200); a negative ?limit is 400 (was a 500).
         assert (await c.get(op("/campaigns/nope/roster"))).status_code == 404
         assert (await c.get(op(f"/campaigns/{cid}/chronicle?limit=-1"))).status_code == 400
+
+
+async def test_a_campaign_starts_on_any_branch_of_the_world(store: PostgresEventStore) -> None:
+    # Parity with `uro campaign new --branch`: a fork is only playable once a campaign starts on it,
+    # and the server used to start every campaign on `main`.
+    async with _client(store) as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": "Forked"})).json()["world_id"]
+        world = await store.get_world(world_id)
+        assert world is not None
+        head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+        fork = await store.fork_branch(world_id, head, "what-if")  # type: ignore[arg-type]
+
+        by_name = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "Ash", "branch": "what-if"},
+        )
+        assert by_name.status_code == 200, by_name.text
+        assert by_name.json()["branch_id"] == fork.branch_id
+        by_id = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"),
+            json={"participant": "bob", "new_pc_name": "Bane", "branch": fork.branch_id},
+        )
+        assert by_id.status_code == 200 and by_id.json()["branch_id"] == fork.branch_id
+        # main is untouched by either campaign: no PC was bound there
+        assert await store.active_pcs(world.main_branch_id) == []
+
+        other = (await client.post(_q("/worlds"), json={"name": "Other"})).json()["world_id"]
+        foreign = await client.post(
+            _q(f"/worlds/{other}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "X", "branch": fork.branch_id},
+        )
+        assert foreign.status_code == 404  # another world's branch is not this world's
+        missing = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "X", "branch": "nope"},
+        )
+        assert missing.status_code == 404
+        bad = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "X", "branch": ["main"]},
+        )
+        assert bad.status_code == 400
+
+
+async def test_a_fresh_rest_pc_gets_the_same_starting_gear_as_the_cli(
+    store: PostgresEventStore,
+) -> None:
+    # Parity: the CLI seats a fresh PC with STARTING_GEAR (Phase 3 — a lost fight loots a real
+    # item); the server seated one empty-handed, so REST play had nothing to loot.
+    from uro_core.timeline.models import STARTING_GEAR
+
+    async with _client(store) as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": "Geared"})).json()["world_id"]
+        made = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"), json={"participant": "alice", "new_pc_name": "Ash"}
+        )
+        c = made.json()["campaign_id"]
+        joined = await client.post(
+            _q(f"/campaigns/{c}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+        )
+        branch = made.json()["branch_id"]
+        for pc in (await store.campaign_pc(c), joined.json()["actor_id"]):
+            ids = await store.items_owned_by(branch, pc)
+            owned = [(await store.get_item(branch, i) or {}).get("name") for i in ids]
+            assert owned == list(STARTING_GEAR), (pc, owned)
