@@ -578,13 +578,27 @@ def create_app(
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
     ) -> dict[str, Any]:
-        """Enable/disable a connection (`{is_enabled: bool}`). Operator-only."""
+        """Enable/disable a connection (`{is_enabled: bool}`) and/or relink it to another credential
+        (`{auth_id: id}`, or `null` to unlink). Operator-only. A running server picks the change up
+        on `POST /providers/reload`."""
         _require_operator(request)
-        if "is_enabled" not in body:
-            raise HTTPException(status_code=400, detail="nothing to update (expected is_enabled)")
-        ok = await _mgmt().set_connection_enabled(connection_id, bool(body["is_enabled"]))
-        if not ok:
+        if "is_enabled" not in body and "auth_id" not in body:
+            raise HTTPException(status_code=400, detail="nothing to update (is_enabled, auth_id)")
+        enabled, auth_id = body.get("is_enabled"), body.get("auth_id")
+        if "is_enabled" in body and not isinstance(enabled, bool):  # bool("false") is True
+            raise HTTPException(status_code=400, detail="is_enabled must be true or false")
+        if auth_id is not None and not isinstance(auth_id, str):
+            raise HTTPException(status_code=400, detail="auth_id must be a credential id or null")
+        store = _mgmt()
+        if await store.get_connection(connection_id) is None:
             raise HTTPException(status_code=404, detail="no such connection")
+        if "auth_id" in body:
+            try:
+                await store.set_connection_credential(connection_id, auth_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if isinstance(enabled, bool):
+            await store.set_connection_enabled(connection_id, enabled)
         return {"updated": True}
 
     @app.delete("/providers/{connection_id}")
@@ -614,6 +628,35 @@ def create_app(
         except ValueError as exc:  # a control char (CR/LF) in the key → clean 400 at ingestion
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": cred_id}
+
+    @app.patch("/providers/credentials/{credential_id}")
+    async def rotate_credential(
+        credential_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Replace a credential's key in place (`{access_token, refresh_token?}`, plaintext in,
+        encrypted at rest): every connection linked to it uses the new key, so no connection or
+        role binding is rebuilt. Operator-only; a running server uses it after
+        `POST /providers/reload`."""
+        _require_operator(request)
+        token = body.get("access_token")
+        if not isinstance(token, str) or not token.strip():
+            raise HTTPException(status_code=400, detail="access_token must be a non-empty string")
+        refresh = body.get("refresh_token")
+        if refresh is not None and not isinstance(refresh, str):
+            raise HTTPException(status_code=400, detail="refresh_token must be a string")
+        try:
+            ok = await _mgmt().update_credential_tokens(
+                credential_id, access_token=token, refresh_token=refresh
+            )
+        except SecretsUnavailable as exc:
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except ValueError as exc:  # a control char (CR/LF) in the key
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not ok:
+            raise HTTPException(status_code=404, detail="no such credential")
+        return {"rotated": True}
 
     @app.delete("/providers/credentials/{credential_id}")
     async def delete_credential(request: Request, credential_id: str) -> dict[str, Any]:
@@ -728,7 +771,9 @@ def create_app(
             "extract_threads",
             "extract_claims",
         )
-        updates = {k: bool(body[k]) for k in fields if k in body}
+        updates = {k: body[k] for k in fields if k in body}
+        if any(not isinstance(v, bool) for v in updates.values()):  # bool("false") is True
+            raise HTTPException(status_code=400, detail="policy values must be true or false")
         updated = (await store.get_extraction_policy()).model_copy(update=updates)
         await store.set_extraction_policy(updated)
         return updated.model_dump()

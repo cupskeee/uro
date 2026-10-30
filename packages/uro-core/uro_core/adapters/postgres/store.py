@@ -1571,7 +1571,7 @@ class PostgresEventStore:
 
     async def update_credential_tokens(
         self, credential_id: str, *, access_token: str, refresh_token: str | None = None
-    ) -> None:
+    ) -> bool:
         # Same ingestion hygiene as add_credential: refuse embedded CR/LF, strip surrounding
         # whitespace, then Fernet-encrypt before the DB sees the rotated tokens.
         access_token = clean_secret(access_token) or ""
@@ -1579,14 +1579,15 @@ class PostgresEventStore:
         enc_access = encrypt_secret(access_token)
         enc_refresh = encrypt_secret(cleaned_refresh) if cleaned_refresh is not None else None
         async with self.pool.acquire() as conn:
-            await conn.execute(
+            row = await conn.fetchrow(
                 "UPDATE provider_credentials SET access_token = $2, "
                 "refresh_token = COALESCE($3, refresh_token), last_refresh = now(), "
-                "updated_at = now() WHERE id = $1",
+                "updated_at = now() WHERE id = $1 RETURNING id",
                 credential_id,
                 enc_access,
                 enc_refresh,
             )
+        return row is not None
 
     # --- extraction policy (D-49): instance-level, off the event/branch axis ---
     async def get_extraction_policy(self) -> ExtractionPolicy:
@@ -1697,6 +1698,19 @@ class PostgresEventStore:
                 connection_id,
                 enabled,
             )
+        return row is not None
+
+    async def set_connection_credential(self, connection_id: str, auth_id: str | None) -> bool:
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "UPDATE model_connections SET auth_id = $2, updated_at = now() "
+                    "WHERE id = $1 RETURNING id",
+                    connection_id,
+                    auth_id,
+                )
+        except asyncpg.ForeignKeyViolationError as exc:  # the FK is the existence check
+            raise ValueError(f"no such credential: {auth_id}") from exc
         return row is not None
 
     async def set_connection_models(self, connection_id: str, models: list[dict[str, str]]) -> bool:

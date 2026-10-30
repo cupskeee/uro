@@ -1760,6 +1760,39 @@ def _set_enabled(connection_id: str, enabled: bool) -> None:
     _run_async(_run)
 
 
+@provider_app.command("link")
+def provider_link(
+    connection_id: str,
+    credential_id: str = typer.Argument(..., help="the credential the connection should use"),
+) -> None:
+    """Point a connection at another stored credential (e.g. after `credential add`)."""
+    _set_credential(connection_id, credential_id)
+
+
+@provider_app.command("unlink")
+def provider_unlink(connection_id: str) -> None:
+    """Remove a connection's credential, leaving it unauthenticated."""
+    _set_credential(connection_id, None)
+
+
+def _set_credential(connection_id: str, credential_id: str | None) -> None:
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            ok = await store.set_connection_credential(connection_id, credential_id)
+        finally:
+            await store.close()
+        if not ok:
+            raise ValueError(f"no such connection: {connection_id}")
+        typer.echo(f"{'linked' if credential_id else 'unlinked'} {connection_id}{_RELOAD_HINT}")
+
+    _run_async(_run)
+
+
+_RELOAD_HINT = "  (a running server uses it after `uro provider reload`)"
+
+
 @provider_app.command("refresh")
 def provider_refresh(connection_id: str) -> None:
     """Discover a connection's models (a LIVE provider call) and cache them with their modality."""
@@ -1839,6 +1872,30 @@ def provider_credential_add(
         finally:
             await store.close()
         typer.echo(f"credential: {cred}  (encrypted at rest)")
+
+    _run_async(_run)
+
+
+@credential_app.command("rotate")
+def provider_credential_rotate(
+    credential_id: str,
+    api_key: str = typer.Option(..., "--api-key", help="the new key, stored ENCRYPTED"),
+) -> None:
+    """Replace a stored key in place: every connection linked to it uses the new key, with no
+    connection or role binding rebuilt."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            ok = await store.update_credential_tokens(credential_id, access_token=api_key)
+            users = [c.id for c in await store.list_connections() if c.auth_id == credential_id]
+        finally:
+            await store.close()
+        if not ok:
+            raise ValueError(f"no such credential: {credential_id}")
+        used = f" — used by {', '.join(users)}" if users else " — no connection uses it yet"
+        typer.echo(f"rotated {credential_id}{used}{_RELOAD_HINT}")
 
     _run_async(_run)
 

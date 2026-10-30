@@ -7,6 +7,7 @@ transport (auth/broadcast) with fake deps. Deterministic — no LLM (management 
 from collections.abc import AsyncIterator
 
 import httpx
+import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.stub import hashing_embedding
@@ -531,3 +532,46 @@ async def test_tokens_are_listed_and_revoked_by_participant(store: PostgresEvent
         assert {t["participant_id"]: t["revoked"] for t in after} == {"bob": True, "carol": False}
         again = await client.post(_q(f"/campaigns/{c}/tokens/revoke"), json={"participant": "bob"})
         assert again.json() == {"revoked": False, "count": 0}
+
+
+async def test_a_credential_is_rotated_in_place_and_a_connection_relinked(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Parity/ops gap: no layer could change a connection's key — rotating meant a new connection
+    # plus rebinding every role. Now: rotate the key in place, or relink the connection.
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("URO_SECRET_KEY", Fernet.generate_key().decode())
+    old = await store.add_credential(provider="openai", access_token="sk-old")
+    spare = await store.add_credential(provider="openai", access_token="sk-spare")
+    conn = await store.add_connection(name="rot", provider="openai", auth_id=old)
+    try:
+        async with _client(store) as client:
+            r = await client.patch(
+                _q(f"/providers/credentials/{old}"), json={"access_token": "sk-new"}
+            )
+            assert r.status_code == 200, r.text
+            assert (await store.get_secret(old))[0] == "sk-new"  # type: ignore[index]
+            assert (await store.get_connection(conn)).auth_id == old  # type: ignore[union-attr]
+            gone = await client.patch(_q("/providers/credentials/nope"), json={"access_token": "x"})
+            assert gone.status_code == 404
+            blank = await client.patch(
+                _q(f"/providers/credentials/{old}"), json={"access_token": ""}
+            )
+            assert blank.status_code == 400
+
+            r = await client.patch(_q(f"/providers/{conn}"), json={"auth_id": spare})
+            assert r.status_code == 200, r.text
+            assert (await store.get_connection(conn)).auth_id == spare  # type: ignore[union-attr]
+            r = await client.patch(_q(f"/providers/{conn}"), json={"auth_id": None})
+            assert (await store.get_connection(conn)).auth_id is None  # type: ignore[union-attr]
+            bad = await client.patch(_q(f"/providers/{conn}"), json={"auth_id": "nope"})
+            assert bad.status_code == 400
+            truthy = await client.patch(_q(f"/providers/{conn}"), json={"is_enabled": "false"})
+            assert truthy.status_code == 400  # bool("false") is True — refuse, don't coerce
+            missing = await client.patch(_q("/providers/nope"), json={"auth_id": spare})
+            assert missing.status_code == 404
+    finally:
+        await store.delete_connection(conn)
+        await store.delete_credential(old)
+        await store.delete_credential(spare)

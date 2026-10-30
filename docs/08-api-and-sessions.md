@@ -72,9 +72,10 @@ GET  /usage                      [?stage=]                        LLM-call telem
 GET  /rulesets                                                    registry: id@version + sheet shape (any-authed) (BE-10)
 GET  /providers                                                   model-connection registry snapshot: connections+roles+credential-metadata (OPERATOR-only, D-47)
 POST /providers                  {name, provider, base_url?, auth_id?}   register a connection (OPERATOR-only, D-47)
-PATCH  /providers/{id}           {is_enabled}                     enable/disable a connection (OPERATOR-only)
+PATCH  /providers/{id}           {is_enabled?, auth_id?}          enable/disable a connection and/or relink its credential (null unlinks) (OPERATOR-only)
 DELETE /providers/{id}                                            delete a connection (bindings cascade) (OPERATOR-only)
 POST /providers/credentials      {provider, access_token, auth_mode?}    store a credential, encrypted at rest (OPERATOR-only; 501 w/o URO_SECRET_KEY)
+PATCH  /providers/credentials/{id} {access_token, refresh_token?}  rotate a key in place; every linked connection uses it (OPERATOR-only)
 DELETE /providers/credentials/{id}                                delete a credential (linked connections unlinked) (OPERATOR-only)
 PUT  /providers/roles/{role}     {connection_id, model}           bind an engine role → connection+model (OPERATOR-only, D-47); embedder needs an embedding model
 DELETE /providers/roles/{role}                                    unbind a role (OPERATOR-only)
