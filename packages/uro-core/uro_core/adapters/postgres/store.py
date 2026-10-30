@@ -640,6 +640,21 @@ class PostgresEventStore:
                     raise ValueError(
                         f"cannot adopt unknown actor {adopt_actor_id!r} on this branch"
                     )
+                # Adopting an actor that is a live PC of another campaign ON THIS BRANCH would hand
+                # that player's character to a second campaign (bind_pc refuses it too, P7-P2). A
+                # binding a fork copied in belongs to a campaign on the PARENT branch: on the fork
+                # it is history, and adopting it is exactly the meteor test's "continue" leg.
+                taken = await conn.fetchval(
+                    "SELECT 1 FROM proj_pcs p JOIN campaigns c ON c.campaign_id = p.campaign_id "
+                    "WHERE p.branch_id = $1 AND p.actor_id = $2 AND p.active "
+                    "AND c.branch_id = $1",
+                    branch_id,
+                    adopt_actor_id,
+                )
+                if taken is not None:
+                    raise ValueError(
+                        f"actor {adopt_actor_id!r} is already an active PC — pick another to adopt"
+                    )
             await conn.execute(
                 "INSERT INTO campaigns (campaign_id, world_id, branch_id, ruleset_id, "
                 "ruleset_version, seed) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -1802,7 +1817,8 @@ class PostgresEventStore:
         `(commit_id, {section: rows})`. The read-only twin of a fork: the SAME nearest-snapshot +
         replay path `fork_branch` uses, into a scratch branch inside a transaction that is always
         rolled back. Nothing persists, and the result is exactly what a fork at `ref` would start
-        from. Cost is a fork's: bounded by the snapshot cadence, not by history."""
+        from. Cost is a fork's: a replay from the nearest snapshot. An imported world has no
+        snapshots before its import point, so there it can replay up to its whole history."""
         _check_sections(sections)
         async with self.pool.acquire() as conn:
             tx = conn.transaction()

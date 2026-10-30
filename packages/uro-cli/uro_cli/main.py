@@ -11,6 +11,7 @@ import json
 import sys
 import time
 import webbrowser
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -114,12 +115,21 @@ def _resolve_router(store: PostgresEventStore, provider: str, model: str | None)
 
 
 async def _world_or_exit(store: PostgresEventStore, ident: str) -> World:
-    """Resolve a world by name (preferred) or id, or exit 1 with a clean message."""
-    world = await store.get_world_by_name(ident) or await store.get_world(ident)
-    if world is None:
+    """Resolve a world by id or name, or exit 1 with a clean message. World names aren't unique
+    (importing a pack twice makes two): an ambiguous name is refused with the ids to choose from,
+    never resolved to an arbitrary one."""
+    world = await store.get_world(ident)
+    if world is not None:
+        return world
+    named = [w for w in await store.list_worlds() if w.name == ident]
+    if len(named) > 1:
+        ids = ", ".join(w.world_id for w in named)
+        typer.echo(f"{len(named)} worlds are named {ident!r} — give an id: {ids}", err=True)
+        raise typer.Exit(1)
+    if not named:
         typer.echo(f"no such world: {ident}", err=True)
         raise typer.Exit(1)
-    return world
+    return named[0]
 
 
 def _build_pc_sheet(ruleset_id: str = "", version: str = "") -> tuple[dict[str, Any], str]:
@@ -273,7 +283,11 @@ def world_create(
 
 @world_app.command("seed")
 def world_seed(
-    path: str, seed: int = typer.Option(42, "--seed", help="RNG seed for History")
+    path: str,
+    seed: int = typer.Option(42, "--seed", help="RNG seed for History"),
+    world: str = typer.Option(
+        None, "--world", help="the world to seed (id or name; default: the pack's name)"
+    ),
 ) -> None:
     """Run History seeding on the world imported from <path>: layer seed-dependent dynasties and
     wars on top of the authored geography (docs/09). Same pack + a different seed → a different
@@ -288,19 +302,14 @@ def world_seed(
         try:
             pack = parse_pack(path)
             await connect_store(store)
-            world = await store.get_world_by_name(pack.manifest.name)
-            if world is None:
-                raise PackError(
-                    f"no imported world named {pack.manifest.name!r} — "
-                    f"run `uro world create {path}` first"
-                )
-            result = await seed_world(store, world, pack, seed)
+            target = await _world_or_exit(store, world or pack.manifest.name)
+            result = await seed_world(store, target, pack, seed)
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
         finally:
             await store.close()
-        typer.echo(f"seeded {world.name!r} with seed {seed} → commit {result.commit_id}")
+        typer.echo(f"seeded {target.name!r} with seed {seed} → commit {result.commit_id}")
         typer.echo(
             f"  {result.dynasties} dynasties, {result.wars} wars (on the pack's authored geography)"
         )
@@ -1088,6 +1097,11 @@ def state(
         if at is not None and branch is not None:
             typer.echo("give --at or --branch, not both", err=True)
             raise typer.Exit(1)
+        if campaign_id is not None and (at is not None or branch is not None):
+            typer.echo(
+                "--at/--branch read a world: use --world (a campaign shows its now)", err=True
+            )
+            raise typer.Exit(1)
         names = [s.strip() for s in sections.split(",") if s.strip()]
         store = build_store()
         await connect_store(store)
@@ -1358,17 +1372,21 @@ def campaign_time_skip(
 @campaign_app.command("outcome")
 def campaign_outcome(
     campaign_id: str,
-    bundle_path: str = typer.Argument(..., help="an outcome bundle (JSON) from an external game"),
+    bundle_path: Path = typer.Argument(  # noqa: B008
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="an outcome bundle (JSON) from an external game",
+    ),
 ) -> None:
     """Record an external game's encounter outcome (Chronicler mode, D-25/D-32) — the same
     trust-scoped distillation as the server's outcome endpoint, then the reaction rules."""
 
     async def _run() -> None:
-        from pathlib import Path
-
         from uro_core.chronicler import OutcomeBundle, distill_outcome_with_receipt
 
-        bundle = OutcomeBundle.model_validate_json(Path(bundle_path).read_text())
+        bundle = OutcomeBundle.model_validate_json(bundle_path.read_text())
         store = build_store()
         await connect_store(store)
         try:
@@ -1881,6 +1899,12 @@ def provider_credential_rotate(
         store = build_store()
         await connect_store(store)
         try:
+            cred = next((c for c in await store.list_credentials() if c.id == credential_id), None)
+            if cred is not None and cred.auth_mode != "api_key":
+                # its stored refresh token belongs to the OLD grant, and would restore the old login
+                raise ValueError(
+                    f"{credential_id} is an OAuth login ({cred.auth_mode}) — log in again instead"
+                )
             ok = await store.update_credential_tokens(credential_id, access_token=api_key)
             users = [c.id for c in await store.list_connections() if c.auth_id == credential_id]
         finally:

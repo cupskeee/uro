@@ -528,12 +528,12 @@ async def test_tokens_are_listed_and_revoked_by_participant(store: PostgresEvent
         assert (await client.post(_q(f"/campaigns/{c}/tokens/revoke"), json={})).status_code == 400
 
         r = await client.post(_q(f"/campaigns/{c}/tokens/revoke"), json={"participant": "bob"})
-        assert r.json() == {"revoked": True, "count": 2}
+        assert r.json() == {"revoked": True, "count": 2, "closed_sockets": 0}
         assert (await client.get(f"/campaigns/{c}/roster?token={bob}")).status_code == 401
         after = (await client.get(_q(f"/campaigns/{c}/tokens"))).json()["tokens"]
         assert {t["participant_id"]: t["revoked"] for t in after} == {"bob": True, "carol": False}
         again = await client.post(_q(f"/campaigns/{c}/tokens/revoke"), json={"participant": "bob"})
-        assert again.json() == {"revoked": False, "count": 0}
+        assert again.json() == {"revoked": False, "count": 0, "closed_sockets": 0}
 
 
 async def test_a_credential_is_rotated_in_place_and_a_connection_relinked(
@@ -750,3 +750,87 @@ async def test_world_state_at_a_branch_head_or_any_commit(store: PostgresEventSt
         assert (await client.get(_q(f"/worlds/{world_id}/state?branch=nope"))).status_code == 404
         typo = await client.get(_q(f"/worlds/{world_id}/state?sections=nope"))
         assert typo.status_code == 400
+
+
+async def test_a_campaign_cannot_adopt_another_players_live_pc(store: PostgresEventStore) -> None:
+    # Review: start_campaign had no taken-PC guard (bind_pc did), so any player could start a
+    # campaign adopting someone else's live PC — now on any branch. A binding a FORK copied in is
+    # history there, and stays adoptable (the meteor "continue" leg).
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    app = create_app(
+        engine_deps(store, engine, {_TOK: "alice", "tok-bob": "bob"}, admin_tokens={_TOK})
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": "Taken"})).json()["world_id"]
+        made = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"), json={"participant": "alice", "new_pc_name": "Ash"}
+        )
+        ash = await store.campaign_pc(made.json()["campaign_id"])
+        steal = await client.post(
+            f"/worlds/{world_id}/campaigns?token=tok-bob",
+            json={"participant": "bob", "adopt_actor_id": ash},
+        )
+        assert steal.status_code == 400 and "already an active PC" in steal.text
+        world = await store.get_world(world_id)
+        head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+        await store.fork_branch(world_id, head, "continue")  # type: ignore[arg-type]
+        on_fork = await client.post(
+            f"/worlds/{world_id}/campaigns?token=tok-bob",
+            json={"participant": "bob", "adopt_actor_id": ash, "branch": "continue"},
+        )
+        assert on_fork.status_code == 200, on_fork.text
+
+
+async def test_review_fixes_on_the_management_surface(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("URO_SECRET_KEY", Fernet.generate_key().decode())
+    async with _client(store) as client:
+        # commit detail takes a marker or a prefix, like `uro show` (it took only a full id)
+        world_id = (await client.post(_q("/worlds"), json={"name": "Refs"})).json()["world_id"]
+        world = await store.get_world(world_id)
+        assert world is not None
+        marker = await store.create_marker(world_id, "start", world.main_branch_id)
+        r = await client.get(_q(f"/worlds/{world_id}/commits/start"))
+        assert r.status_code == 200 and r.json()["commit_id"] == marker.commit_id
+        assert (await client.get(_q(f"/worlds/{world_id}/commits/nope"))).status_code == 404
+
+        # a token minted for campaign X can't mint for campaign Y (it re-seated a revoked player)
+        made = [
+            (
+                await client.post(
+                    _q(f"/worlds/{world_id}/campaigns"),
+                    json={"participant": "bob", "new_pc_name": f"B{i}"},
+                )
+            ).json()["campaign_id"]
+            for i in range(2)
+        ]
+        tok_x = (
+            await client.post(_q(f"/campaigns/{made[0]}/tokens"), json={"participant": "bob"})
+        ).json()["token"]
+        cross = await client.post(
+            f"/campaigns/{made[1]}/tokens?token={tok_x}", json={"participant": "bob"}
+        )
+        assert cross.status_code == 403
+
+        # an OAuth credential can't be rotated with an access token alone: the old grant's
+        # refresh token would silently restore the old login
+        oauth = await store.add_credential(
+            provider="codex", access_token="at", refresh_token="rt", auth_mode="oauth_device"
+        )
+        try:
+            alone = await client.patch(
+                _q(f"/providers/credentials/{oauth}"), json={"access_token": "at2"}
+            )
+            assert alone.status_code == 400
+            both = await client.patch(
+                _q(f"/providers/credentials/{oauth}"),
+                json={"access_token": "at2", "refresh_token": "rt2"},
+            )
+            assert both.status_code == 200
+            assert await store.get_secret(oauth) == ("at2", "rt2")
+        finally:
+            await store.delete_credential(oauth)

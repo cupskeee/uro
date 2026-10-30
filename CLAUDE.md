@@ -89,7 +89,7 @@ The first post-PoC phase, settling **OQ-13 → D-30**: the ruleset port is now *
 
 - **A 7-surface leak audit found 64 d20 assumptions** in the "generic" port; building `uro_pbta` in lockstep forced every one out (full leak report in D-30).
 - **inc 6.1 (port generalization, one cohesive slice — no 6.2):** `rulesets/base.py` names no game vocabulary — opaque `dict` sheets, ruleset-graded `CheckResult.outcome` (not binary `success`), no DC, opaque `EncounterState`, open action/effect kinds, harm via the ruleset's opaque final `SheetUpdated` (projector `{hp}` hardcodes deleted). `uro_basic` refactored to own its d20 shape (meteor + encounter replay byte-identical); `uro_pbta` added (2d6 vs 7/10, harm clock, moves, advance-by-failing).
-- **inc 6.3 (registry & binding):** `rulesets/registry.py` resolves `id@version` → a bound `Ruleset`; `WorldGenesis`/`CampaignStarted` pin it (migration 013), `play`/`dry-run` rebind; `worlds/emberfell` is the PbtA example pack. (`serve` binds one ruleset/process — per-campaign rebind deferred, documented.)
+- **inc 6.3 (registry & binding):** `rulesets/registry.py` resolves `id@version` → a bound `Ruleset`; `WorldGenesis`/`CampaignStarted` pin it (migration 013), `play`/`dry-run` rebind; `worlds/emberfell` is the PbtA example pack. (`serve` bound one ruleset/process until D-60, 2026-10-30, which made it rebind per campaign.)
 - **Phase-end holistic review** (5 dims + completeness critic → 7 confirmed + 3 critic): **1 real fix** — the `ActorDamaged` projector handler was restored as documented **legacy replay-compat** (removing it broke rebuild-by-replay for pre-Phase-6 d20 logs; the current runner still uses opaque `SheetUpdated`). Also: removed the orphaned d20 `initiative` field from the shared `EncounterStarted`; `world validate`/`create` now catch an unregistered ruleset id; the rest was doc-drift reconciled (get_sheet/events/docs-12) + two accepted, named deferrals (bare-`ActorDied` leaves an inert stale sheet, `status='dead'` authoritative; `serve` one-ruleset).
 
 ## Post-PoC Phase 7 — MULTIPLAYER (PartyArbiter) is COMPLETE (2026-07-08, 206 tests green, deterministic)
@@ -176,5 +176,17 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
 - **D-57 — transactional outbox + NATS JetStream relay:** every commit writes an outbox row in its own transaction (migration 023); `uro outbox relay --nats URL` publishes pending commits (at-least-once; JetStream dedups on commit id; SKIP LOCKED for concurrent relays). `uro-core[nats]` extra; `docker compose --profile nats up -d`.
 
 - **The holistic review + v0.5.0** (2026-10-30, 597 tests): ONE system-wide adversarial review (Workflow, Opus 5.5, effort medium) over everything since D-51 → 24 confirmed → all fixed (#100–#103: D-58 extraction fail-closed + subset-only names, D-59 computation-tier fixes, the encounter runner's every-strike trace + mutual-knockout fallout + live Uro Pool difficulties, a resilient outbox relay daemon), then released as **v0.5.0**.
+
+- **The CLI / server / core parity pass (D-60, #106–#115, 2026-10-30, unreleased, 637 tests):** an audit of every CLI command, server route and public core method, then nine slices so each capability is on both surfaces through ONE core implementation:
+  - **Campaigns:** campaigns on any branch over REST, and REST starting gear.
+  - **CLI reads and diff:** CLI reads (`world/campaign list`, `state` incl. `--world --at`, `events`, `show`, `chronicle`, `usage`, `ruleset list`), plus `branch diff` on both surfaces.
+  - **Tokens:** list and revoke-by-participant; a revoke closes the player's sockets.
+  - **CLI admin writes:** connection refresh and test moved into core.
+  - **Keys:** rotation and relinking.
+  - **Packs over the server:** `POST /worlds/create`, `/seed` (`worldpack/create.py`), `POST /worlds` ruleset, `GET /version`.
+  - **Rulesets:** `serve` hosts every ruleset (`Engine.with_ruleset` shares the router and react locks).
+  - **History:** world state at any commit (`store.state_at`, the fork's materialization in a transaction that is always rolled back).
+
+  Found on the way: the CLI's 8-character commit ids collided within a second (ULID timestamps), so full ids are printed and prefixes are accepted. The phase-end review (9 Opus agents, medium) found 14 issues plus 4 from the critic. All real ones are fixed (#115): an idle revoked socket kept reading and kept its seat; `start_campaign` could adopt another player's live PC; mint lacked the campaign scope; OAuth rotation; YAML errors were 500s; ambiguous world names; doc drift. D-60 overclaims are recorded in Corrections.
 
 Known open items: free-roam check consequences never reach sheets (`progression` is never called — every ruleset; its own decision); token counts aren't metered; raw extractor output is only logged, not stored; nothing consumes the outbox yet.

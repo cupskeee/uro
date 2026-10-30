@@ -10,6 +10,7 @@ directly in uro-core.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import secrets
@@ -131,8 +132,8 @@ def _safe_extract_pack(data: bytes, dest: Path) -> Path:
 def _default_sheet(ruleset_id: str, version: str) -> tuple[dict[str, Any], str]:
     """A default character sheet from a world's declared ruleset (docs/06, D-30) — mirrors the
     CLI's `_build_pc_sheet` so a REST-created PC is sheeted+pinned exactly like a CLI-created one
-    (else the ruleset's move/harm layer never engages and the WS cross-ruleset guard is bypassed by
-    an empty pin). Built via the registry, independent of the server's process-bound ruleset.
+    (else the ruleset's move/harm layer never engages, and an empty pin plays the campaign under
+    the server's default ruleset). Built via the registry, independent of the server's own ruleset.
     Returns (sheet, resolved ruleset id)."""
     from uro_core.rulesets.base import CharSpec
     from uro_core.rulesets.registry import resolve as _resolve
@@ -504,6 +505,22 @@ def create_app(
     app = FastAPI(title="Uro Engine server")
     hub = SessionHub()
     arb = arbiter or SoloArbiter()
+    # Every open play socket with the token it authenticated with, so a revoke can CLOSE the
+    # revoked player's sockets at once: an idle socket would otherwise keep reading every broadcast
+    # and keep its seat in the turn ring (stalling a party) until its next message.
+    live_sockets: set[tuple[str, WebSocket]] = set()
+
+    async def _close_revoked_sockets() -> int:
+        """Close every live socket whose token no longer resolves (code 4401). Its handler's
+        `finally` then leaves the turn ring and the hub, exactly like a disconnect."""
+        closed = 0
+        for token, ws in list(live_sockets):
+            if deps.resolve_participant(token) is None:
+                live_sockets.discard((token, ws))
+                with contextlib.suppress(Exception):  # already closing: nothing left to do
+                    await ws.close(code=4401)
+                closed += 1
+        return closed
 
     # A browser SPA (uro-loom) lives on a DIFFERENT origin than the server, so without CORS the
     # browser blocks every cross-origin call (the request never reaches here — it fails preflight /
@@ -696,6 +713,16 @@ def create_app(
         refresh = body.get("refresh_token")
         if refresh is not None and not isinstance(refresh, str):
             raise HTTPException(status_code=400, detail="refresh_token must be a string")
+        cred = next((c for c in await _mgmt().list_credentials() if c.id == credential_id), None)
+        if cred is None:
+            raise HTTPException(status_code=404, detail="no such credential")
+        if cred.auth_mode != "api_key" and not refresh:
+            # The stored refresh token belongs to the OLD grant: the next token refresh would
+            # silently restore the old login. Rotate both tokens, or log in again.
+            raise HTTPException(
+                status_code=400,
+                detail="an OAuth credential needs refresh_token too (or log in again)",
+            )
         try:
             ok = await _mgmt().update_credential_tokens(
                 credential_id, access_token=token, refresh_token=refresh
@@ -1350,9 +1377,15 @@ def create_app(
         world_id: str, commit_id: str, request: Request
     ) -> dict[str, Any]:
         """One commit's ordered events + metadata (BE-4, docs/12). OPERATOR-only (D-45 — raw
-        events). 404 if the commit is not in this world."""
+        events). `commit_id` may be a full id, a unique prefix, or a marker (like `uro show`).
+        404 if it is not in this world."""
         _require_operator(request)
-        detail = await _mgmt().commit_detail(world_id, commit_id)
+        store = _mgmt()
+        try:
+            commit_id = await store.resolve_ref(world_id, commit_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such commit") from exc
+        detail = await store.commit_detail(world_id, commit_id)
         if detail is None:
             raise HTTPException(status_code=404, detail="no such commit")
         return detail.model_dump()
@@ -1513,7 +1546,7 @@ def create_app(
         try:
             # Pin the WORLD's declared ruleset + sheet the PC (D-30 + Phase-3), like the CLI `uro
             # campaign new` path — a REST-created PbtA campaign must not silently fall to an empty
-            # pin + no sheet (which bypasses the WS cross-ruleset guard and disables mechanics).
+            # pin + no sheet (which plays it under the default ruleset and disables mechanics).
             world_rid, world_rver = await store.world_ruleset(branch.branch_id)
             pc_sheet: dict[str, Any] | None = None
             if new_pc_name is not None or (
@@ -1619,6 +1652,7 @@ def create_app(
         an ALREADY-SEATED participant (self-or-admin scope; requires an existing PC binding, so a
         token can't be minted for an unbound identity)."""
         _auth(request)
+        _reject_foreign_scope(request, campaign_id)  # a token for campaign X can't mint for Y
         if deps.mint_token is None:
             raise HTTPException(status_code=501, detail="runtime token management not enabled")
         participant = _require(body, "participant")
@@ -1660,8 +1694,9 @@ def create_app(
     ) -> dict[str, Any]:
         """Revoke a token (D-39), self-or-admin scoped: `{token}` revokes that token, and
         `{participant}` every live runtime token that participant holds on this campaign — so an
-        operator can remove a player without holding their token. Blocks a NEW connect
-        immediately, and a live socket is closed at its next message."""
+        operator can cut a player's access without holding their token. Blocks a new connect and
+        closes the revoked player's open sockets (they leave the turn ring, like a disconnect). The
+        PC stays seated: freeing it is `campaign end`. A launch `--token` can't be revoked."""
         _auth(request)
         if deps.revoke_token is None:
             raise HTTPException(status_code=501, detail="runtime token management not enabled")
@@ -1680,14 +1715,16 @@ def create_app(
             if deps.revoke_participant is None:
                 raise HTTPException(status_code=501, detail="token management not enabled")
             count = await deps.revoke_participant(participant, campaign_id)
-            return {"revoked": count > 0, "count": count}
+            closed = await _close_revoked_sockets()
+            return {"revoked": count > 0, "count": count, "closed_sockets": closed}
         target = _require(body, "token")
         owner = deps.resolve_participant(target)  # whose token is it?
         if owner is not None and owner != caller and not admin:
             raise HTTPException(
                 status_code=403, detail="can only revoke your own token (or as operator)"
             )
-        return {"revoked": await deps.revoke_token(target)}
+        revoked = await deps.revoke_token(target)
+        return {"revoked": revoked, "closed_sockets": await _close_revoked_sockets()}
 
     @app.get("/campaigns/{campaign_id}/roster")
     async def campaign_roster(campaign_id: str, request: Request) -> dict[str, Any]:
@@ -1898,6 +1935,7 @@ def create_app(
             await ws.close(code=4403)  # token not valid for this campaign
             return
         await ws.accept()
+        live_sockets.add((token, ws))
         # Everything fallible (a DB round-trip in pc_seats) runs INSIDE the try, so a transient
         # failure can't orphan the hub subscription / turn-roster entry (D-39 review: an unguarded
         # pre-try failure leaked the queue forever). The finally cleans up whatever was set up.
@@ -1917,9 +1955,8 @@ def create_app(
             forward = asyncio.create_task(_forward(ws, queue))  # fan hub → this socket
             while True:
                 msg = await ws.receive_json()
-                # Auth is checked once before accept; re-check it per message so a REVOKED token
-                # stops acting (revoke evicts it from the resolve cache). Its socket still received
-                # broadcasts until now — revocation stops a player acting, not a past read.
+                # A revoke closes the revoked player's sockets (`_close_revoked_sockets`); this
+                # per-message re-check is the backstop for a message already in flight.
                 if deps.resolve_participant(token) != participant:
                     await ws.close(code=4401)
                     break
@@ -1972,6 +2009,7 @@ def create_app(
         except WebSocketDisconnect:
             pass
         finally:
+            live_sockets.discard((token, ws))
             if forward is not None:
                 forward.cancel()
             if queue is not None:

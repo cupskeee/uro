@@ -22,10 +22,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **Branch diff on both surfaces.** `diff_branches` (docs/18 B5) had no CLI command or endpoint.
   New: `uro branch diff <world> <a> <b>` and `GET /worlds/{w}/diff?a=&b=` (operator-only, D-45,
   since the rows include claim truth values and sheets).
-- **Operators can list tokens and remove a player.** Revoking needed the raw token, which only the
-  player holds (the server stores a hash), and nothing listed tokens. New: `GET /campaigns/{c}/tokens`
-  and `uro token list` (metadata only; a player sees only their own), and revoke by participant
-  (`{participant}` on `/tokens/revoke`, `uro token revoke --participant`).
+- **Operators can list tokens and revoke a player's access.** Revoking needed the raw token, which only
+  the player holds (the server stores a hash), and nothing listed tokens. New:
+  `GET /campaigns/{c}/tokens` and `uro token list` (metadata only; a player sees only their own),
+  and revoke by participant (`{participant}` on `/tokens/revoke`, `uro token revoke --participant`).
+  A revoke closes the revoked player's open sockets at once, so they leave the turn ring. Their PC
+  stays seated, and a launch `--token` can't be revoked.
 - **CLI commands for the server's admin writes.** The CLI now covers:
   - `uro extraction-policy show|set` (D-49);
   - `uro provider enable|disable|refresh|test`;
@@ -81,7 +83,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   nothing. The default lives in one place, `uro_core.timeline.models.STARTING_GEAR`.
 - **A revoked token stops acting on an open socket.** Auth was checked once, before the WebSocket
   was accepted, so a revoked player kept playing until they disconnected (a residual D-39 named).
-  The socket is now closed at its next message.
+  The revoke now closes the socket, and every message re-checks the token as well.
+- **A campaign can't adopt another player's live PC.** `start_campaign` had no guard against
+  adopting an actor that is an active PC of another campaign on the same branch (`bind_pc` did).
+  The server's new `branch` parameter widened this to every branch. A binding a fork copied in is
+  history on the fork and stays adoptable, which is how the meteor test's "continue" leg works.
+- **Smaller fixes from the review:**
+  - a broken YAML file in a pack is a pack error (a 400), not a 500;
+  - `GET /worlds/{w}/commits/{ref}` takes a prefix or marker, like `uro show`;
+  - the CLI refuses an ambiguous world name and lists the ids; `uro world seed` gains `--world`;
+  - an OAuth credential can't be rotated with an access token alone, since its old refresh token
+    would restore the old login;
+  - `uro state <campaign> --at` is refused instead of silently ignored;
+  - a missing `campaign outcome` bundle is a usage error, not a traceback.
 - **Backfill and probe use the reloaded provider.** After `POST /providers/reload` the engine
   switched to the new connections, but the server's backfill and probe kept the router captured at
   startup. They now read the engine's current router, via the new `Engine.router` property.

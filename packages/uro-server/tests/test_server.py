@@ -842,6 +842,11 @@ class _FakeEventStore:
             )
         ]
 
+    async def resolve_ref(self, world_id: str, ref: str) -> str:
+        if not self._commit_exists:
+            raise KeyError(ref)
+        return ref
+
     async def commit_detail(self, world_id: str, commit_id: str) -> BundleCommit | None:
         if not self._commit_exists:
             return None
@@ -2296,3 +2301,41 @@ def test_the_upload_size_guard_covers_the_new_pack_routes() -> None:
     assert _is_pack_upload("/worlds/validate")
     assert not _is_pack_upload("/worlds/import")  # a large JSON bundle, legitimately
     assert not _is_pack_upload("/worlds/w1/branches") and not _is_pack_upload("/worlds/seed")
+
+
+def test_a_revoke_closes_the_revoked_players_idle_socket() -> None:
+    # Review: the per-message re-check only fired when the revoked client SENT something, so an
+    # idle revoked socket kept reading every broadcast and kept its seat in the turn ring.
+    live = dict(_TOKENS)
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return True
+
+    async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[str]:
+        yield "ok"
+
+    async def revoke(token: str) -> bool:
+        return live.pop(token, None) is not None
+
+    deps = ServerDeps(
+        resolve_participant=lambda token: live.get(token),
+        campaign_exists=campaign_exists,
+        run_beat=run_beat,
+        revoke_token=revoke,
+    )
+    with (
+        TestClient(create_app(deps)) as client,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as alice,
+    ):
+        _recv_until(alice, "participant_joined")
+        with client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as bob:
+            _recv_until(alice, "participant_joined")
+            r = client.post("/campaigns/camp-1/tokens/revoke?token=tok-b", json={"token": "tok-b"})
+            assert r.json() == {"revoked": True, "closed_sockets": 1}
+            with pytest.raises(WebSocketDisconnect) as excinfo:  # bob sent nothing
+                _recv_until(bob, "never")
+            assert excinfo.value.code == 4401
+        # bob's client completes the close handshake (leaving the context, as a real client does);
+        # the handler then leaves the turn ring and tells the table, like any disconnect
+        left = _recv_until(alice, "participant_left")[-1]
+        assert left["participant_id"] == "player-2"

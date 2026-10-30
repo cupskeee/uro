@@ -6,6 +6,8 @@ setup is async; each command runs through Typer's CliRunner in a sync test (the 
 loop), pointed at the same dedicated test database.
 """
 
+import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -166,3 +168,40 @@ def test_cli_state_of_a_world_at_a_past_commit(world: SimpleNamespace) -> None:
     code, out = _uro("state", "--world", world.name, "--sections", "actors")
     assert code == 0 and '"Ghost"' not in out  # main never saw the fork's actor
     assert _uro("state", "--world", world.name, "--at", "x", "--branch", "main")[0] == 1
+
+
+def test_review_fixes_cli_guards(world: SimpleNamespace, tmp_path: Path) -> None:
+    # `uro state <campaign> --at` used to ignore --at and print the campaign's present state
+    assert _uro("state", world.campaign, "--at", world.commit)[0] == 1
+    # a missing bundle file is a clean usage error, not a traceback
+    code, out = _uro("campaign", "outcome", world.campaign, "/nonexistent/bundle.json")
+    assert code == 2 and "Traceback" not in out
+
+
+async def test_an_ambiguous_world_name_is_refused_not_guessed(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # World names aren't unique (import a pack twice): the CLI used to act on an arbitrary one.
+    monkeypatch.setenv("URO_DATABASE_URL", store.dsn)
+    name = f"twin-{new_id()}"
+    a = await store.create_world(name)
+    b = await store.create_world(name)
+    result = await asyncio.to_thread(CliRunner().invoke, app, ["log", name])
+    assert result.exit_code == 1 and a.world_id in result.output and b.world_id in result.output
+    by_id = await asyncio.to_thread(CliRunner().invoke, app, ["log", b.world_id])
+    assert by_id.exit_code == 0
+
+
+def test_a_pack_with_broken_yaml_is_a_pack_error(tmp_path: Path) -> None:
+    import shutil
+    from pathlib import Path
+
+    from uro_core.errors import PackError
+    from uro_core.worldpack.parse import parse_pack
+
+    src = Path(__file__).resolve().parents[3] / "worlds" / "ashfall"
+    dst = tmp_path / "ashfall"
+    shutil.copytree(src, dst)
+    (dst / "entities" / "places.yaml").write_text("- name: [unclosed\n")
+    with pytest.raises(PackError, match="not valid YAML"):
+        parse_pack(dst)
