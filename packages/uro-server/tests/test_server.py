@@ -2240,6 +2240,10 @@ def test_extraction_policy_get_patch_and_operator_only() -> None:
     assert (
         client.get("/extraction-policy?token=tok-a").json()["extract_places"] is False
     )  # persisted
+    # a string is refused, not coerced (bool("false") is True — it would turn the category ON)
+    refused = client.patch("/extraction-policy?token=tok-a", json={"extract_places": "false"})
+    assert refused.status_code == 400
+    assert client.get("/extraction-policy?token=tok-a").json()["extract_places"] is False
     # operator-only (D-44)
     assert client.get("/extraction-policy?token=tok-b").status_code == 403
     assert client.patch("/extraction-policy?token=tok-b", json={}).status_code == 403

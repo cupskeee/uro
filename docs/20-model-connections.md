@@ -154,8 +154,9 @@ up (on stub) with no config. Adding the first connection via CLI/API takes over.
   `GET/PUT /providers/roles` (bindings), `POST /providers/{id}/refresh`, `POST /providers/{id}/test`.
 - **`uro-cli` (direct-DB, like `uro world`; operator with DB access):** `uro provider
   add|list|rm|enable|disable`, `uro provider bind <role> <connection> <model>` / `unbind <role>`,
-  `uro provider refresh|test <connection>`, `uro provider codex-login`, and `uro provider credential
-  add|rm` (`rm` refuses a credential a connection still uses unless `--force`, which unlinks those
+  `uro provider refresh|test <connection>`, `uro provider link <connection> <credential>` / `unlink`,
+  `uro provider codex-login`, and `uro provider credential add|rotate|rm` (`rotate` replaces a key in
+  place, so every connection linked to it uses the new one; `rm` refuses a credential a connection still uses unless `--force`, which unlinks those
   connections; deleting a connection keeps its credential, since one may back several). Refresh
   and test are the same core functions the endpoints call (`refresh_connection_models`,
   `probe_connection`). These commands edit the database: a RUNNING server sees the change after

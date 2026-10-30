@@ -80,9 +80,10 @@ class ModelRegistry(Protocol):
 
     async def update_credential_tokens(
         self, credential_id: str, *, access_token: str, refresh_token: str | None = None
-    ) -> None:
-        """Rotate a credential's tokens after an OAuth refresh (encrypted before persistence) and
-        stamp `last_refresh`. Used by the codex token source; a no-op if the id is unknown."""
+    ) -> bool:
+        """Rotate a credential's tokens (encrypted before persistence) and stamp `last_refresh` —
+        after an OAuth refresh (the codex token source), or when an operator replaces an API key
+        in place, which every connection linked to it then uses. False if the id is unknown."""
         ...
 
     # --- connections ---
@@ -102,6 +103,11 @@ class ModelRegistry(Protocol):
     async def get_connection(self, connection_id: str) -> ModelConnection | None: ...
 
     async def set_connection_enabled(self, connection_id: str, enabled: bool) -> bool: ...
+
+    async def set_connection_credential(self, connection_id: str, auth_id: str | None) -> bool:
+        """Link a connection to another credential, or unlink it (`None`). ValueError if the
+        credential doesn't exist; False if the connection doesn't."""
+        ...
 
     async def set_connection_models(self, connection_id: str, models: list[dict[str, str]]) -> bool:
         """Replace a connection's discovered `cached_models` (D-47 slice 3 `refresh`)."""

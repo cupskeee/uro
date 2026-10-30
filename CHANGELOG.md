@@ -38,6 +38,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
   Connection refresh and test moved from the server into core (`refresh_connection_models`,
   `probe_connection`), so both surfaces run one implementation.
+- **API keys can be rotated, and a connection relinked.** No layer could change a connection's key:
+  you had to add a new connection and rebind every role. New:
+  - `PATCH /providers/credentials/{id}` and `uro provider credential rotate` replace a key in place,
+    and every linked connection uses the new one;
+  - `PATCH /providers/{id}` with `auth_id` (`null` to unlink), and `uro provider link|unlink`, change
+    which credential a connection uses.
+
+  A running server picks either change up on reload.
 - **A commit reference can be a unique id prefix.** Anything that takes a commit (fork `--at`,
   `uro show`, the fork endpoint) accepts a prefix of 6 or more characters. An ambiguous prefix is an
   error, never a guess.
@@ -54,6 +62,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **A revoked token stops acting on an open socket.** Auth was checked once, before the WebSocket
   was accepted, so a revoked player kept playing until they disconnected (a residual D-39 named).
   The socket is now closed at its next message.
+- **The admin PATCH endpoints no longer turn `"false"` into true.** `PATCH /providers/{id}` and
+  `PATCH /extraction-policy` coerced values with `bool()`, so the string `"false"` enabled a
+  connection or turned a category on. A non-boolean is now a 400.
 - **The CLI prints full commit ids.** `uro log`, `uro branch list`, `branch mark`, `campaign end` and
   `world seed` printed 8 characters. Commit ids are ULIDs, whose first 10 characters are a
   millisecond timestamp, so 8 characters matched every commit made in the same second: the printed id

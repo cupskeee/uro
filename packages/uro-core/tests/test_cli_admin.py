@@ -100,3 +100,26 @@ def test_campaign_outcome_records_a_chronicler_bundle(env: SimpleNamespace, tmp_
     assert code == 0 and "committed" in out
     code, out = _uro("events", env.world, "--type", "ActorDied")
     assert code == 0 and env.rat in out  # an unprotected T0 combatant really died (D-32)
+
+
+def test_credential_rotate_and_connection_relink(env: SimpleNamespace) -> None:
+    code, out = _uro("provider", "credential", "add", "--provider", "openai", "--api-key", "sk-a")
+    first = out.split()[1]
+    code, out = _uro("provider", "credential", "add", "--provider", "openai", "--api-key", "sk-b")
+    second = out.split()[1]
+    code, out = _uro("provider", "add", "relink", "--provider", "openai", "--credential", first)
+    conn = out.split()[1]
+    try:
+        code, out = _uro("provider", "credential", "rotate", first, "--api-key", "sk-a2")
+        assert code == 0 and f"used by {conn}" in out and "sk-a2" not in out
+        code, out = _uro("provider", "link", conn, second)
+        assert code == 0
+        assert f"{conn}  relink → openai auth={second}" in _uro("provider", "list")[1]
+        assert _uro("provider", "unlink", conn)[0] == 0
+        assert f"{conn}  relink → openai (keyless)" in _uro("provider", "list")[1]
+        assert _uro("provider", "link", conn, "nope")[0] == 1
+        assert _uro("provider", "credential", "rotate", "nope", "--api-key", "x")[0] == 1
+    finally:
+        _uro("provider", "rm", conn)
+        _uro("provider", "credential", "rm", first)
+        _uro("provider", "credential", "rm", second)
