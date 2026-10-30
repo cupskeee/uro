@@ -79,10 +79,10 @@ fork/event-sourcing) → adversarial verify (default-REJECTED) → a completenes
 > owner worked the flagged forks one-by-one as GitHub issues → branch→PR→merge, each with its own
 > phase-end SYSTEM-WIDE review: **B8 #7/D-36**, **B9 #8/D-37**, **B7 #9/D-38**, **B10 #10/D-39**,
 > **B11 #11/D-40**, **B6 trusted-embedder tier #12/D-41**, **B2 C3/C4/C5 #13** (C6 + computed-delta
-> OQ-1 still staged), **B4/B5 P3 trio #14**, and **RL-6 #25/D-42** (quantified/relational triggers).
+> OQ-1 then shipped as D-54/D-53, 2026-10-30), **B4/B5 P3 trio #14**, and **RL-6 #25/D-42** (quantified/relational triggers).
 > The ONLY open backlog issue is **#15 (PyPI/ghcr distribution), PARKED**. Still genuinely reserved:
 > the parked-encounter registry (OQ-12), rumor statement-distortion, branch GC, the append-time
-> emitter whitelist, C6 cascade + computed-delta.
+> emitter whitelist. (C6 cascade + computed-delta shipped 2026-10-30, D-54/D-53.)
 
 ### P0 — hit by 3–4 games, clear win
 
@@ -192,5 +192,5 @@ using this refusal log as the spec.
 > `for_each`/`roll_table`/`expire_claims` (C3/C4/C5, #13) and RL-6's `$trigger`-aware quantified
 > triggers (#25/D-42). The declarative-rules × branching hole is closed (counters ride `fork_branch`).
 > A WASM tier stays reserved at a **sharper** gate (UNBOUNDED computation / entity-minting the closed
-> grammar + counters still can't express); only C6 cascade + computed cross-counter arithmetic (OQ-1)
-> remain staged.
+> grammar + counters still can't express); C6 cascade + computed cross-counter arithmetic (OQ-1), the
+> last staged items, shipped 2026-10-30 (D-54, D-53).

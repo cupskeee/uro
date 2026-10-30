@@ -196,7 +196,8 @@ proposers converged; an adversary killed the naive shape).
   may be an integer EXPRESSION — a literal, `{counter: {scope_ref, key}}`, or `{op: add|sub|mul|div|
   mod|min|max, args: [...]}` — parse-capped (32 nodes, depth 6), evaluated with read-your-writes
   (so rule order matters), failing CLOSED on a zero divisor or an oversized value (the write is
-  dropped and audited). Counter reads are unfenced (like `counter_compare`); the WRITE is still
+  dropped and audited — a plain LITERAL keeps the pre-D-53 clamp, D-59). Counter reads are unfenced
+  (like `counter_compare`); the WRITE is still
   scope-fenced and clamped, and stored absolute. A `for_each` bind var reaches a counter read's
   `scope_ref` inside the expression — never an op name. `RULES_API_VERSION` 5→6 (a literal int
   is still an expression, so v1–v5 packs are unchanged).
@@ -207,7 +208,10 @@ proposers converged; an adversary killed the naive shape).
   a ping-pong terminates. Only CounterChanged-triggered rules take part, against only counter
   changes: a player beat never carries `CounterChanged`, so no pre-C6 rule can fire in a hop and
   every existing pack behaves exactly as before. A threshold rule should guard itself (e.g. `when`
-  the war thread is still `dormant`), or it fires on every later change past the threshold.
+  the war thread is still `dormant`), or it fires on every later change past the threshold. A write
+  that leaves a counter unchanged emits NO `CounterChanged` (D-59), so a self-capping rule can't
+  re-fire itself to the hop cap. `$trigger.<field>` is substituted only inside a `for_each`; anywhere
+  else in an action it is a parse error (D-59), not a literal ref.
   `RULES_API_VERSION` 6→7.
 - **Still deferred (honest ceiling).** Multi-hop/transitive triggers ("a member of an ALLY of X") need
   `for_each` traversal in CONDITIONS (reserved); aggregate triggers ("the 3rd death this season")
