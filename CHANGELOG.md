@@ -10,11 +10,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **The server can start a campaign on any branch.** `POST /worlds/{w}/campaigns` takes an optional
+  `branch` (a name or id, default `main`), like `uro campaign new --branch`. Before, every REST
+  campaign started on `main`, so a branch forked over the API could not be played.
 - **`uro provider credential rm <id>`.** Deleting a connection keeps its credential (one credential
   can back several connections), and the CLI had no way to remove one; only the operator API did.
   The command refuses a credential that a connection still uses, naming those connections. With
   `--force` it deletes the credential anyway, and those connections become unauthenticated rather
   than deleted. `uro provider rm` now says the credential stays.
+
+### Fixed
+- **A PC seated over the server now gets the same starting gear as one seated by the CLI** (a
+  traveler's knife, which a lost fight can loot). REST-created and REST-joined PCs started with
+  nothing. The default lives in one place, `uro_core.timeline.models.STARTING_GEAR`.
 
 ## [0.5.0] - 2026-10-30
 

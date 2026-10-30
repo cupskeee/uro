@@ -50,6 +50,7 @@ from uro_core.pipeline.engine import Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
+from uro_core.timeline.models import STARTING_GEAR
 
 from uro_server.sessions import SessionHub, TokenRegistry
 
@@ -1334,26 +1335,38 @@ def create_app(
             seed = int(body.get("seed") or 0)  # docs/18 G-3: reproducible-combat seed
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="seed must be an integer") from exc
+        # Play ANY branch of the world, like `uro campaign new --branch` (by name, or by id): a fork
+        # is only playable once a campaign starts on it — the continue/new-life/what-if paths.
+        branch_ref = body.get("branch") or "main"
+        if not isinstance(branch_ref, str):
+            raise HTTPException(status_code=400, detail="branch must be a branch name or id")
+        branch = await store.get_branch_by_name(world_id, branch_ref)
+        if branch is None:
+            by_id = await store.get_branch(branch_ref)
+            branch = by_id if by_id is not None and by_id.world_id == world_id else None
+        if branch is None:
+            raise HTTPException(status_code=404, detail=f"no such branch: {branch_ref}")
         try:
             # Pin the WORLD's declared ruleset + sheet the PC (D-30 + Phase-3), like the CLI `uro
             # campaign new` path — a REST-created PbtA campaign must not silently fall to an empty
             # pin + no sheet (which bypasses the WS cross-ruleset guard and disables mechanics).
-            world_rid, world_rver = await store.world_ruleset(world.main_branch_id)
+            world_rid, world_rver = await store.world_ruleset(branch.branch_id)
             pc_sheet: dict[str, Any] | None = None
             if new_pc_name is not None or (
                 adopt_actor_id is not None
-                and await store.get_sheet(world.main_branch_id, adopt_actor_id) is None
+                and await store.get_sheet(branch.branch_id, adopt_actor_id) is None
             ):
                 pc_sheet, ruleset_id = _default_sheet(world_rid, world_rver)
             else:  # adopting an already-sheeted actor: keep its sheet, still pin the ruleset
                 ruleset_id = _resolve_ruleset_id(world_rid, world_rver)
             c = await store.start_campaign(
                 world_id,
-                world.main_branch_id,
+                branch.branch_id,
                 participant_id=participant,
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
                 pc_sheet=pc_sheet,
+                starting_items=list(STARTING_GEAR) if new_pc_name is not None else None,
                 ruleset_id=ruleset_id,
                 ruleset_version=world_rver,
                 seed=seed,
@@ -1419,6 +1432,7 @@ def create_app(
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
                 pc_sheet=pc_sheet,
+                starting_items=list(STARTING_GEAR) if new_pc_name is not None else None,
                 ruleset_id=campaign.ruleset_id,
             )
         except (ValueError, KeyError) as exc:  # bad PC choice, or an absent pinned ruleset

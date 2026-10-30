@@ -55,6 +55,12 @@ class LineageEntry(BaseModel):
     markers: list[str]  # marker names anchored at this commit
 
 
+# A fresh PC's starting gear (Phase 3): real items, so a lost fight leaves something to loot. Every
+# surface that seats a FRESH PC passes this (CLI `world new`/`campaign new|join`, the server's
+# campaign create/join), so the surfaces can't drift; an adopted actor keeps what it owns.
+STARTING_GEAR: tuple[str, ...] = ("a traveler's knife",)
+
+
 class Campaign(BaseModel):
     campaign_id: str
     world_id: str

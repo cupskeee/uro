@@ -52,7 +52,7 @@ POST /worlds/{w}/markers         {name, branch?}                   name a branch
 GET  /worlds/{w}/export                                            whole world → hash-chained bundle (OPERATOR-only, D-45) (BE-8)
 POST /worlds/import              {…WorldBundle JSON…}              verify chain + instantiate a fresh world (OPERATOR-only, D-44) (BE-8)
 GET  /worlds/{w}/chronicle       [?branch=&limit=]                a named branch's recent beats (OPERATOR-only) (BE-10)
-POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id}   start_campaign
+POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id, branch?, seed?}   start_campaign on any branch (name or id; default main)
 GET  /campaigns                  [?world_id=]                      list
 GET  /campaigns/{c}                                                one campaign
 POST /campaigns/{c}/join         {participant, new_pc_name|adopt_actor_id}   bind an additional PC
