@@ -29,10 +29,19 @@ class NatsJetStreamPublisher:
         """Connect, and create the stream (capturing `<prefix>.>`) if it doesn't exist yet."""
         self._nc = await nats.connect(self._url)
         self._js = self._nc.jetstream()
+        wanted = f"{self._prefix}.>"
         try:
-            await self._js.stream_info(self._stream)
+            info = await self._js.stream_info(self._stream)
         except NotFoundError:
-            await self._js.add_stream(name=self._stream, subjects=[f"{self._prefix}.>"])
+            await self._js.add_stream(name=self._stream, subjects=[wanted])
+            return
+        captured = info.config.subjects or []
+        if wanted not in captured and ">" not in captured:
+            # Publishing would fail for every commit, forever — say so now, once, clearly.
+            raise RuntimeError(
+                f"JetStream stream {self._stream!r} captures {captured}, not {wanted!r}: use a "
+                "different --stream, or the prefix that stream was created for"
+            )
 
     def subject(self, message: OutboxMessage) -> str:
         return f"{self._prefix}.{message.world_id}.{message.branch_id}"

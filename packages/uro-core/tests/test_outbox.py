@@ -145,3 +145,50 @@ async def test_nats_jetstream_receives_commits_and_drops_a_resend(
     finally:
         await publisher.close()
         await nc.close()
+
+
+# --- holistic-review fixes (2026-10-30) ----------------------------------------------------
+
+
+async def test_a_zero_batch_is_refused_not_spun(outbox: PostgresEventStore) -> None:
+    # Review: limit=0 never drained and never satisfied `sent < limit` — a hot loop.
+    with pytest.raises(ValueError, match="limit must be >= 1"):
+        await relay_outbox(outbox, InProcessPublisher(), limit=0)
+
+
+async def test_the_relay_daemon_survives_a_publish_error(outbox: PostgresEventStore) -> None:
+    # Review: one publish error ended `uro outbox relay`, stranding every world's commits.
+    from uro_core.outbox import relay_forever
+
+    world = await outbox.create_world(f"outbox-{new_id()}")
+    flaky, delivered, stop = InProcessPublisher(), [], asyncio.Event()
+
+    async def fail_then_deliver(message: OutboxMessage) -> None:
+        if not delivered and not getattr(fail_then_deliver, "failed", False):
+            fail_then_deliver.failed = True  # type: ignore[attr-defined]
+            raise ConnectionError("broker briefly unavailable")
+        delivered.append(message.commit_id)
+        stop.set()
+
+    flaky.subscribe(fail_then_deliver)
+    await asyncio.wait_for(relay_forever(outbox, flaky, interval=0.01, stop=stop), timeout=10)
+    assert delivered and await outbox.outbox_pending() == 0  # retried and delivered, still running
+    assert world.world_id
+
+
+async def test_a_stream_that_misses_our_prefix_is_refused_at_connect() -> None:
+    # Review: an existing stream capturing another prefix made EVERY publish fail, forever.
+    from uro_core.adapters.nats import NatsJetStreamPublisher
+
+    nc = await _nats_or_skip()
+    stream = f"UROTEST{new_id()}"
+    js = nc.jetstream()
+    await js.add_stream(name=stream, subjects=[f"{stream.lower()}-other.>"])
+    try:
+        publisher = NatsJetStreamPublisher(NATS_URL, stream=stream, subject_prefix=stream.lower())
+        with pytest.raises(RuntimeError, match="captures"):
+            await publisher.connect()
+        await publisher.close()
+    finally:
+        await js.delete_stream(stream)
+        await nc.close()
