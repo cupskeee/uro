@@ -120,6 +120,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   sides go down (now possible) wounds everyone who fell and loots nothing, and narrates "both sides
   fall". Uro Pool's checks now use their difficulty (investigating is hard, holding firm easy) —
   before, every check rolled against the same 4+.
+- **The outbox relay keeps running (D-57 follow-up).** `uro outbox relay` exited on its first
+  publish error, stranding every world's commits; it now logs, backs off (up to 30s) and retries
+  (`--once` still exits non-zero). `--batch 0` is rejected instead of spinning, and a JetStream stream
+  that doesn't capture the subject prefix is refused at connect rather than failing every publish.
+  The docs no longer promise global ordering: a single relay keeps each branch in commit order.
 
 ## [0.4.0] - 2026-10-30
 

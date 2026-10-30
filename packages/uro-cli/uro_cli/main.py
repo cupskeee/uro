@@ -760,17 +760,19 @@ def outbox_relay(
     subject_prefix: str = typer.Option("uro", help="subjects are <prefix>.<world>.<branch>"),
     once: bool = typer.Option(False, "--once", help="drain what is pending, then exit"),
     interval: float = typer.Option(1.0, help="seconds between polls (without --once)"),
-    batch: int = typer.Option(100, help="commits claimed per transaction"),
+    batch: int = typer.Option(100, min=1, help="commits claimed per transaction"),
 ) -> None:
     """Publish committed beats to NATS JetStream (D-57). At-least-once from the outbox; JetStream
-    drops a re-sent commit (Nats-Msg-Id = commit id). Run ONE relay for strict global order; several
-    are safe (no row is published twice) but their batches may interleave."""
+    drops a re-sent commit (Nats-Msg-Id = commit id). Run ONE relay to keep each branch in commit
+    order (there is no global order across branches); several are safe — no row is published
+    twice — but may interleave a branch. A publish error is retried with backoff (`--once` exits
+    instead)."""
     try:
         from uro_core.adapters.nats import NatsJetStreamPublisher
     except ImportError as exc:
         typer.echo("the NATS relay needs `pip install 'uro-core[nats]'`", err=True)
         raise typer.Exit(1) from exc
-    from uro_core.outbox import relay_outbox
+    from uro_core.outbox import relay_forever, relay_outbox
 
     async def _run() -> None:
         store = build_store()
@@ -778,13 +780,18 @@ def outbox_relay(
         publisher = NatsJetStreamPublisher(nats_url, stream=stream, subject_prefix=subject_prefix)
         await publisher.connect()
         try:
-            while True:
+            if once:  # a one-shot drain: an error exits non-zero (right for scripts and cron)
                 sent = await relay_outbox(store, publisher, limit=batch)
-                if sent:
-                    typer.echo(f"published {sent} commit(s)")
-                if once:
-                    return
-                await asyncio.sleep(interval)
+                typer.echo(f"published {sent} commit(s)")
+                return
+            # the daemon: a publish error is logged and retried with backoff, never fatal
+            await relay_forever(
+                store,
+                publisher,
+                interval=interval,
+                limit=batch,
+                on_published=lambda n: typer.echo(f"published {n} commit(s)"),
+            )
         finally:
             await publisher.close()
             await store.close()
