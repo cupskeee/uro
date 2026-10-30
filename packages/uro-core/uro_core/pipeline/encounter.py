@@ -60,7 +60,9 @@ def run_encounter(
         # The ruleset names its own effect kinds (uro_basic: hit/miss/down; uro_pbta:
         # full/partial/miss); the runner just surfaces the last one as the turn's result label.
         result = effects[-1].kind if effects else "act"
-        trace = next((e.trace for e in effects if e.trace), "")
+        # EVERY effect's trace: a turn may resolve several strikes at once (uro_pool's simultaneous
+        # exchange closes the whole round on its last commit), and the narrator must see them all.
+        trace = "; ".join(e.trace for e in effects if e.trace)
         events.append(
             encounter_turn_taken(
                 encounter_id=encounter_id,

@@ -745,21 +745,28 @@ class Engine:
             for e in enc_events
             if e.event_type == "EncounterTurnTaken" and e.payload.get("trace")
         ]
-        traces.append(f"outcome: team {outcome.winner_team or 'none'} prevails")
+        traces.append(
+            f"outcome: team {outcome.winner_team} prevails"
+            if outcome.winner_team is not None
+            else "outcome: both sides fall"  # a mutual knockout (uro_pool's simultaneous rounds)
+        )
         return [*setup, *enc_events, *consequences], traces
 
     async def _combat_consequences(
         self, branch_id: str, outcome: EncounterOutcome, combatants: list[Combatant]
     ) -> list[DomainEvent]:
         """Persistent fallout of a decided fight: each combatant on the losing team is wounded
-        (a truth=true claim) and the victor loots their items (ItemTransferred). Emitted by P."""
+        (a truth=true claim) and the victor loots their items (ItemTransferred). Emitted by P.
+        A MUTUAL knockout (no winner — reachable with simultaneous rounds) still wounds everyone
+        who went down, but nobody loots."""
         if outcome.winner_team is None:
-            return []
-        victors = [c.actor_id for c in combatants if c.team == outcome.winner_team]
-        losers = [c.actor_id for c in combatants if c.team != outcome.winner_team]
-        if not victors or not losers:
-            return []
-        victor = victors[0]
+            losers, victor = list(outcome.out_of_fight), None
+        else:
+            victors = [c.actor_id for c in combatants if c.team == outcome.winner_team]
+            losers = [c.actor_id for c in combatants if c.team != outcome.winner_team]
+            if not victors or not losers:
+                return []
+            victor = victors[0]
         cause = CausedBy(kind="player_action")
         events: list[DomainEvent] = []
         for loser in losers:
@@ -777,6 +784,8 @@ class Engine:
                     caused_by=cause,
                 )
             )
+            if victor is None:
+                continue  # nobody left standing to loot
             for item_id in await self._store.items_owned_by(branch_id, loser):
                 events.append(
                     item_transferred(
