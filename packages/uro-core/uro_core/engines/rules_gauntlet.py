@@ -40,7 +40,7 @@ from uro_core.domain.events import (
 from uro_core.engines.actor import propagate_belief
 from uro_core.engines.rules import FiredAction, _resolve_trigger
 from uro_core.ports.projections import ProjectionQueries
-from uro_core.worldpack.rules import Action, Scope
+from uro_core.worldpack.rules import Action, Expr, ExprCounter, ExprOp, Scope
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,8 @@ _MAX_COUNTER = (
 _MAX_TRANSLATE = 256  # C3/C4: TOTAL actions translated per pass incl. recursion
 _MAX_FANOUT = 32  # C3: neighbors a single for_each may iterate (fan-out cap)
 _MAX_EXPIRE = 64  # C5: claims a single expire_claims may retract
+_MAX_INTERMEDIATE = 10**18  # D-53: an expression value past this fails the write closed (a
+#                               32-node mul chain could otherwise build a huge integer — a CPU DoS)
 
 
 async def _scope_refs(store: ProjectionQueries, branch_id: str, scope: Scope) -> set[str] | None:
@@ -118,6 +120,60 @@ def _clamp(v: int) -> int:
     return max(-_MAX_COUNTER, min(_MAX_COUNTER, v))
 
 
+async def _eval_expr(
+    expr: Expr,
+    store: ProjectionQueries,
+    branch_id: str,
+    pending: dict[tuple[str, str], int],
+) -> int | str:
+    """Evaluate a computed counter write (D-53) to an int, or return the reason it's undefined (a
+    zero divisor, a value past `_MAX_INTERMEDIATE`). Counter reads see this pass's earlier writes
+    (read-your-writes, seeded from committed state like a write) — so rule order is meaningful."""
+    if isinstance(expr, int):
+        value = expr
+    elif isinstance(expr, ExprCounter):
+        k = (expr.counter.scope_ref, expr.counter.key)
+        if k not in pending:
+            pending[k] = await store.get_counter(branch_id, *k)
+        value = pending[k]
+    else:
+        args: list[int] = []
+        for sub in expr.args:
+            v = await _eval_expr(sub, store, branch_id, pending)
+            if isinstance(v, str):
+                return v
+            args.append(v)
+        result = _apply_op(expr, args)
+        if isinstance(result, str):
+            return result
+        value = result
+    if abs(value) > _MAX_INTERMEDIATE:
+        return "expression value out of range"
+    return value
+
+
+def _apply_op(expr: ExprOp, args: list[int]) -> int | str:
+    if expr.op == "add":
+        return sum(args)
+    if expr.op == "mul":
+        product = 1
+        for v in args:  # bound EACH step, so a long chain can't build a huge int first
+            product *= v
+            if abs(product) > _MAX_INTERMEDIATE:
+                return "expression value out of range"
+        return product
+    if expr.op == "min":
+        return min(args)
+    if expr.op == "max":
+        return max(args)
+    left, right = args
+    if expr.op == "sub":
+        return left - right
+    if right == 0:
+        return f"{expr.op} by zero"
+    return left // right if expr.op == "div" else left % right
+
+
 def _weighted_pick(weights: dict[str, int], seed: str) -> str:
     """C4: pick one outcome deterministically, weighted, via an integer hash of `seed` — NOT
     random.choice (beats the CPython-version caveat; the pick is baked into events, replay re-picks
@@ -145,7 +201,22 @@ def _substitute(action: Action, bindings: dict[str, str]) -> Action | None:
         if isinstance(value, str):
             return bindings.get(value, value)
         if isinstance(value, list):
-            return [bindings.get(x, x) if isinstance(x, str) else x for x in value]
+            return [bindings.get(x, x) if isinstance(x, str) else sub_expr(x) for x in value]
+        return sub_expr(value)
+
+    def sub_expr(value: Any) -> Any:
+        # Inside an expression tree (D-53) ONLY a counter read's `scope_ref` is a ref slot — an op
+        # name is never substituted, even if a bind var is spelled `add`.
+        if isinstance(value, dict):
+            if isinstance(value.get("counter"), dict):
+                ref = value["counter"].get("scope_ref")
+                if isinstance(ref, str):
+                    return {
+                        **value,
+                        "counter": {**value["counter"], "scope_ref": bindings.get(ref, ref)},
+                    }
+            if isinstance(value.get("args"), list):
+                return {**value, "args": [sub_expr(a) for a in value["args"]]}
         return value
 
     subbed = {k: (v if k == "do" else sub(v)) for k, v in data.items()}  # never touch `do`
@@ -197,12 +268,15 @@ async def _translate(
         k = (a.scope_ref, a.key)
         if k not in pending:  # seed the running value from committed state, once per pass
             pending[k] = await store.get_counter(branch_id, a.scope_ref, a.key)
-        if a.do == "set_counter":
-            new_value = a.value
-        elif a.do == "reset_counter":
+        if a.do == "reset_counter":
             new_value = 0
-        else:  # adjust_counter
-            new_value = pending[k] + a.delta
+        else:  # set (value) or adjust (delta) — a literal or a computed expression (D-53)
+            amount = await _eval_expr(
+                a.value if a.do == "set_counter" else a.delta, store, branch_id, pending
+            )
+            if isinstance(amount, str):  # undefined: fail CLOSED — drop the write, audited
+                return _drop(drops, fired, a.scope_ref, amount)
+            new_value = amount if a.do == "set_counter" else pending[k] + amount
         clamped = _clamp(new_value)
         if clamped != new_value:
             logger.warning("rule %r: counter %s clamped to +/-_MAX_COUNTER", fired.rule_id, k)

@@ -19,6 +19,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   scripted session resolved its missing-girl thread at exactly the beat she was found, and
   replaying three recorded stories resolved nothing. `scripts/relational_live.py --scenario
   resolution` reproduces it.
+- **Computed counter writes in rule packs (D-53).** `set_counter.value` and `adjust_counter.delta`
+  can now be an integer expression over other counters, so a pack can author an economy
+  (`gold += holdings * 5 - upkeep * strength`) on engine-owned state that forks with the world,
+  instead of in game code that doesn't. An expression is structured data — a literal, a counter
+  read, or `add`/`sub`/`mul`/`div`/`mod`/`min`/`max` — capped at 32 nodes and depth 6; a zero
+  divisor or an oversized value drops the write (audited) rather than guessing. Reads see earlier
+  writes in the same pass. `rules_api_version: 6`; older packs are unchanged.
 
 ### Changed
 - **The extractor stops re-recording what it already knows (D-51, live-tuned).** In the two

@@ -6,7 +6,7 @@ The brainstorm backlog. The owner explicitly flagged several report sections as 
 
 **OQ-1 · Entity set completeness** *(from: Data Models feedback)*
 What's missing from `02-domain-model.md`? Candidates already suspected: languages, currencies/economy primitives, calendars/holidays, creature/bestiary types vs. actors, weather systems, player-visible maps as data.
-*For now:* current entity set; add via events + projections as play reveals gaps (additive changes are cheap pre-Phase-2).
+*For now:* current entity set; add via events + projections as play reveals gaps (additive changes are cheap pre-Phase-2). *(Economy primitives: a pack can now author an economy on engine-owned counters with computed writes — D-34 counters + D-53 expressions; no dedicated currency/item-value entity exists.)*
 
 **OQ-2 · Pipeline shape** *(from: Generation Pipeline feedback — "not a fixed flow")*
 Is plan→mechanics→generate→extract the right decomposition? Should extraction run inline (latency) or async post-commit (risk: player sees prose whose facts fail validation)? Do we need a distinct "director" pass for pacing/foreshadowing across beats?

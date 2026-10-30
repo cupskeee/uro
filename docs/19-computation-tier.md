@@ -9,6 +9,13 @@
 > multi-connection participant; P2 replay + P3 lethal-proxy confirmed clean). **D-34 is in
 > `decisions.md`.** C3–C6 remain staged (below), to build on further evidence.
 >
+> **Update (2026-10-30, D-53):** computed-delta arithmetic SHIPPED — the owner opted in. `set_counter.value`
+> / `adjust_counter.delta` accept a bounded INTEGER expression tree (literal · counter read · `add`/`sub`/
+> `mul`/`div`/`mod`/`min`/`max`), parse-capped at 32 nodes / depth 6, evaluated with read-your-writes,
+> failing CLOSED (the write is dropped, audited) on a zero divisor or a value past 10^18; the result is
+> still stored ABSOLUTE, so replay and forks never re-evaluate it. Structured data — no parser, no eval,
+> no float — so "what NOT to build" below still holds. `RULES_API_VERSION` 5→6. OQ-1 below is settled.
+>
 > **Decided (owner):** OQ-1 → ship the counter core first, **defer computed-delta arithmetic** (the
 > economy-formula half) as the reserved tier's sharper gate. OQ-2 → the multi-ref scope (C2) will be
 > a **`world` scope** (explicit whole-realm jurisdiction — the thing Sable/Ironwake hacked around
@@ -149,8 +156,8 @@ games flagged) — ship it *with* the numbers.
 6. **INC-C6 (M, HIGHEST-RISK, LAST, dedicated cross-phase review):** bounded fail-closed cascade
    re-entry + make `CounterChanged` triggerable. Covers RL-12. **Still deferred** (touches `react()`'s
    single-hop invariant; its own review).
-7. **(Undecided) computed-delta arithmetic** — the economy-formula half. Either a bounded expression
-   in `adjust_counter`, or defer to the sharper reserved-tier gate. **Owner decision (OQ below).**
+7. **Computed-delta arithmetic — SHIPPED (D-53, 2026-10-30).** The economy-formula half, as a bounded
+   integer expression in `set_counter`/`adjust_counter` (see the status note at the top).
 
 ## What to NOT build
 
@@ -163,9 +170,10 @@ invariant before C6.
 
 ## Open questions (decide before building)
 
-1. **Computed-delta arithmetic (the economy-formula half):** a bounded expression in
-   `adjust_counter` now, or defer it as the reserved-tier's sharper gate? (This decides whether the
-   Sable economy shadow-state is deleted or explicitly deferred.)
+1. ~~**Computed-delta arithmetic (the economy-formula half):** a bounded expression in
+   `adjust_counter` now, or defer it as the reserved-tier's sharper gate?~~ **SETTLED (D-53):** a
+   bounded structured integer expression in `set_counter`/`adjust_counter` — the Sable economy
+   shadow-state (RL-2/RL-6) is now expressible engine-side.
 2. ~~**The multi-ref / `world` scope shape** (B11): list-of-refs vs a `world` wildcard vs a pair-scope.~~
    **SETTLED (D-40):** `world` shipped in D-34/C2 (unrestricted jurisdiction); the multi-ref half is the
    **list-of-refs** form (`factions: [a, b]` unions members) — the least-privilege middle ground, one

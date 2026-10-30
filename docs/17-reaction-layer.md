@@ -192,6 +192,14 @@ proposers converged; an adversary killed the naive shape).
   raises through the tree so the WHOLE `when` fails CLOSED — a `not`-wrapped unbound ref can't fail open. `RULES_API_VERSION` 4→5 (v1–v4
   packs are byte-identical: a `when` with no `$trigger` is constant across events, so per-event
   evaluation returns exactly the old first-match-then-eval-once result).
+- **Computed counter writes (D-53, OQ-1 of docs/19).** `set_counter.value` / `adjust_counter.delta`
+  may be an integer EXPRESSION — a literal, `{counter: {scope_ref, key}}`, or `{op: add|sub|mul|div|
+  mod|min|max, args: [...]}` — parse-capped (32 nodes, depth 6), evaluated with read-your-writes
+  (so rule order matters), failing CLOSED on a zero divisor or an oversized value (the write is
+  dropped and audited). Counter reads are unfenced (like `counter_compare`); the WRITE is still
+  scope-fenced and clamped, and stored absolute. A `for_each` bind var reaches a counter read's
+  `scope_ref` inside the expression — never an op name. `RULES_API_VERSION` 5→6 (a literal int
+  is still an expression, so v1–v5 packs are unchanged).
 - **Still deferred (honest ceiling).** Multi-hop/transitive triggers ("a member of an ALLY of X") need
   `for_each` traversal in CONDITIONS (reserved); aggregate triggers ("the 3rd death this season")
   compose WITH a counter+threshold but are not themselves a new primitive.
