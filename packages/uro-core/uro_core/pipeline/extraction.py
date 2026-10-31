@@ -7,9 +7,11 @@ Enforced by construction (structural — cannot be bypassed):
 - Whitelist: the schema permits only actors, places, factions, threads, claims — and, via
   affiliations, `member_of`/`located_in` edges between them (D-50). The extractor is structurally
   incapable of proposing damage/death/loss events; every emergent entity is a benign CREATION.
-  It may propose exactly two bounded mutations: resolving a live EMERGENT thread the narration
-  settles (D-52) and recording an alias on a known actor (D-56) — never an authored thread, never
-  damage/death/loss or any other state change.
+  It may propose exactly three bounded mutations: resolving a live EMERGENT thread the narration
+  settles (D-52), recording an alias on a known actor (D-56), and retiring a fact the NARRATOR
+  established when the narration changes it (D-70: `ClaimTruthChanged` to false; never an authored,
+  mechanical, external or module fact) — never an authored thread, never damage/death/loss or any
+  other state change.
 - Tier ceiling: the gauntlet always creates actors at T1.
 - Role-noun guard (D-51): an actor is never MINTED from a description ("the guard" — all
   lowercase once its article is stripped); under D-50 it would become a name key every later
@@ -648,24 +650,30 @@ async def run_gauntlet(
             # Only a fact the narrator itself established in play is retired; authored, mechanical,
             # external and module facts are protected, so superseding one is treated like
             # contradicting it. Before, the old fact always won and the world couldn't change.
+            # The new claim's truth is settled FIRST: only a claim that stays true retires anything
+            # (review: a downgraded claim retired the old fact anyway, leaving nothing true).
+            to_retire: list[str] = []
             for cid in pc.supersedes:
                 old = await store.get_claim(branch_id, cid)
                 if old is None or old.truth != "true" or cid in retired:
                     continue
                 if old.origin == "narrator":
-                    events.append(
-                        claim_truth_changed(claim_id=cid, truth="false", cause="superseded")
-                    )
-                    retired.add(cid)
+                    to_retire.append(cid)
                 else:
                     truth = "unknown"  # a protected fact: can't hold two contradictory truths
             for cid in pc.contradicts:
-                if cid in retired:
+                if cid in retired or cid in to_retire:
                     continue  # (a model may list a changed fact in both)
                 existing = await store.get_claim(branch_id, cid)
                 if existing is not None and existing.truth == "true":
                     truth = "unknown"  # can't hold two contradictory truths
                     break
+            if truth == "true":
+                for cid in to_retire:
+                    events.append(
+                        claim_truth_changed(claim_id=cid, truth="false", cause="superseded")
+                    )
+                    retired.add(cid)
 
         key = (_statement_key(statement), frozenset(subject_refs), truth)
         existing_id = claim_ids.get(key)
@@ -673,6 +681,8 @@ async def run_gauntlet(
             # A character repeating an established FACT (D-58): their belief attaches to the fact,
             # rather than a duplicate unknown-truth claim of the same words.
             existing_id = claim_ids.get((key[0], key[1], "true"))
+        if existing_id in retired:
+            existing_id = None  # retired this beat: no longer a fact to restate onto (review)
         if existing_id is not None:
             claim_id = existing_id  # a restatement: nothing new to record
         else:

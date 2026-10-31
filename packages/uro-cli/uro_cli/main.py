@@ -1686,7 +1686,8 @@ def consistency(campaign_id: str) -> None:
     """Report the narrator contradiction-survival rate (thesis proxy metric T2).
 
     Counts narrator-asserted claims that survived the extractor's contradiction gauntlet
-    (i.e. were not flagged as contradicting recalled state). This is a PROXY — it only
+    (i.e. were not flagged as contradicting recalled state); a fact a later change superseded
+    (D-70) counts neither way. This is a PROXY — it only
     catches contradictions the extractor self-flagged, not all narration-vs-truth
     disagreement — best read as a regression trend, not ground-truth verification.
     """

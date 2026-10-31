@@ -2313,7 +2313,10 @@ class PostgresEventStore:
     async def fact_consistency(self, branch_id: str) -> tuple[int, int]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT count(*) FILTER (WHERE truth = 'true') AS consistent, count(*) AS total "
+                # a narrator fact superseded by a change (D-70, truth=false) left the world
+                # legitimately, so it counts neither way (review)
+                "SELECT count(*) FILTER (WHERE truth = 'true') AS consistent, "
+                "count(*) FILTER (WHERE truth <> 'false') AS total "
                 "FROM proj_claims WHERE branch_id = $1 AND origin = 'narrator'",
                 branch_id,
             )

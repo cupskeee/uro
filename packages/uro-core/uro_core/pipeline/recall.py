@@ -138,7 +138,9 @@ async def assemble_recall(
     # to be rendered — fetch those, separately, so they surface as beliefs and not scene facts.
     known_ids = {c.claim_id for c in claims}
     wanted = {b.claim_id for b in beliefs} - known_ids
-    belief_claims = [c for c in all_claims if c.claim_id in wanted]
+    # (a retracted claim stays out of the belief channel too — review: "Tobin is certain the Barque
+    # is sealed" still reached the narrator after the seal was broken)
+    belief_claims = [c for c in all_claims if c.claim_id in wanted and c.truth != "false"]
 
     # Live plots (campaign-wide): the stakes the narrator should keep in play. Ordered by id for
     # a deterministic prompt (list_threads is already branch-scoped + ordered).

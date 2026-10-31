@@ -1059,3 +1059,114 @@ async def test_only_a_narrator_fact_can_be_superseded(store: PostgresEventStore)
         "unknown",  # nor a mechanical one
         "unknown",  # dialogue is testimony
     ]
+
+
+async def test_a_downgraded_change_retires_nothing(store: PostgresEventStore) -> None:
+    # D-70 review: a superseding claim that ALSO hit a protected fact was downgraded, yet the
+    # narrator fact it superseded had already been retired — the world lost it, nothing true left.
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            claim_recorded(
+                claim_id="c:wall",
+                statement="Vel's sea wall stands.",
+                truth="true",
+                origin="worldpack",
+            ),
+            claim_recorded(
+                claim_id="c:gate", statement="The gate is barred.", truth="true", origin="narrator"
+            ),
+        ],
+    )
+    for claim in (
+        ProposedClaim(
+            statement="The wall fell; the gate swings open.", supersedes=["c:wall", "c:gate"]
+        ),
+        ProposedClaim(
+            statement="The gate swings open.", supersedes=["c:gate"], contradicts=["c:wall"]
+        ),
+    ):
+        events = await run_gauntlet(store, branch, Extraction(claims=[claim]))
+        assert _of_type(events, "ClaimTruthChanged") == []  # the gate fact stays
+        assert _of_type(events, "ClaimRecorded")[0].payload["truth"] == "unknown"
+
+
+async def test_a_fact_retired_and_restated_in_one_beat_stays_true(
+    store: PostgresEventStore,
+) -> None:
+    # D-70 review: the restatement guard matched a fact retired earlier in the same beat, so the
+    # restatement recorded nothing and no true claim was left for the narration's final state.
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            claim_recorded(
+                claim_id="c:gate", statement="The gate is barred.", truth="true", origin="narrator"
+            )
+        ],
+    )
+    same_words = ProposedClaim(statement="The gate is barred.", supersedes=["c:gate"])
+    reopened_then_rebarred = [
+        ProposedClaim(statement="The gate swings open.", supersedes=["c:gate"]),
+        ProposedClaim(statement="The gate is barred.", contradicts=["c:gate"]),
+    ]
+    for claims in ([same_words], reopened_then_rebarred):
+        events = await run_gauntlet(store, branch, Extraction(claims=claims))
+        recorded = {e.payload["statement"]: e.payload for e in _of_type(events, "ClaimRecorded")}
+        barred = recorded["The gate is barred."]
+        assert barred["truth"] == "true" and barred["claim_id"] != "c:gate"  # a fresh true fact
+
+
+async def test_a_retracted_claim_never_reaches_the_narrator(store: PostgresEventStore) -> None:
+    # D-70 review: a retired fact (and a rumor C5 expired) still reached the narrator through an
+    # on-stage NPC's belief — "Tobin is certain the Barque is sealed" after the seal was broken.
+    from uro_core.domain.events import claim_truth_changed
+    from uro_core.pipeline.recall import build_narrator_messages
+
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            actor_created(actor_id="a:tobin", name="Tobin", tier=1),
+            claim_recorded(
+                claim_id="c:sealed",
+                statement="The Barque is sealed.",
+                truth="true",
+                origin="narrator",
+            ),
+            claim_recorded(
+                claim_id="c:rumor",
+                statement="Ghosts walk the quay.",
+                truth="unknown",
+                origin="module",
+            ),
+            belief_changed(actor_id="a:tobin", claim_id="c:sealed", confidence=0.9),
+            belief_changed(actor_id="a:tobin", claim_id="c:rumor", confidence=0.4),
+        ],
+    )
+    await store.append_beat(
+        branch,
+        [
+            claim_truth_changed(claim_id="c:sealed", truth="false", cause="superseded"),
+            claim_truth_changed(claim_id="c:rumor", truth="false", cause="expired"),
+        ],
+    )
+    recall = await assemble_recall(store, branch, "I ask Tobin about the Barque", 8)
+    narrator = "\n".join(m.content for m in build_narrator_messages(recall, "I ask Tobin"))
+    assert "is sealed" not in narrator and "Ghosts" not in narrator
+
+
+async def test_a_superseded_fact_does_not_count_against_consistency(
+    store: PostgresEventStore,
+) -> None:
+    # D-70 review: T2 counted a legitimately changed fact as a failed one.
+    branch = await _branch(store)
+    first = await run_gauntlet(
+        store, branch, Extraction(claims=[ProposedClaim(statement="The hatch is sealed.")])
+    )
+    await store.append_beat(branch, first)
+    old = _of_type(first, "ClaimRecorded")[0].payload["claim_id"]
+    change = ProposedClaim(statement="The hatch stands open.", supersedes=[old])
+    await store.append_beat(branch, await run_gauntlet(store, branch, Extraction(claims=[change])))
+    assert await store.fact_consistency(branch) == (1, 1)

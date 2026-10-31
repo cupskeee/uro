@@ -160,7 +160,9 @@ class ProjectionQueries(Protocol):
         """Thesis PROXY metric T2 (docs/10): (survived, total) narrator-asserted claims.
 
         A narrator claim that survives as `truth=true` counts; one downgraded to `unknown`
-        (the extractor flagged it as contradicting a recalled claim) does not. This is a
+        (the extractor flagged it as contradicting a recalled claim) does not. A narrator fact a
+        later change superseded (D-70, now `false`) left the world legitimately and counts neither
+        way. This is a
         proxy, not verification: it only catches contradictions the extractor self-flagged
         against *recalled* state — not all narration-vs-ground-truth disagreement. Best
         read as a regression trend. A real cross-check pass is future work.
