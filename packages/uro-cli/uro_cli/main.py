@@ -653,19 +653,23 @@ def serve(
         from uro_core.adapters.nats import NatsCommitFeed
 
         commit_feed = NatsCommitFeed(nats_url, subject_prefix=subject_prefix)
-    fastapi_app = create_app(
-        deps, arbiter=arbiter, cors_origins=cors_origin or None, commit_feed=commit_feed
-    )
 
-    @fastapi_app.on_event("startup")
     async def _startup() -> None:
         await connect_store(store)
         if deps.hydrate_tokens is not None:  # load durable runtime tokens (D-39) — AFTER connect
             await deps.hydrate_tokens()
 
-    @fastapi_app.on_event("shutdown")
     async def _shutdown() -> None:
         await store.close()
+
+    fastapi_app = create_app(
+        deps,
+        arbiter=arbiter,
+        cors_origins=cors_origin or None,
+        commit_feed=commit_feed,
+        startup=_startup,
+        shutdown=_shutdown,
+    )
 
     # (The DB preflight is folded into _resolve_router above — its connect_store gives the same
     # clean docker-first hint on a down DB, and the pool it opens is closed before uvicorn starts;

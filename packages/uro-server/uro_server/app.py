@@ -601,22 +601,34 @@ def create_app(
     arbiter: TurnArbiter | None = None,
     cors_origins: list[str] | None = None,
     commit_feed: CommitFeed | None = None,
+    startup: Callable[[], Awaitable[None]] | None = None,
+    shutdown: Callable[[], Awaitable[None]] | None = None,
 ) -> FastAPI:
+    """The server app. `startup`/`shutdown` run at the start and end of its lifespan: `uro serve`
+    opens and closes its store there, on uvicorn's own loop. (FastAPI never runs `on_event` hooks
+    on an app that has a `lifespan`, so they must come in this way.)"""
+
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        """Run the live commit feed (D-67), when one is configured, for the server's lifetime."""
-        if commit_feed is None:
-            yield
-            return
-        await commit_feed.connect()
-        task = asyncio.create_task(consume_commits(commit_feed))
+        """The caller's `startup` first, then the live commit feed (D-67) when one is configured;
+        torn down in reverse."""
+        if startup is not None:
+            await startup()
+        task: asyncio.Task[None] | None = None
         try:
+            if commit_feed is not None:
+                await commit_feed.connect()
+                task = asyncio.create_task(consume_commits(commit_feed))
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            await commit_feed.close()
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            if commit_feed is not None:
+                await commit_feed.close()
+            if shutdown is not None:
+                await shutdown()
 
     app = FastAPI(title="Uro Engine server", lifespan=lifespan)
     hub = SessionHub()
