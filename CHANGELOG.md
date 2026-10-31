@@ -18,7 +18,9 @@ Found in the third live pass (docs/16, "the third live pass").
   was downgraded as a contradiction and the old one kept, so the next beats narrated a broken seal
   as intact. Authored, mechanical, external and rule-made facts can't be overturned this way.
 - **Retracted claims are no longer narrated.** A claim marked false, including a rumor a world
-  rule's `expire_claims` retired, used to reach the narrator as an "unverified rumor".
+  rule's `expire_claims` retired, used to reach the narrator as an "unverified rumor", or as
+  something an on-stage character still believed.
+- **`uro consistency`** no longer counts a fact a later change superseded as a failure.
 
 ## [0.9.0] - 2026-10-31
 
