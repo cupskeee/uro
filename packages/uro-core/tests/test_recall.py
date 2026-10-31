@@ -296,3 +296,25 @@ async def test_rumors_and_rerecordings_never_crowd_out_the_latest_claims(
     recall = await assemble_recall(store, branch, "I ask what people say", 8)
     statements = [c.statement for c in recall.recent_claims]
     assert statements == ["A feat at the wall.", "The Watch calls it talk."]
+
+
+def test_a_repeated_rumor_is_listed_once() -> None:
+    # Review: Ashfall's rule records the same rumor on every failed check; each copy reached the
+    # narrator and the extractor as its own line.
+    from uro_core.pipeline.extraction import build_extractor_messages
+
+    rumor = "Word at the Brinehouse: someone tried their luck, and failed."
+    copies = [
+        ClaimView(
+            claim_id=f"m:{n}",
+            statement=rumor,
+            subject_refs=["p:brinehouse"],
+            truth="unknown",
+            origin="module",
+        )
+        for n in range(3)
+    ]
+    recall = RecallBundle(recent_beats=[], actors=[], claims=copies, beliefs=[])
+    narrator = "\n".join(m.content for m in build_narrator_messages(recall, "I listen"))
+    assert narrator.count(rumor) == 1
+    assert build_extractor_messages(recall, "Talk.")[1].content.count(rumor) == 1

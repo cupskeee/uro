@@ -22,9 +22,13 @@ Found in the second live pass (docs/16, "the second live pass").
 ### Changed
 - **A place is not identity** (D-68, narrowing D-50). Two same-named people are distinct only when
   their factions differ. Someone seen somewhere new is the same person; before, an authored
-  character placed in a different inn was created a second time.
+  character placed in a different inn was created a second time. Among namesakes whose factions
+  agree, a stated place still picks the one who is there. The same faction-only test applies to
+  partial-name links.
 
 ### Fixed
+- **A rumor recorded several times is shown once.** The narrator and the extractor list each
+  statement once, however many copies a world rule has recorded.
 - **Placeholders and common nouns never become entities.** A model's `"unknown"` or `"n/a"` is no
   longer stored as a place, faction or role, and a lowercase common noun ("the tavern") no longer
   creates a place or faction (it still links to a known one).

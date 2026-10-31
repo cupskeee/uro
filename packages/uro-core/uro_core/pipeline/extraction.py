@@ -70,6 +70,7 @@ from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.providers.base import Message
+from uro_core.timeline.models import ClaimView
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +268,10 @@ def build_extractor_messages(
     # story's rumor channel), so a retelling must read as old news here, or it becomes a fresh claim
     # its teller "believes" outright. So are the latest claims, whatever their subject, so a
     # reworded repeat of something said a beat ago reads as old news (live run, 2026-10-31).
-    shown = {c.claim_id: c for c in [*recall.claims, *recall.belief_claims, *recall.recent_claims]}
+    # One line per statement: a rule may record the same rumor on every trigger (review).
+    shown: dict[tuple[str, str], ClaimView] = {}
+    for c in [*recall.claims, *recall.belief_claims, *recall.recent_claims]:
+        shown.setdefault((c.statement, c.truth), c)
     known_claims = (
         "\n".join(f"- [{c.claim_id}] ({c.truth}) {c.statement}" for c in shown.values()) or "(none)"
     )
@@ -491,15 +495,24 @@ async def run_gauntlet(
         # not identity (D-68): people move, and live the Duke was split in two for being "in the
         # Brinehouse" (inside Vel, where he is authored). A new place is recorded only if the
         # actor had none — the extractor can't remove an edge, so it never records a move.
-        for cand in actors_by_key.get(key, []):
-            ca = aff.get(cand, {})
-            if fid is None or ca.get("member_of") in (None, fid):
-                _enrich(cand, "member_of", fid)
-                _enrich(cand, "located_in", pid)
-                name_to_ref[key] = cand
-                return cand
+        # Among namesakes whose factions agree, a stated place still picks the one who is THERE (a
+        # tie-break, not identity — review: "Tobin, in Hollow" linked the first Tobin listed).
+        compatible = [
+            c
+            for c in actors_by_key.get(key, [])
+            if fid is None or aff.get(c, {}).get("member_of") in (None, fid)
+        ]
+        if compatible:
+            here = [
+                c for c in compatible if pid is not None and aff.get(c, {}).get("located_in") == pid
+            ]
+            cand = (here or compatible)[0]
+            _enrich(cand, "member_of", fid)
+            _enrich(cand, "located_in", pid)
+            name_to_ref[key] = cand
+            return cand
         # D-56: no actor has this exact name — a PARTIAL name ("Aldren", "Captain Tobin") links to
-        # the ONE known actor whose name words contain it, if affiliations agree, and records the
+        # the ONE known actor whose name words contain it, if factions agree (D-68), and records the
         # mention as an alias. Never for a role noun, and never when an exact name exists (a
         # same-name actor of a different house is distinct — D-50 — not a partial match).
         partial = (

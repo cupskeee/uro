@@ -927,3 +927,53 @@ async def test_a_known_person_seen_somewhere_new_is_the_same_person(
     events = await run_gauntlet(store, branch, seen)
     assert _of_type(events, "ActorCreated") == []  # linked, not split
     assert _of_type(events, "EdgeAdded") == []  # he keeps his place (no move is recorded)
+
+
+async def test_a_stated_place_still_picks_the_namesake_who_is_there(
+    store: PostgresEventStore,
+) -> None:
+    # Review of D-68: with a place out of identity, "Tobin, in Hollow" linked whichever Tobin was
+    # listed first. Location stays a tie-break among namesakes whose factions agree.
+    branch = await _branch(store)
+    two = Extraction(
+        actors=[
+            ProposedActor(name="Tobin", member_of="House Ash", located_in="Vel"),
+            ProposedActor(name="Tobin", member_of="House Brine", located_in="Hollow"),
+        ]
+    )
+    await store.append_beat(branch, await run_gauntlet(store, branch, two))
+    async with store.pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT e.src, p.name FROM proj_edges e JOIN proj_places p "
+            "ON p.branch_id = e.branch_id AND p.place_id = e.dst "
+            "WHERE e.branch_id = $1 AND e.rel_type = 'located_in'",
+            branch,
+        )
+    hollow_tobin = next(r["src"] for r in rows if r["name"] == "Hollow")
+    mention = Extraction(
+        actors=[ProposedActor(name="Tobin", located_in="Hollow")],
+        claims=[ProposedClaim(statement="Tobin limps.", about=["Tobin"], provenance="narrator")],
+    )
+    events = await run_gauntlet(store, branch, mention)
+    assert _of_type(events, "ActorCreated") == []
+    (claim,) = _of_type(events, "ClaimRecorded")
+    assert claim.payload["subject_refs"] == [hollow_tobin]
+
+
+async def test_capitalized_placeholders_never_become_entities(store: PostgresEventStore) -> None:
+    # Review: the first test's placeholders were all lowercase, so the common-noun guard caught them
+    # and the placeholder check itself went untested for actors and factions.
+    branch = await _branch(store)
+    ex = Extraction(
+        actors=[ProposedActor(name="Unknown"), ProposedActor(name="Ilse", member_of="Unknown")],
+        factions=[ProposedFaction(name="N/A")],
+        claims=[
+            ProposedClaim(
+                statement="The tide turns at dusk.", provenance="dialogue", speaker="Unknown"
+            )
+        ],
+    )
+    events = await run_gauntlet(store, branch, ex)
+    assert [e.payload["name"] for e in _of_type(events, "ActorCreated")] == ["Ilse"]
+    assert _of_type(events, "FactionCreated") == [] and _of_type(events, "EdgeAdded") == []
+    assert _of_type(events, "BeliefChanged") == []  # an unnamed speaker holds no belief
