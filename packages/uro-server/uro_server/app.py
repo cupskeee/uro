@@ -602,7 +602,23 @@ def create_app(
     cors_origins: list[str] | None = None,
     commit_feed: CommitFeed | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Uro Engine server")
+    @contextlib.asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        """Run the live commit feed (D-67), when one is configured, for the server's lifetime."""
+        if commit_feed is None:
+            yield
+            return
+        await commit_feed.connect()
+        task = asyncio.create_task(consume_commits(commit_feed))
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await commit_feed.close()
+
+    app = FastAPI(title="Uro Engine server", lifespan=lifespan)
     hub = SessionHub()
     arb = arbiter or SoloArbiter()
     campaign_branches: dict[str, str | None] = {}  # campaign → branch (never changes), cached
@@ -665,21 +681,6 @@ def create_app(
                 await feed.connect()
             except Exception as exc:
                 logger.warning("live commit feed reconnect failed: %s", exc)
-
-    if commit_feed is not None:  # (hooks only when a feed is configured)
-        feed = commit_feed
-        feed_task: list[asyncio.Task[None]] = []
-
-        @app.on_event("startup")
-        async def _start_feed() -> None:
-            await feed.connect()
-            feed_task.append(asyncio.create_task(consume_commits(feed)))
-
-        @app.on_event("shutdown")
-        async def _stop_feed() -> None:
-            for task in feed_task:
-                task.cancel()
-            await feed.close()
 
     # Every open play socket with the token it authenticated with, so a revoke can CLOSE the
     # revoked player's sockets at once: an idle socket would otherwise keep reading every broadcast

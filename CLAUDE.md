@@ -139,7 +139,7 @@ Acting on the games' gap reports (`docs/18`): **B1 `append_and_react`** shipped 
 
 ## Post-PoC — THE BACKLOG-ISSUES EPOCH is COMPLETE (docs/18 issues #7–#14 + #25, 2026-07-19, 359 tests green, deterministic)
 
-The whole games-driven backlog (`docs/18`) was worked issue-by-issue as branch→PR→merge (owner merges), each a coherent slice + a phase-end SYSTEM-WIDE cross-phase review + docs reconciled in-commit. Decisions **D-36..D-42**. This clears essentially all of `docs/18`; the **only open backlog issue is #15 (PyPI publish + optional ghcr image), PARKED by the owner** (not started). Migrations through 019.
+The whole games-driven backlog (`docs/18`) was worked issue-by-issue as branch→PR→merge (owner merges), each a coherent slice + a phase-end SYSTEM-WIDE cross-phase review + docs reconciled in-commit. Decisions **D-36..D-42**. This clears essentially all of `docs/18`; the **only open backlog issue was #15 (PyPI publish + optional ghcr image), parked by the owner** at the time. It has since shipped as D-43 (below); only the optional ghcr image stays deferred. Migrations through 019.
 
 - **#7 — participant memory (B8, D-36):** a player's out-of-world notes that survive a fork (time-loop/NG+); a caller-owned `ParticipantMemory` lane off the branch/projection axis; `uro codex add/list`; migration 017.
 - **#8 — client-supplied plan (B9, D-37):** `Engine.run_beat/preview_beat(..., plan=BeatPlan)` drives the planner→mechanics gate deterministically with no LLM; a trusted in-process input (no D-32 ceiling; a future network-exposed `plan=` must add it).

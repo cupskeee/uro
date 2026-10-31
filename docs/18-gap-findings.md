@@ -80,7 +80,8 @@ fork/event-sourcing) → adversarial verify (default-REJECTED) → a completenes
 > phase-end SYSTEM-WIDE review: **B8 #7/D-36**, **B9 #8/D-37**, **B7 #9/D-38**, **B10 #10/D-39**,
 > **B11 #11/D-40**, **B6 trusted-embedder tier #12/D-41**, **B2 C3/C4/C5 #13** (C6 + computed-delta
 > OQ-1 then shipped as D-54/D-53, 2026-10-30), **B4/B5 P3 trio #14**, and **RL-6 #25/D-42** (quantified/relational triggers).
-> The ONLY open backlog issue is **#15 (PyPI/ghcr distribution), PARKED**. Still genuinely reserved:
+> No backlog issue is open. **#15 (distribution)** shipped as PyPI publishing (D-43); only its
+> optional `ghcr.io` `uro-server` image stays deferred (docs/14). Still genuinely reserved:
 > the parked-encounter registry (OQ-12), rumor statement-distortion, branch GC, the append-time
 > emitter whitelist. (C6 cascade + computed-delta shipped 2026-10-30, D-54/D-53.)
 
