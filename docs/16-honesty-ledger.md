@@ -65,7 +65,7 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 | Pack parse + sufficiency grading; import (emitter S); dry-run | proven | `test_worldpack*`, `test_dryrun`. |
 | Procedural history seeding (reproducible + seed-varying) | proven | pure fn of (manifest, seed). |
 | `history.simulate_years` scales the sim | proxy | stamped, not a deeper simulation. |
-| AI backfill · capability probes | **stub-only** | logic tested with a fake/stub provider; **never run live**. |
+| AI backfill · capability probes | **stub-only** *(superseded: live-validated once in "the v0.7 live run", below)* | logic tested with a fake/stub provider; **never run live**. |
 | `generate_population=true` actually generates a populace | **stub-only / overclaim** | the flag lets a 0-actor pack grade `runnable`, but **nothing consumes it** (reconciled: doc note + it should gate on real actors). |
 | Ruleset registry (`id@version` → impl) | partial | resolves; unknown fails loudly; **version not enforced**, `config` reserved. |
 
@@ -74,14 +74,14 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 | Capability | Status | Note |
 |---|---|---|
 | Server WS play + token auth · broadcast fan-out (two clients, same beat) | proven | via a fake `ServerDeps` (transport tested without a live DB/model). |
-| Full server + real Engine over WS, end-to-end | **stub-only** | never exercised live; `scripts/postpoc_validate.sh` §Phase-7 is the manual path. |
+| Full server + real Engine over WS, end-to-end | **stub-only** *(superseded: live-validated in "the v0.7 live run" and the later passes, below)* | never exercised live; `scripts/postpoc_validate.sh` §Phase-7 is the manual path. |
 | PartyArbiter round-robin (D-31); turn state session-only | proven | `test_party.py`; the round-robin itself is deterministic (no LLM). |
 | Proposal-window (`QUEUED` live) + consensus/vote arbiters + the non-canon table-talk lane (D-38) | proven | `test_arbiter_shapes.py` + `test_server.py`; deterministic (session-only, no LLM). The non-canon guarantee is **structural** (a `table_talk`/`vote` frame calls `hub.publish` only, never `run_beat`/`append_beat` — asserted by a "run_beat untouched" test). Consensual-PvP / simultaneous / reactive-interrupt / `take_pending` stay DEFERRED behind the same port (D-38). |
 | Durable turn ORDER via `pc_seats` (D-39; refines D-31) | proven | `test_session_tokens.py` (bind order from the log; adopted-PC + release/rebind) + `test_arbiter_shapes.py` (`note_joined(seats)` orders the ring + preserves the live holder across a re-seat). Deterministic. The turn **cursor** stays session-only (resets on a full restart) — a durable cursor is refused (rides `fork_branch`); resume-after-crash is a named deferral. |
 | Runtime session tokens (D-39): durable, hashed, revocable, campaign-scoped; off the branch axis | proven | `test_session_tokens.py` (store: mint/revoke/list, `sha256`-only, fork-untouched, absent from `_SNAPSHOT_TABLES`) + `test_server.py` (registry restart-hydrate, operator-vs-player admit scope, WS campaign-scope reject) + `test_rest_management.py` (mint-on-join, non-operator can't seat another, revoke denies). Deterministic (no LLM). **By-policy/named residuals:** a launch `--token` can't be revoked at runtime (a revoke closes the revoked player's open sockets, 2026-10-30); no per-participant token cap / no revoke-on-`end_campaign`; single-process cache (cross-process coherence deferred). |
 | Export/import + hash-chain verify | proven | `test_export.py`. |
 | Bundle integrity | proxy | **keyless tamper-evidence**, NOT cryptographic authenticity (a re-derived internal chain). |
-| Belief/rumor propagation (confidence decay, traceable) | **stub-only** | deterministic BFS tested; **never run with a live narrator**. Distortion = confidence decay only (statement garbling deferred). |
+| Belief/rumor propagation (confidence decay, traceable) | **stub-only** *(superseded: retold by a live narrator in "the v0.7 live run", below)* | deterministic BFS tested; **never run with a live narrator**. Distortion = confidence decay only (statement garbling deferred). |
 | Chronicler ingestion trust-scoping (D-32) | proven | protection ceiling / participant scope / ownership / testimony downgrade / caps / idempotent replay; `test_chronicler_hardening.py`. Out-of-cast casualties now DROP (D-41; was a rumor); loot `to_ref` protected. |
 | Trusted-embedder distillation tier (D-41) | proven | `uro_core.authored.distill_authored_outcome` (`protect=_never_protected`) reuses distillation with the ceiling OFF — a Posture-A embedder's authored protected death/loot becomes real canon. Trust = module boundary: an **import-linter fence** forbids `uro_server`→`authored`/`_distill_core` (VERIFIED to bite); `OutcomeBundle` `extra='forbid'`+v-pin. `test_chronicler_hardening.py`. Structural vs the wire; the in-core-edit residual is by-policy (D-37 posture). Named residual: the trusted tier can kill a PC-bound actor (release it yourself — reachable via `append_beat` anyway). |
 | Chronicler parked-encounter registry (untrusted external network game) + per-campaign endpoint authority beyond `/outcome` | deferred | RESERVED (D-41) — no untrusted network consumer exists; a corrected design is recorded (branch-scoped event-sourced, non-`cast` column, campaign-agnostic admin auth). The outcome endpoint now enforces the token→campaign scope (D-39/D-41); the wider REST authority stays deferred. |
@@ -445,3 +445,19 @@ Ashfall's rule recorded the same rumor on every failed check and each copy reach
 was untested for actors and factions (`test_capitalized_placeholders_never_become_entities`); and
 docs said partial-name links need "affiliations" to agree (now factions), credited D-69 to D-68, and
 attributed the D-66/D-67 review to D-68/D-69.
+
+## Post-PoC — the third live pass (2026-10-31, v0.9.0)
+
+Run by Claude this time, on the owner's request, with the model registry's credentials (decrypted
+by the `URO_SECRET_KEY` in `.env`): scripted sessions through the real engine, the `gpt-4o-mini`
+replay, and two live WebSocket clients against `uro serve`.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Physical danger rolled (D-69) | **live-validated, all three rulesets** | Uro Pool `endure` fired on rowing the shoals, climbing the hull and hauling a seal (3 successes); Uro Basic `athletics` on a wall climb and a forced lock (2 failures); PbtA `act_under_pressure` on a bridge sprint (a partial, narrated as a cost). |
+| Uro Pool in play | **live-validated** | a strike opened a simultaneous exchange: two rounds, Maren took 3 wounds and was out of the fight, she pushed once (+1 strain), and Wren earned a milestone. A free-roam push stayed unseen (every free-roam roll succeeded). |
+| A world rule, repeated, shown once | **live-validated** | Ashfall's rule fired on both failed checks; at the Brinehouse Mera mentioned the rumor once. |
+| "Not your turn" in a live party | **live-validated** | two WebSocket clients: player-2 sent player-1's exact words mid-beat and got `not_your_turn` with its own `intent_id`; player-1's frames carried player-1's. |
+| A known person seen somewhere new (D-68) on `gpt-4o-mini` | **live-validated** | the Ashfall replay that had duplicated Duke Halbrecht and Old Weck now keeps one of each. The same replay still records passing moments as narrator fact. |
+| **A change of state** | **found live — open** | Wren broke the Drowned Barque's seal (a successful check; the narration says it snapped open). The extractor recorded "the hold has been opened" and flagged it as contradicting "the Barque is sealed" (true), so the gauntlet downgraded the NEW fact to `unknown` and kept the old one; the next two beats narrated the hold as sealed. The contradiction rule protects canon from the narrator, but it also stops the world from changing. |
+| Narration beyond the mechanics | **observed, minor** | a failed Uro Basic climb was narrated as a shoulder injury no mechanic recorded; a round that dealt 2 wounds was narrated "without drawing blood"; asked to speak with River, the narrator answered through an unnamed digger. |
