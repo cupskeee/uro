@@ -210,8 +210,10 @@ def build_narrator_messages(
     style: str = "",
     env: PromptEnv | None = None,
 ) -> list[Message]:
-    facts = [c.statement for c in recall.claims if c.truth == "true"]
-    rumors = [c.statement for c in recall.claims if c.truth != "true"]
+    # each statement once: a rule that records the same rumor on every trigger (Ashfall's failed-
+    # check talk) would otherwise list it once per copy (review)
+    facts = list(dict.fromkeys(c.statement for c in recall.claims if c.truth == "true"))
+    rumors = list(dict.fromkeys(c.statement for c in recall.claims if c.truth != "true"))
     # belief_claims render on-stage NPCs' beliefs (below) but are NOT scene facts/rumors.
     claim_by_id = {c.claim_id: c for c in [*recall.claims, *recall.belief_claims]}
     name_by_id = {a.actor_id: a.name for a in recall.actors}
