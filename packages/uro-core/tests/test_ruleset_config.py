@@ -128,3 +128,18 @@ async def test_a_packs_settings_are_imported_with_the_world(store: PostgresEvent
     result = await import_pack(store, pack)
     pin = await store.world_ruleset(result.world.main_branch_id)
     assert (pin.id, pin.config) == ("uro-pool", {"push_strain": 2})
+
+
+def test_every_builtin_rolls_for_physical_danger() -> None:
+    # The second live pass (2026-10-31): forcing a lock (Uro Basic) and rowing through rising surf
+    # (Uro Pool) went unrolled — no affordance covered physical risk, so the narrator decided.
+    from uro_core.pipeline.plan import BeatPlan, PlanMechanic, validate_plan
+
+    for rid in ("uro-basic", "uro-pbta", "uro-pool"):
+        affordances = registry.resolve(rid).affordances()
+        (danger,) = [a for a in affordances if "danger" in a.trigger_categories]
+        assert not danger.starts_encounter, rid  # a free-roam check, not a fight
+        unrolled = BeatPlan(triggers=["danger"])
+        assert validate_plan(unrolled, affordances, set()), rid  # D-21: it MUST be rolled
+        rolled = BeatPlan(triggers=["danger"], mechanics=[PlanMechanic(affordance=danger.id)])
+        assert validate_plan(rolled, affordances, set()) == [], rid

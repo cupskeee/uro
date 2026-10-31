@@ -4,7 +4,7 @@ import logging
 
 import pytest
 from uro_core.pipeline.extraction import (
-    _is_role_noun,
+    _is_common_noun,
     build_extractor_messages,
     canonical_name,
     parse_extraction,
@@ -118,10 +118,10 @@ def test_parse_survives_pathological_nesting() -> None:
 def test_role_noun_detection() -> None:
     # D-51: a description is all-lowercase once its article is stripped; a name is capitalized.
     for role in ("the guard", "tallest hooded stranger", "a barkeep", "An old patron"):
-        assert _is_role_noun(role), role
+        assert _is_common_noun(role), role
     for name in ("the Duke", "Ser Aldren Voss", "Mara", "de la Cruz"):
-        assert not _is_role_noun(name), name
-    assert not _is_role_noun("衛兵")  # no letter case → can't judge → never refused
+        assert not _is_common_noun(name), name
+    assert not _is_common_noun("衛兵")  # no letter case → can't judge → never refused
 
 
 def test_a_dropped_item_is_logged_with_its_content(caplog: pytest.LogCaptureFixture) -> None:

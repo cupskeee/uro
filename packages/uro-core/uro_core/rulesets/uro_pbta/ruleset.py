@@ -155,6 +155,12 @@ class UroPbtA:
                 trigger_categories=["coerce"],
                 description="hold steady under pressure",
             ),
+            Affordance(  # physical risk (the live run found no move for it)
+                id="act_under_pressure",
+                stat="quick",
+                trigger_categories=["danger"],
+                description="push through physical danger — climb, dodge, race, or ride it out",
+            ),
             Affordance(
                 id="seize_by_force",
                 stat="forceful",

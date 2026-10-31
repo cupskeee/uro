@@ -421,3 +421,18 @@ success; Codex HTTP errors carried no status; the lifespan skipped `on_event` ho
 attached and could skip `shutdown` (the store close) when the feed's close failed; an in-place
 time-skip's AdaptationApplied still said `fork-timeskip`; and this ledger had called the rumor fix
 "structural" (corrected above).
+
+## Post-PoC — the second live pass (2026-10-31, v0.8.0)
+
+What the first pass didn't cover (runbook `docs/live-run.md` §9): a two-player party, Uro Pool, a
+world rule in live play, and the extractor on `gpt-4o-mini` (by replay).
+
+| Capability | Status | Evidence |
+|---|---|---|
+| A two-player party over WebSocket | **live-validated (one session)** | `uro serve` with two tokens: player-1 and player-2 alternated strictly over six beats, each as their own PC. The "not your turn" path wasn't exercised live — player-2's identical intent arrived 1.4 s after player-1's beat committed, a legitimate turn; it stays covered by `test_another_players_identical_intent_never_settles_ours`. |
+| A world rule in live play, voiced by the narrator | **live-validated** | Ashfall's `failures-get-talked-about`: player-2's failed sneak committed the module rumor, and asked what people were saying, Mera answered "someone tried their luck down there and failed". First reaction ever to fire in a live session. |
+| Physical risk rolled | **found live → fixed (D-69)** | a forced lock (Uro Basic) and a row through rising surf (Uro Pool) went unrolled: no built-in affordance covered physical danger, so the narrator decided (Basic) or never resolved (Pool) the outcome. Every built-in now declares a `danger` affordance (`test_every_builtin_rolls_for_physical_danger`). |
+| Uro Pool in live play | **played, mechanics unexercised** | five beats, no check could fire (above); the pool, push, strain and wounds remain proven only by deterministic tests until a pass with `endure`. |
+| Extractor on `gpt-4o-mini` | **instructions don't hold** | replayed: the retelling recorded again (0.7), the three sayings, "the tavern", passing moments and one line of dialogue as narrator fact, no threads. Keep a stronger model on the extractor role; the structural backstops below don't depend on it. |
+| Placeholders and common nouns as entities | **found live → fixed (structural, D-68)** | `located_in: "unknown"` created a place called "unknown" and the role "unknown" was stored; "the tavern" became a place (`test_placeholders_and_common_nouns_never_become_entities`). |
+| A known person split by a new location | **found live → fixed (structural, D-68)** | the authored Duke Halbrecht and Old Weck were created again for being "in the Brinehouse" (inside Vel, where they're authored), and Mera split the same way. Location no longer splits identity — only a different faction does (`test_a_known_person_seen_somewhere_new_is_the_same_person`). |

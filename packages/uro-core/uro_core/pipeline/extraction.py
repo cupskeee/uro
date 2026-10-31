@@ -144,11 +144,25 @@ def _statement_key(text: str) -> str:
     return " ".join(text.lower().split()).rstrip(" .!?;:")
 
 
-def _is_role_noun(name: str) -> bool:
+def _is_common_noun(name: str) -> bool:
     """A description, not a name (D-51): all-lowercase once a leading article is stripped —
-    "the guard", "tallest hooded stranger". A capitalized title ("the Duke") reads as a name, and a
-    script without letter case can't be judged, so both pass (`islower` needs a cased letter)."""
+    "the guard", "tallest hooded stranger", "the tavern". A capitalized title ("the Duke") reads as
+    a name, and a script without letter case can't be judged, so both pass (`islower` needs a cased
+    letter). Never minted as an actor (D-51), a place or a faction (live run, 2026-10-31)."""
     return re.sub(r"^(the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE).islower()
+
+
+# What a model writes for a field it has nothing for — never a name, a place, or a role. Live, a
+# `"located_in": "unknown"` became a place called "unknown" and Mera was moved into it (2026-10-31).
+_PLACEHOLDERS = frozenset(
+    {"unknown", "none", "n/a", "na", "null", "nil", "unnamed", "unspecified", "tbd"}
+    | {"nowhere", "somewhere", "anywhere", "elsewhere", "various"}
+)
+
+
+def _is_placeholder(text: str) -> bool:
+    key = canonical_name(text)
+    return key in _PLACEHOLDERS or not any(ch.isalnum() for ch in key)
 
 
 # Partial-name resolution (D-56, tightened by D-58): articles carry no identity anywhere; a personal
@@ -363,9 +377,10 @@ async def run_gauntlet(
     Emergent world is RELATIONAL (D-50): an actor carries its affiliations (a faction it's
     `member_of`, a place it's `located_in`). Resolving an actor CASCADE-creates the faction/place if
     they don't exist and wires the `member_of`/`located_in` edges; a place carries a `parent`
-    (`located_in`) the same way. Identity is (name + affiliation), so two same-named actors of
+    (`located_in`) the same way. Identity is (name + faction), so two same-named actors of
     DIFFERENT houses stay DISTINCT — a soft, relationship-aware dedup, not a blunt name-merge (an
     affiliation the proposal states but an existing same-name actor lacks just ENRICHES that actor).
+    A place is not identity (D-68, narrowing D-50): a person seen somewhere new is the same person.
     Factions dedup by name; threads never merge on similarity (two similar plots may legitimately
     coexist) — only an EXACT restatement of an existing thread is dropped (D-51).
 
@@ -405,13 +420,16 @@ async def run_gauntlet(
         key = canonical_name(name)
         if not key:
             return None
+        if not key or _is_placeholder(name):
+            return None
         if key in factions_by_key:
             return factions_by_key[key]
         known = _partial_match(_name_parts(name), faction_words)  # D-56: "the Veyrs" → House Veyr
         if known is not None:
             factions_by_key[key] = known
             return known
-        if not policy.extract_factions:
+        # a new faction needs a NAME: "the guild" may link to a known one above, never mint
+        if not policy.extract_factions or _is_common_noun(name):
             return None
         fid = f"f:{new_id()}"
         events.append(
@@ -425,13 +443,16 @@ async def run_gauntlet(
         key = canonical_name(name)
         if not key:
             return None
+        if not key or _is_placeholder(name):
+            return None
         if key in places_by_key:
             return places_by_key[key]
         known = _partial_match(_name_parts(name), place_words)  # "the Lantern" → Gilded Lantern
         if known is not None:
             places_by_key[key] = known
             return known
-        if not policy.extract_places:
+        # a new place needs a NAME: "the tavern" may link to a known one above, never mint
+        if not policy.extract_places or _is_common_noun(name):
             return None
         pid = f"p:{new_id()}"
         events.append(
@@ -455,8 +476,9 @@ async def run_gauntlet(
         name: str, *, role: str = "", member_of: str = "", located_in: str = ""
     ) -> str | None:
         key = canonical_name(name)
-        if not key:
+        if not key or _is_placeholder(name):
             return None
+        role = "" if _is_placeholder(role) else role
         # Gate affiliation resolution by the target policy AT THE CALL SITE, so a disabled
         # category wires NO edge even to a PRE-EXISTING faction/place (resolve_* returns an existing
         # id before its own gate; without this, factions-off still member_of'd an authored — C1).
@@ -464,13 +486,14 @@ async def run_gauntlet(
             resolve_faction(member_of) if (member_of.strip() and policy.extract_factions) else None
         )
         pid = resolve_place(located_in) if (located_in.strip() and policy.extract_places) else None
-        # Relationship-aware dedup: link to a same-name actor whose affiliations DON'T CONFLICT
-        # (None = unknown = compatible); a same-name actor of a different house/place is DISTINCT.
+        # Relationship-aware dedup: link to a same-name actor whose FACTION doesn't conflict (None =
+        # unknown = compatible); a same-name actor of a different house is DISTINCT. A place is
+        # not identity (D-68): people move, and live the Duke was split in two for being "in the
+        # Brinehouse" (inside Vel, where he is authored). A new place is recorded only if the
+        # actor had none — the extractor can't remove an edge, so it never records a move.
         for cand in actors_by_key.get(key, []):
             ca = aff.get(cand, {})
-            if (fid is None or ca.get("member_of") in (None, fid)) and (
-                pid is None or ca.get("located_in") in (None, pid)
-            ):
+            if fid is None or ca.get("member_of") in (None, fid):
                 _enrich(cand, "member_of", fid)
                 _enrich(cand, "located_in", pid)
                 name_to_ref[key] = cand
@@ -481,14 +504,12 @@ async def run_gauntlet(
         # same-name actor of a different house is distinct — D-50 — not a partial match).
         partial = (
             None
-            if key in actors_by_key or _is_role_noun(name) or _POSSESSIVE.search(name)
+            if key in actors_by_key or _is_common_noun(name) or _POSSESSIVE.search(name)
             else _partial_match(_name_parts(name), actor_words)
         )
         if partial is not None:
             ca = aff.get(partial, {})
-            if (fid is None or ca.get("member_of") in (None, fid)) and (
-                pid is None or ca.get("located_in") in (None, pid)
-            ):
+            if fid is None or ca.get("member_of") in (None, fid):
                 events.append(entity_alias_added(entity_id=partial, alias=name.strip()))
                 actors_by_key[key] = [partial]
                 actor_words[partial].append(_name_parts(name))
@@ -502,7 +523,7 @@ async def run_gauntlet(
         # every later guard merges into, collecting their affiliations. Linking above is unaffected,
         # so an existing actor known by that alias still resolves; facts about the figure still
         # record as claims (subject = a name token), but an unnamed speaker gets no belief.
-        if _is_role_noun(name):
+        if _is_common_noun(name):
             return None
         aid = f"a:{new_id()}"
         events.append(actor_created(actor_id=aid, name=name.strip(), tier=1, role=role.strip()))
@@ -523,7 +544,7 @@ async def run_gauntlet(
         ids = actors_by_key.get(key)
         if ids:
             return ids[0]
-        if _is_role_noun(name) or _POSSESSIVE.search(name):  # "Mira's mother" is not Mira (D-58)
+        if _is_common_noun(name) or _POSSESSIVE.search(name):  # "Mira's mother" is not Mira (D-58)
             return None
         return _partial_match(_name_parts(name), actor_words)
 

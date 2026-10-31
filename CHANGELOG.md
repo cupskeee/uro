@@ -9,6 +9,26 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+Found in the second live pass (docs/16, "the second live pass").
+
+### Added
+- **Every built-in ruleset rolls for physical danger** (D-69). A new `danger` trigger with one
+  affordance each: Uro Basic `athletics` (STR), Uro Pool `endure` (might, normal), PbtA
+  `act_under_pressure` (quick). Climbing, swimming, forcing a lock or rowing through a storm used to
+  go unrolled, leaving the outcome to the narrator.
+- **Ashfall talks about a failed check.** Its new rule turns a failed check into a rumor at the
+  Brinehouse that the next scene there can bring up (`rules_api_version` 7).
+
+### Changed
+- **A place is not identity** (D-68, narrowing D-50). Two same-named people are distinct only when
+  their factions differ. Someone seen somewhere new is the same person; before, an authored
+  character placed in a different inn was created a second time.
+
+### Fixed
+- **Placeholders and common nouns never become entities.** A model's `"unknown"` or `"n/a"` is no
+  longer stored as a place, faction or role, and a lowercase common noun ("the tavern") no longer
+  creates a place or faction (it still links to a known one).
+
 ## [0.8.0] - 2026-10-31
 
 Upgrading: run `uro db migrate` (migration 025 adds an `error` column to `llm_calls`).
