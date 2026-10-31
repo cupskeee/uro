@@ -406,7 +406,7 @@ def engine_deps(
         # advances in-fiction time AND fires the world's downtime agenda rules (D-33), no LLM. A
         # rule-less world → a plain time-skip. Returns the new in-fiction day.
         playing = await time_engine(lambda: engine_for_branch(branch_id), f"branch {branch_id}")
-        await playing.agenda_tick(branch_id, days)
+        await playing.agenda_tick(branch_id, days, reason="time-skip on fork")
         return await store.current_world_time(branch_id)
 
     async def preview_beat(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:

@@ -664,7 +664,7 @@ class Engine:
             entity_refs=entity_refs,
         )
 
-    async def agenda_tick(self, branch_id: str, days: int) -> None:
+    async def agenda_tick(self, branch_id: str, days: int, *, reason: str = "time-skip") -> None:
         """The downtime/agenda pass (docs/17 INC-4, D-33): advance in-fiction time on `branch_id`,
         then fire the world's AGENDA rules whose cadence boundary the skip crossed — off-screen
         faction/actor movement (edges, rumors) during downtime. Agenda events commit as a SEPARATE
@@ -672,7 +672,9 @@ class Engine:
         Deterministic: no wall-clock (day derived from the log), no ambient random; the whole
         effect is events, so replay never re-runs it. No LLM — safe to run without a provider."""
         from_day = await self._store.current_world_time(branch_id)
-        skip_commit = await self._store.time_skip(branch_id, days)  # the primary durable action
+        # the primary durable action; `reason` says why (a fork's skip says so — an in-place one
+        # used to be recorded as "time-skip on fork" too, live run 2026-10-31)
+        skip_commit = await self._store.time_skip(branch_id, days, reason=reason)
         # The downtime and agenda passes are best-effort over the already-committed time-skip — like
         # react(), a fault here must not fail the skip (which stands). Under the same per-branch
         # lock so their read-modify-writes don't interleave with a concurrent react() (D-34 review).

@@ -15,7 +15,7 @@ import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.ids import new_id
 from uro_core.errors import ProviderError
-from uro_core.metering import RESPONSE_CAP, LLMCall
+from uro_core.metering import RESPONSE_CAP, LLMCall, describe_failure
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.anthropic import AnthropicProvider
 from uro_core.providers.adapters.codex import CodexResponsesProvider
@@ -279,3 +279,44 @@ async def test_a_connection_probe_is_metered(store: PostgresEventStore) -> None:
         assert len(await store.recent_llm_calls(stage="test", limit=10_000)) == before + 1
     finally:
         await store.delete_connection(conn)
+
+
+def test_a_failure_is_described_by_type_never_by_its_text() -> None:
+    # Live run (2026-10-31): a planner call failed in 22 ms and left nothing to read. A failure now
+    # records its exception types and any HTTP status, but never the exception's text, which can
+    # carry a credential (an illegal-header error embeds the Authorization value).
+    class _Response:
+        status_code = 429
+
+    class HTTPStatusError(Exception):
+        response = _Response()
+
+    try:
+        try:
+            raise HTTPStatusError("Bearer sk-secret rejected")
+        except HTTPStatusError as cause:
+            raise ProviderError("provider request failed: Bearer sk-secret") from cause
+    except ProviderError as exc:
+        described = describe_failure(exc)
+    assert described == "ProviderError ← HTTPStatusError (HTTP 429)"
+    assert "sk-secret" not in described
+
+
+async def test_a_failed_call_records_why(store: PostgresEventStore) -> None:
+    router, calls = _recording(_Fake(fail=True))
+    with pytest.raises(RuntimeError):
+        await router.complete("extractor", MSG)
+    assert calls[0].error == "RuntimeError"
+    router, calls = _recording(_Fake())
+    await router.complete("extractor", MSG)
+    assert calls[0].error is None  # a success records no error
+
+    world = await store.create_world(f"Failing-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    router = ProviderRouter(bindings={}, default=_Fake(fail=True), recorder=store.record_llm_call)
+    with pytest.raises(RuntimeError):
+        await router.complete("planner", MSG, branch_id=campaign.branch_id)
+    (row,) = await store.recent_llm_calls(world_id=world.world_id)
+    assert row["error"] == "RuntimeError"
+    (usage,) = await store.usage_by_stage(world_id=world.world_id)
+    assert (usage["calls"], usage["failed"]) == (1, 1)

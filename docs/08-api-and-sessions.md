@@ -110,14 +110,14 @@ tampered bundle with `400` (`ExportError`) **before** any write, else re-instant
 (remapped ids, projections rebuilt by replay). Both are **operator-only** (import a structural write
 → D-44; export bulk omniscient disclosure → D-45). **Telemetry + registry + world-scoped chronicle
 ship (BE-10):** `GET /usage[?stage=&world=&campaign=]` aggregates the `llm_calls` metering by engine
-stage and model (count, token sums, avg latency) — **operator-only** (D-44, it reveals
+stage and model (count, failed count, token sums, avg latency) — **operator-only** (D-44, it reveals
 model/token/latency cost); the engine only *exposes* metering, it never bills (docs/00). Since D-66
 every call through the `ProviderRouter` is recorded with the tokens its adapter reported and the
 world and branch it served, so `?world=` / `?campaign=` filter it. `?campaign=` means the campaign's
 branch: every campaign on that branch shares one total. Calls metered before 0.7, and backfill and
 probe calls (which serve no world yet), have no world and count only in the unfiltered total. `GET
 /llm-calls[?stage=&world=&campaign=&limit=]` lists recent calls with each structured call's full
-response (operator-only, D-45: an extractor response holds claim truth values). `GET /rulesets` lists each built-in ruleset's `id`, `version`, and sheet schema
+response and, for a failed call, why it failed (exception types and HTTP status, never the text) (operator-only, D-45: an extractor response holds claim truth values). `GET /rulesets` lists each built-in ruleset's `id`, `version`, and sheet schema
 (any-authed — public capability info). `GET /worlds/{w}/chronicle[?branch=&limit=]` is the
 **world-scoped** twin of the campaign chronicle: it reads ANY named branch's recent beats (incl.
 sibling what-if forks), so it's a GM/operator timeline-inspection surface (operator-only, same family

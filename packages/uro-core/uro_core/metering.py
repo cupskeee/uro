@@ -26,6 +26,19 @@ if TYPE_CHECKING:
 RESPONSE_CAP = 64_000
 
 
+def describe_failure(exc: BaseException) -> str:
+    """Why a call failed, safe to store: the exception's type and its causes' types, plus an HTTP
+    status where one is known — e.g. `ProviderError ← HTTPStatusError (HTTP 429)`. Never the
+    exception TEXT: an httpx header error can embed the Authorization value (D-47 review)."""
+    parts: list[str] = []
+    link: BaseException | None = exc
+    while link is not None and len(parts) < 3:
+        status = getattr(getattr(link, "response", None), "status_code", None)
+        parts.append(type(link).__name__ + (f" (HTTP {status})" if status else ""))
+        link = link.__cause__ or (None if link.__suppress_context__ else link.__context__)
+    return " ← ".join(parts)
+
+
 def prompt_hash(messages: list[Message]) -> str:
     payload = json.dumps([m.model_dump() for m in messages], sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -41,3 +54,4 @@ class LLMCall(BaseModel):
     tokens_out: int | None = None
     branch_id: str | None = None  # the branch the call served (its world is looked up), if any
     response: str | None = None  # a structured call's full response, capped at RESPONSE_CAP
+    error: str | None = None  # why a failed call failed (`describe_failure`); None = it succeeded

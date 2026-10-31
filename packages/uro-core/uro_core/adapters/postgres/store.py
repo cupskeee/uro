@@ -748,9 +748,7 @@ class PostgresEventStore:
                 commit_id=commit.commit_id,
             )
 
-    async def time_skip(
-        self, branch_id: str, days: int, *, reason: str = "time-skip on fork"
-    ) -> Commit:
+    async def time_skip(self, branch_id: str, days: int, *, reason: str = "time-skip") -> Commit:
         """Advance in-fiction time on a branch (the fork's '50 years later'). Deterministic:
         commits TimeAdvanced + an AdaptationApplied HEADER — the PoC does no LLM ripple, so
         this records the skip honestly rather than pretending to regenerate threads (docs/03)."""
@@ -2114,9 +2112,9 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO llm_calls (call_id, stage_tag, model, prompt_hash, tokens_in, "
-                "tokens_out, latency_ms, branch_id, world_id, response) "
+                "tokens_out, latency_ms, branch_id, world_id, response, error) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, "
-                "(SELECT world_id FROM branches WHERE branch_id = $8), $9)",
+                "(SELECT world_id FROM branches WHERE branch_id = $8), $9, $10)",
                 call.call_id,
                 call.stage_tag,
                 call.model,
@@ -2126,6 +2124,7 @@ class PostgresEventStore:
                 call.latency_ms,
                 call.branch_id,
                 call.response,
+                call.error,
             )
 
     @staticmethod
@@ -2160,7 +2159,8 @@ class PostgresEventStore:
                 "SELECT stage_tag, model, count(*) AS calls, "
                 "  coalesce(sum(tokens_in), 0) AS tokens_in, "
                 "  coalesce(sum(tokens_out), 0) AS tokens_out, "
-                "  round(avg(latency_ms))::int AS avg_latency_ms "
+                "  round(avg(latency_ms))::int AS avg_latency_ms, "
+                "  count(error) AS failed "
                 f"FROM llm_calls {where} "
                 "GROUP BY stage_tag, model ORDER BY stage_tag, model NULLS FIRST",
                 *args,
@@ -2182,7 +2182,7 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT call_id, stage_tag, model, tokens_in, tokens_out, latency_ms, world_id, "
-                f"branch_id, created_at, response FROM llm_calls {where} "
+                f"branch_id, created_at, response, error FROM llm_calls {where} "
                 f"ORDER BY created_at DESC, call_id DESC LIMIT ${len(args)}",
                 *args,
             )

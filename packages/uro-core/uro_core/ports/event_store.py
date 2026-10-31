@@ -105,9 +105,7 @@ class EventStore(Protocol):
         """End a campaign: release its PCs to NPCs, mark + snapshot the closing commit."""
         ...
 
-    async def time_skip(
-        self, branch_id: str, days: int, *, reason: str = "time-skip on fork"
-    ) -> Commit:
+    async def time_skip(self, branch_id: str, days: int, *, reason: str = "time-skip") -> Commit:
         """Advance in-fiction time on a branch (TimeAdvanced + AdaptationApplied header)."""
         ...
 

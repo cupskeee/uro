@@ -100,7 +100,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | `SceneEntered` | place_id, present_actors[], mode | P | |
 | `ModeChanged` | from, to (`freeroam|encounter|downtime`), cause | P R | |
 | `BeatResolved` | beat_id, participant_id, intent_text, synopsis, narration | P | exactly one per beat commit; the chronicle's raw material |
-| `TimeAdvanced` | from, to, reason | P H | downtime / travel / time-skip on fork |
+| `TimeAdvanced` | from, to, reason | P H | downtime / travel / `time-skip` (in place) / `time-skip on fork` |
 
 ### Encounter (ruleset-driven)
 | event_type | payload | emit | notes |

@@ -249,8 +249,12 @@ def build_extractor_messages(
     known_threads = (
         "\n".join(f"- [{t.thread_id}] {t.stakes}" for t in recall.active_threads) or "(none)"
     )
+    # What the characters on stage already BELIEVE is known too: the narrator is shown it (the war
+    # story's rumor channel), so a retelling must read as old news here, or it becomes a fresh claim
+    # its teller "believes" outright (live run, 2026-10-31).
+    shown = {c.claim_id: c for c in [*recall.claims, *recall.belief_claims]}
     known_claims = (
-        "\n".join(f"- [{c.claim_id}] ({c.truth}) {c.statement}" for c in recall.claims) or "(none)"
+        "\n".join(f"- [{c.claim_id}] ({c.truth}) {c.statement}" for c in shown.values()) or "(none)"
     )
     user = (
         f"KNOWN ACTORS:\n{known_actors}\n\nKNOWN PLACES:\n{known_places}\n\n"
@@ -264,8 +268,9 @@ def build_extractor_messages(
         '"resolves": [ids of KNOWN THREADS this narration settles], '
         '"claims": [{"statement", "about": [names], "provenance": "narrator"|"dialogue", '
         '"speaker": name (dialogue only), "contradicts": [known claim ids], '
-        '"durable": true ONLY if still true a month from now / false for any passing moment, '
-        'gesture, mood, or sensation, "confidence": 0..1}]}'
+        '"durable": false for any passing moment, gesture, mood, or sensation / true for a '
+        "lasting fact, or news or a plan a character reports, "
+        '"confidence": 0..1, how sure the SPEAKER sounds}]}'
     )
     system = (env or DEFAULT_ENV).render("extractor.system.j2")
     return [

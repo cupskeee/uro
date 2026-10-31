@@ -151,13 +151,15 @@ uv run python scripts/extraction_replay.py Solara --provider stub   # dry-run, n
 uv run python scripts/extraction_replay.py Solara                   # the registry's extractor
 ```
 
-Each beat replays in order onto a fresh `replay-<world>-<id>` world: recall is assembled as live
-(recent beats + state so far), the extractor runs on the recorded prose, the gauntlet commits. It
-prints what each beat committed and a summary beside the original run (entities, threads, edges,
-claims, exact claim repeats). Live mode uses the `extractor` role binding of the model-connection
+Each beat replays in order onto a `replay-<id>` fork of the source world, taken just before its
+first beat, so the extractor starts from what the original saw (the pack's cast, the PC, a seeded
+rumor and who believes it): recall is assembled as live (recent beats + state so far), the
+extractor runs on the recorded prose, the gauntlet commits. It prints what each beat committed and
+a summary beside the original run (entities, threads, edges, claims, exact claim repeats). Live mode uses the `extractor` role binding of the model-connection
 registry (D-47) — one call per beat plus re-asks, no narrator calls — and needs `URO_SECRET_KEY`
 (auto-loaded from `.env`). Reworded duplicates (one plot, several phrasings) aren't counted
-automatically: read the per-beat thread lines, or query the replay world in Postgres.
+automatically: read the per-beat thread lines, or query the replay branch in Postgres. The source
+can be an id or a name (an ambiguous name is refused with the ids).
 
 To exercise the relational path (factions, `member_of`/`located_in`, edges) a story has to name
 groups and places. `scripts/relational_live.py` plays a fixed 15-intent session that steers the
@@ -166,3 +168,39 @@ about three ways) on the registry's models, then prints each beat and a summary;
 afterwards to A/B a later extractor change on the same prose (`--provider stub` dry-runs it).
 `--scenario resolution` instead sets up a plot (a missing girl) and then settles it, to check that
 the extractor resolves the thread (D-52) at the beat the story ends it — and not before.
+
+## 8. Server, live commits, metering, backfill, probe, war story (v0.7)
+
+The pass first run on 2026-10-31 (results: `docs/16`, "the v0.7 live run"). Setup:
+
+```sh
+docker compose --profile nats up -d --wait     # Postgres + NATS (bound to localhost)
+uv run uro db migrate
+uv run uro provider test <chat-connection-id> --model <model>    # each should print ok:
+```
+
+**Leg 1 — the server with real models + live commits** (registry models):
+
+```sh
+uv run uro outbox relay --nats nats://localhost:4222                     # terminal 1
+uv run uro world create worlds/ashfall                                   # → <W>
+uv run uro campaign new <W> --pc Ash                                     # → <C>
+uv run uro serve --nats nats://localhost:4222 --token tok-a              # terminal 2
+uv run uro connect <C> --token tok-a                                     # terminal 3: play ~10 intents
+uv run uro campaign time-skip <C> --days 2                               # terminal 4 → 3 prints "the world changed"
+uv run uro serve --port 8001 --nats nats://localhost:4222 --token tok-b  # terminal 4
+uv run uro connect <C> --server http://127.0.0.1:8001 --token tok-b      # terminal 5: one beat → shows in 3
+```
+
+**Leg 2 — backfill and probe** (`export OPENAI_API_KEY=…`): `uv run uro world probe worlds/ashfall
+--provider openai`, then `uv run uro world create worlds/thornwood --backfill --provider openai`.
+
+**Leg 3 — a rumor retold live:** `uv run python scripts/warstory_live.py` (→ `CAMPAIGN <S>`), then
+`uv run uro play <S> --provider openai --no-mechanics` and ask Mera what news there is, what she has
+heard of a wizard on the road, and whether she believes it.
+
+**Leg 4 — a fixed session to replay later:** `uv run python scripts/relational_live.py`.
+
+Read back: `uro usage --world <W>`, `uro calls --stage extractor --campaign <C>` (a failed call
+shows `FAILED:` and why), the claims and beliefs each beat committed, and Mera's belief in the
+feat (`proj_beliefs`) — it should stay low and keep its `learned_from` after she retells it.

@@ -21,8 +21,10 @@ BACKFILL_ROLE = "worldsmith"  # generation of world seeds (docs/04 role set is a
 
 _CONFLICT_SYSTEM = (
     "You are a world-builder filling a GAP in an author's setting. Generate ONE conflict seed — "
-    "a live tension the players can act on — that fits the world's tone, factions, and places. "
-    "Ground it in what already exists; invent no new proper nouns the author didn't provide. "
+    "a live tension in the world — that fits the world's tone, factions, and places. Ground it "
+    "in what already exists; invent no new proper nouns the author didn't provide. Write the "
+    "stakes as a fact of the world, in its own voice: it becomes canon, so never mention players, "
+    "their choices, or the game. "
     'Output ONLY JSON: {"stakes": "one or two sentences", "state": "dormant|offered|active"}.'
 )
 

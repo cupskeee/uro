@@ -11,7 +11,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from uro_core.metering import RESPONSE_CAP, LLMCall, prompt_hash
+from uro_core.metering import RESPONSE_CAP, LLMCall, describe_failure, prompt_hash
 from uro_core.providers.base import CompletionRequest, LLMProvider, Message, Usage, collect_usage
 
 logger = logging.getLogger(__name__)
@@ -70,12 +70,16 @@ class ProviderRouter:
             max_tokens=max_tokens,
         )
         started = time.perf_counter()
+        error: str | None = None
         with collect_usage() as usage:
             try:
                 async for chunk in provider.stream(req):
                     yield chunk
+            except Exception as exc:  # (a consumer stopping early is not a failure)
+                error = describe_failure(exc)
+                raise
             finally:  # narration is the beat's own text: metered, not stored again here
-                await self._record(role, messages, started, usage, None, branch_id, recorder)
+                await self._record(role, messages, started, usage, None, branch_id, recorder, error)
 
     async def complete(
         self,
@@ -98,6 +102,7 @@ class ProviderRouter:
         )
         started = time.perf_counter()
         raw: str | None = None
+        error: str | None = None
         with collect_usage() as usage:
             try:
                 raw = await provider.complete(req)
@@ -106,9 +111,10 @@ class ProviderRouter:
                 # a failure keeps whatever the provider did return — a truncated extractor JSON is
                 # exactly the response worth reading afterwards (review)
                 raw = getattr(exc, "partial_response", None)
+                error = describe_failure(exc)
                 raise
             finally:  # a structured call: its full response is kept
-                await self._record(role, messages, started, usage, raw, branch_id, recorder)
+                await self._record(role, messages, started, usage, raw, branch_id, recorder, error)
 
     async def embed(
         self,
@@ -120,12 +126,16 @@ class ProviderRouter:
     ) -> list[list[float]]:
         provider = self._provider_for(role)
         started = time.perf_counter()
+        error: str | None = None
         with collect_usage() as usage:
             try:
                 return await provider.embed(texts)
+            except Exception as exc:
+                error = describe_failure(exc)
+                raise
             finally:
                 messages = [Message(role="user", content=t) for t in texts]
-                await self._record(role, messages, started, usage, None, branch_id, recorder)
+                await self._record(role, messages, started, usage, None, branch_id, recorder, error)
 
     async def _record(
         self,
@@ -136,6 +146,7 @@ class ProviderRouter:
         response: str | None,
         branch_id: str | None,
         recorder: Recorder | None = None,
+        error: str | None = None,
     ) -> None:
         """Meter one call into the caller's recorder, else the router's. Best-effort observability:
         it must never break the call it measures."""
@@ -153,6 +164,7 @@ class ProviderRouter:
                     tokens_out=usage.tokens_out,
                     branch_id=branch_id,
                     response=response[:RESPONSE_CAP] if response is not None else None,
+                    error=error,
                 )
             )
         except Exception as exc:
