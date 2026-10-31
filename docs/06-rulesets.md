@@ -109,10 +109,23 @@ that means:
 The gate threads a changed sheet into the actor's next check in the same beat, so a second push
 sees the first one's strain. A fight in the same beat starts from the checked sheets.
 
-Still not live, a shared encounter-side gap: advancement *from encounters*. Nothing applies Uro
-Pool's milestone for surviving a fight, PbtA's XP for a missed conflict move, or a d20 level-up.
-Nothing triggers Uro Pool's `rest` either, so strain from pushes, in checks or fights, never
-clears.
+**Fights and downtime (D-63).** The engine says WHEN, the ruleset says WHAT, and the world's
+settings say HOW MUCH. Two port hooks:
+- **`conclude_encounter(state, outcome, pcs)`** returns every combatant's sheet once a fight is over.
+  That is what gets committed, after the ruleset's own aftermath. The engine tells it which
+  combatants are player characters (`Combatant.is_pc`), so foes don't advance.
+- **`downtime(sheet, days)`** runs for each of the ruleset's sheets when a branch's time skips (a
+  campaign time-skip, or a fork with one). It commits as `SheetUpdated` caused by the ruleset,
+  right after the TimeAdvanced commit, under the branch's react lock, and a fault there can't fail
+  the durable skip.
+
+The built-ins:
+- **Uro Basic:** a PC still standing on the winning side gains `levels_per_win` (default 1), and a
+  level-up restores hit points if `heal_on_level` (default on).
+- **Uro Pool:** a PC still standing earns `milestones_per_fight` (default 1); `rest_days` of downtime
+  (default 1; 0 turns it off) clear strain.
+- **PbtA:** each move a PC missed in a fight marks `xp_on_conflict_miss` (default 1). It has no
+  downtime rule.
 
 ## Encounters as the federation seam
 

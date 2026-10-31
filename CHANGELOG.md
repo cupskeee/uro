@@ -10,6 +10,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Characters advance from fights and rest in downtime (D-63).** The ruleset gains two hooks: a
+  fight's end and a stretch of downtime. Each built-in applies its own rules, sized by the world's
+  settings:
+  - **d20:** a PC still standing on the winning side gains a level, which restores hit points
+    (`levels_per_win`, `heal_on_level`);
+  - **Uro Pool:** a PC still standing earns a milestone (`milestones_per_fight`), and a day of
+    downtime clears strain (`rest_days`);
+  - **PbtA:** each move a PC missed in a fight marks XP (`xp_on_conflict_miss`).
+
+  Only player characters advance. Every time-skip, on the server or the CLI, for a campaign or a
+  fork, now runs under the campaign's own ruleset and settings.
 - **Per-game ruleset settings (D-62).** A world pack's `[ruleset.config]` used to be parsed and then
   silently dropped. Now it is stored with the world and reaches every ruleset built for its
   campaigns, on the CLI and the server. Each built-in's numbers are settings that default to the

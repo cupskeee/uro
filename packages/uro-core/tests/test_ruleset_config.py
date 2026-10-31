@@ -37,6 +37,8 @@ def test_defaults_are_the_rules_as_written() -> None:
         "triumph_marks": 3,
         "milestones_per_advance": 3,
         "trait_cap": 5,
+        "milestones_per_fight": 1,
+        "rest_days": 1,
     }
     for rid in registry.available():
         assert registry.resolve(rid).config_schema()["properties"]  # every built-in has settings

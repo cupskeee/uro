@@ -75,8 +75,10 @@ def run_encounter(
         )
 
     outcome = ruleset.is_over(state) or EncounterOutcome()
-    # Persist ruleset-shaped harm as OPAQUE final sheets — the timeline never assumes hp (D-30).
-    final = ruleset.sheets(state)
+    # Persist ruleset-shaped harm as OPAQUE final sheets — the timeline never assumes hp (D-30) —
+    # after the ruleset's own aftermath (advancement for the player characters, D-63).
+    pcs = frozenset(c.actor_id for c in combatants if c.is_pc)
+    final = ruleset.conclude_encounter(state, outcome, pcs)
     for actor_id in sorted(final):
         events.append(
             sheet_updated(

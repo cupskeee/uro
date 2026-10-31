@@ -29,7 +29,7 @@ if TYPE_CHECKING:  # annotation-only (from __future__ import annotations) — no
     from uro_core.engines.probe import ProbeReport
     from uro_core.ports.tokens import TokenInfo
     from uro_core.providers.router import ProviderRouter
-    from uro_core.timeline.models import Campaign, World
+    from uro_core.timeline.models import Campaign, RulesetPin, World
     from uro_core.worldpack.create import PackImport, SeedResult
     from uro_core.worldpack.models import WorldManifest, WorldPack
 
@@ -253,9 +253,21 @@ def engine_deps(
     siblings: dict[tuple[str, str, str], Engine] = {}
 
     async def engine_for(campaign: Campaign) -> Engine:
-        from uro_core.rulesets.registry import campaign_pin, resolve
+        from uro_core.rulesets.registry import campaign_pin
 
-        pin = await campaign_pin(store, campaign)
+        return engine_for_pin(await campaign_pin(store, campaign), campaign.campaign_id)
+
+    async def engine_for_branch(branch_id: str) -> Engine:
+        """The engine for a branch's world ruleset — a time-skip with no campaign (a fork)."""
+        from uro_core.rulesets.registry import DEFAULT_RULESET_ID
+
+        pin = await store.world_ruleset(branch_id)
+        pin = pin.model_copy(update={"id": pin.id or DEFAULT_RULESET_ID})
+        return engine_for_pin(pin, f"branch {branch_id}")
+
+    def engine_for_pin(pin: RulesetPin, who: str) -> Engine:
+        from uro_core.rulesets.registry import resolve
+
         if pin.id == engine.ruleset_id and not pin.config:
             return engine  # the process's own ruleset, with default settings
         key = (pin.id, pin.version, json.dumps(pin.config, sort_keys=True))
@@ -264,8 +276,7 @@ def engine_deps(
                 ruleset = resolve(pin.id, pin.version, pin.config)
             except KeyError as exc:  # pinned to a ruleset this build doesn't have
                 raise ValueError(
-                    f"campaign {campaign.campaign_id} is bound to ruleset {pin.id!r}, which this "
-                    "server doesn't have"
+                    f"{who} is bound to ruleset {pin.id!r}, which this server doesn't have"
                 ) from exc
             siblings[key] = engine.with_ruleset(ruleset)
         return siblings[key]
@@ -305,7 +316,9 @@ def engine_deps(
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
-        await engine.agenda_tick(campaign.branch_id, days)  # time-skip + downtime agendas (D-33)
+        # time-skip, then the ruleset's downtime (D-63) and the world's agendas (D-33), under the
+        # campaign's own ruleset and settings
+        await (await engine_for(campaign)).agenda_tick(campaign.branch_id, days)
         world_day = await store.current_world_time(campaign.branch_id)
         return {"branch_id": campaign.branch_id, "world_day": world_day}
 
@@ -313,7 +326,7 @@ def engine_deps(
         # BE-2 fork `--time-skip-days`: the same helper the CLI `uro branch fork` uses — agenda_tick
         # advances in-fiction time AND fires the world's downtime agenda rules (D-33), no LLM. A
         # rule-less world → a plain time-skip. Returns the new in-fiction day.
-        await engine.agenda_tick(branch_id, days)
+        await (await engine_for_branch(branch_id)).agenda_tick(branch_id, days)
         return await store.current_world_time(branch_id)
 
     async def preview_beat(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:

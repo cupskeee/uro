@@ -54,6 +54,8 @@ class BasicConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_level: int = Field(5, ge=1, le=20, description="the level ceiling")
+    levels_per_win: int = Field(1, ge=0, description="levels a PC gains for winning a fight")
+    heal_on_level: bool = Field(True, description="a level-up restores full hit points")
 
 
 class Sheet(BaseModel):
@@ -145,9 +147,10 @@ class UroBasic:
         s = Sheet.model_validate(sheet)
         new_level = min(self.config.max_level, s.level + int(award.data.get("levels", 0)))
         max_hp = _hp_for_level(s.modifier("CON"), new_level)
-        # Only an ACTUAL level-up restores to full HP; a no-op or capped award must not heal
-        # (just re-clamp current HP under the possibly-changed max).
-        hp = max_hp if new_level > s.level else min(s.hp, max_hp)
+        # Only an ACTUAL level-up restores to full HP (if the game says so); a no-op or capped award
+        # must not heal (just re-clamp current HP under the possibly-changed max).
+        levelled = new_level > s.level and self.config.heal_on_level
+        hp = max_hp if levelled else min(s.hp, max_hp)
         return s.model_copy(update={"level": new_level, "max_hp": max_hp, "hp": hp}).model_dump()
 
     # --- free-roam checks ---
@@ -320,6 +323,22 @@ class UroBasic:
         out = sorted(a for a, f in st.fighters.items() if not f.sheet.conscious)
         winner = next(iter(live_teams)) if live_teams else None
         return EncounterOutcome(winner_team=winner, survivors=survivors, out_of_fight=out)
+
+    def conclude_encounter(
+        self, state: EncounterState, outcome: EncounterOutcome, pcs: frozenset[str]
+    ) -> dict[str, SheetDict]:
+        """Advance by winning (D-63): a PC still standing on the winning side gains
+        `levels_per_win`."""
+        final = self.sheets(state)
+        st = _as_enc(state)
+        award = Award(data={"levels": self.config.levels_per_win})
+        for actor_id in sorted(pcs & set(outcome.survivors)):
+            if award.data["levels"] and st.fighters[actor_id].team == outcome.winner_team:
+                final[actor_id] = self.progression(final[actor_id], award)
+        return final
+
+    def downtime(self, sheet: SheetDict, days: int) -> SheetDict | None:
+        return None  # Uro Basic has no downtime rule
 
     def _advance_turn(self, st: _Encounter) -> _Encounter:
         """Advance to the next conscious combatant; wrap → next round. If the encounter is

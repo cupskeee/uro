@@ -653,10 +653,14 @@ class Engine:
         effect is events, so replay never re-runs it. No LLM — safe to run without a provider."""
         from_day = await self._store.current_world_time(branch_id)
         skip_commit = await self._store.time_skip(branch_id, days)  # the primary durable action
-        # The agenda pass is best-effort over the already-committed time-skip — like react(), a
-        # fault here must not fail the skip (which stands). Under the same per-branch lock so its
-        # counter read-modify-writes don't interleave with a concurrent react() (D-34 review).
+        # The downtime and agenda passes are best-effort over the already-committed time-skip — like
+        # react(), a fault here must not fail the skip (which stands). Under the same per-branch
+        # lock so their read-modify-writes don't interleave with a concurrent react() (D-34 review).
         async with self._react_lock(branch_id):
+            try:
+                await self._downtime(branch_id, days)
+            except Exception as exc:
+                logger.warning("downtime failed; the time-skip stands, no rest: %s", exc)
             try:
                 raw = await self._store.world_rule_pack(branch_id)
                 if not raw:
@@ -679,6 +683,30 @@ class Engine:
                     await self._cascade(branch_id, pack, result.events, commit.commit_id, to_day)
             except Exception as exc:  # the time-skip is durable — an agenda fault must not fail it
                 logger.warning("agenda tick failed; the time-skip stands, no agendas: %s", exc)
+
+    async def _downtime(self, branch_id: str, days: int) -> None:
+        """Downtime (D-63): each of the bound ruleset's sheets on the branch after `days` of rest —
+        the ruleset decides what that means (Uro Pool clears strain; others may change nothing).
+        One commit, caused by the ruleset. No ruleset bound → nothing to rest."""
+        if self._ruleset is None:
+            return
+        rows = (await self._store.query_across([branch_id], ["sheets"]))[branch_id]["sheets"]
+        events = []
+        for row in rows:
+            if row.get("ruleset_id") != self._ruleset.id:
+                continue  # another ruleset's (or an untagged legacy) sheet isn't this one's to rest
+            after = self._ruleset.downtime(row["sheet"], days)
+            if after is not None and after != row["sheet"]:
+                events.append(
+                    sheet_updated(
+                        actor_id=row["actor_id"],
+                        sheet=after,
+                        ruleset_id=self._ruleset.id,
+                        caused_by=CausedBy(kind="ruleset"),
+                    )
+                )
+        if events:
+            await self._store.append_beat(branch_id, events)
 
     async def _beat_events(
         self,
@@ -794,7 +822,10 @@ class Engine:
                 setup.append(
                     sheet_updated(actor_id=actor_id, sheet=sheet_dict, ruleset_id=self._ruleset.id)
                 )
-            combatants.append(Combatant(actor_id=actor_id, team=team, sheet=sheet_dict))
+            is_pc = await self._store.is_pc(branch, actor_id)
+            combatants.append(
+                Combatant(actor_id=actor_id, team=team, sheet=sheet_dict, is_pc=is_pc)
+            )
 
         encounter_id = f"e:{new_id()}"
         rng = await self._beat_rng(campaign)

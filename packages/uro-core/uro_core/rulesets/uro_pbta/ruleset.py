@@ -50,6 +50,7 @@ class PbtAConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     xp_on_miss: int = Field(1, ge=0, description="XP a missed free-roam move marks")
+    xp_on_conflict_miss: int = Field(1, ge=0, description="XP a PC's missed move in a fight marks")
     xp_per_advance: int = Field(5, ge=1, description="XP that raises the weakest stat")
     stat_cap: int = Field(3, ge=-1, description="the highest a stat can go")
 
@@ -83,6 +84,7 @@ class _Encounter(EncounterState):
     fighters: dict[str, _Fighter]
     order: list[str]
     turn_index: int = 0
+    misses: dict[str, int] = Field(default_factory=dict)  # actor → moves missed (XP at the end)
 
 
 class UroPbtA:
@@ -228,6 +230,7 @@ class UroPbtA:
     ) -> tuple[EncounterState, list[Effect]]:
         st = _as_enc(state)
         fighters = {k: v.model_copy(deep=True) for k, v in st.fighters.items()}
+        misses = dict(st.misses)
         effects: list[Effect] = []
         actor = fighters[action.actor_id]
 
@@ -264,6 +267,7 @@ class UroPbtA:
                 )
             else:  # miss: the foe makes a hard move against you
                 actor.sheet.harm = min(_HARM_MAX, actor.sheet.harm + 2)
+                misses[actor.actor_id] = misses.get(actor.actor_id, 0) + 1
                 effects.append(
                     Effect(
                         kind="miss",
@@ -274,8 +278,26 @@ class UroPbtA:
                 )
         # 'keep_cool' is a hold action with no mechanical effect in this minimal build.
 
-        advanced = self._advance_turn(st.model_copy(update={"fighters": fighters}))
+        advanced = self._advance_turn(
+            st.model_copy(update={"fighters": fighters, "misses": misses})
+        )
         return advanced, effects
+
+    def conclude_encounter(
+        self, state: EncounterState, outcome: EncounterOutcome, pcs: frozenset[str]
+    ) -> dict[str, SheetDict]:
+        """Advance by failing (D-63): each PC marks `xp_on_conflict_miss` per move it missed in
+        the fight, through this ruleset's own progression."""
+        final = self.sheets(state)
+        misses = _as_enc(state).misses
+        for actor_id in sorted(pcs & set(misses)):
+            xp = misses[actor_id] * self.config.xp_on_conflict_miss
+            if xp:
+                final[actor_id] = self.progression(final[actor_id], Award(data={"xp": xp}))
+        return final
+
+    def downtime(self, sheet: SheetDict, days: int) -> SheetDict | None:
+        return None  # Uro PbtA has no downtime rule: harm heals in the fiction, not by the clock
 
     def is_over(self, state: EncounterState) -> EncounterOutcome | None:
         st = _as_enc(state)
