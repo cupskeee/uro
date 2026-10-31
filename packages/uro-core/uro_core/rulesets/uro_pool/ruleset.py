@@ -62,6 +62,10 @@ class PoolConfig(BaseModel):
     triumph_marks: int = Field(3, ge=1, description="marks for a triumph")
     milestones_per_advance: int = Field(3, ge=1, description="milestones per added trait die")
     trait_cap: int = Field(5, ge=1, description="the most dice a trait can reach")
+    milestones_per_fight: int = Field(1, ge=0, description="milestones a PC earns for surviving")
+    rest_days: int = Field(
+        1, ge=0, description="days of downtime that clear strain (0: downtime never does)"
+    )
 
 
 class Sheet(BaseModel):
@@ -297,6 +301,25 @@ class UroPool:
             sheet.wounds = min(_WOUNDS_DOWN, sheet.wounds + dealt)
         nxt = st.model_copy(update={"fighters": fighters, "committed": {}, "round": st.round + 1})
         return nxt, effects
+
+    def conclude_encounter(
+        self, state: EncounterState, outcome: EncounterOutcome, pcs: frozenset[str]
+    ) -> dict[str, SheetDict]:
+        """Milestones from surviving (D-63): each PC still standing earns `milestones_per_fight`,
+        through this ruleset's own progression (which adds a die at the threshold)."""
+        final = self.sheets(state)
+        award = Award(data={"milestone": self.config.milestones_per_fight})
+        for actor_id in sorted(pcs & set(outcome.survivors)):
+            if award.data["milestone"]:
+                final[actor_id] = self.progression(final[actor_id], award)
+        return final
+
+    def downtime(self, sheet: SheetDict, days: int) -> SheetDict | None:
+        """Rest (D-63): `rest_days` of downtime clear the strain of pushing."""
+        s = Sheet.model_validate(sheet)
+        if not self.config.rest_days or days < self.config.rest_days or s.strain == 0:
+            return None
+        return self.progression(sheet, Award(data={"rest": True}))
 
     def is_over(self, state: EncounterState) -> EncounterOutcome | None:
         st = _as_enc(state)

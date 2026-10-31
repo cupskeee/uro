@@ -123,3 +123,28 @@ def test_credential_rotate_and_connection_relink(env: SimpleNamespace) -> None:
         _uro("provider", "rm", conn)
         _uro("provider", "credential", "rm", first)
         _uro("provider", "credential", "rm", second)
+
+
+async def test_cli_time_skip_rests_a_uro_pool_pc(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    monkeypatch.setenv("URO_DATABASE_URL", store.dsn)
+    w = await store.create_world(f"cli-rest-{new_id()}", ruleset_id="uro-pool")
+    pool_sheet = {"traits": {"might": 2, "wits": 2, "nerve": 2}, "wounds": 0, "strain": 4}
+    campaign = await store.start_campaign(
+        w.world_id,
+        w.main_branch_id,
+        participant_id="p1",
+        new_pc_name="Ash",
+        new_pc_id=f"a:ash-{new_id()}",
+        pc_sheet=pool_sheet,
+        ruleset_id="uro-pool",
+    )
+    pc = await store.campaign_pc(campaign.campaign_id)
+    result = await asyncio.to_thread(
+        CliRunner().invoke, app, ["campaign", "time-skip", campaign.campaign_id, "--days", "1"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (await store.get_sheet(w.main_branch_id, pc))["strain"] == 0  # type: ignore[arg-type,index]

@@ -107,6 +107,7 @@ class Combatant(BaseModel):
     actor_id: str
     team: str  # e.g. "party" | "foes"; the ruleset's is_over decides what a decided fight means
     sheet: Sheet
+    is_pc: bool = False  # a player character (engine-known): rulesets advance PCs, not every foe
 
 
 class EncounterCtx(BaseModel):
@@ -208,6 +209,21 @@ class Ruleset(Protocol):
     ) -> tuple[EncounterState, list[Effect]]: ...
 
     def is_over(self, state: EncounterState) -> EncounterOutcome | None: ...
+
+    def conclude_encounter(
+        self, state: EncounterState, outcome: EncounterOutcome, pcs: frozenset[str]
+    ) -> dict[str, Sheet]:
+        """Every combatant's sheet once the fight is over — what gets committed (D-63). The
+        ruleset's own aftermath goes here: advancement for the player characters in `pcs` (a d20
+        level for winning, a milestone for surviving, XP for a missed move), as its settings say.
+        Called once, after `is_over`. Returning `sheets(state)` unchanged is a valid answer."""
+        ...
+
+    def downtime(self, sheet: Sheet, days: int) -> Sheet | None:
+        """This sheet after `days` of in-fiction downtime — rest, recovery (D-63) — or None when
+        downtime changes nothing. Called for each of the ruleset's sheets on a branch whose time
+        skips; the engine never decides what rest means."""
+        ...
 
     def sheets(self, state: EncounterState) -> dict[str, Sheet]:
         """The current opaque sheet of every combatant, by actor_id — the runner persists these

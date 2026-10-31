@@ -902,7 +902,8 @@ def branch_fork(
             if time_skip_days > 0:
                 # agenda_tick time-skips AND fires the world's downtime agenda rules (docs/17); it
                 # needs no LLM, so a stub router suffices. A rule-less world → a plain time-skip.
-                engine = Engine(store, build_router("stub", None))
+                ruleset = await registry.resolve_for_branch(store, branch.branch_id)
+                engine = Engine(store, build_router("stub", None), ruleset=ruleset)
                 await engine.agenda_tick(branch.branch_id, time_skip_days)
         finally:
             await store.close()
@@ -1359,8 +1360,11 @@ def campaign_time_skip(
         await connect_store(store)
         try:
             c = await _campaign_or_exit(store, campaign_id)
-            # agenda_tick needs no LLM (module rules only), so a stub router suffices
-            await Engine(store, build_router("stub", None)).agenda_tick(c.branch_id, days)
+            # downtime + agendas need no LLM, so a stub router suffices; the campaign's own ruleset
+            # and settings decide what the downtime means (D-63)
+            ruleset = await registry.resolve_for_campaign(store, c)
+            engine = Engine(store, build_router("stub", None), ruleset=ruleset)
+            await engine.agenda_tick(c.branch_id, days)
             day = await store.current_world_time(c.branch_id)
         finally:
             await store.close()

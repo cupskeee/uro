@@ -886,3 +886,43 @@ async def test_a_rest_worlds_settings_reach_the_engine_that_plays_it(
     assert tuned[2] != plain[2]  # different settings → a different engine
     assert basic[2] == id(engine)  # the process ruleset with default settings → its own engine
     assert tuned_basic[1]["max_level"] == 3 and tuned_basic[2] != id(engine)
+
+
+async def test_a_server_time_skip_rests_under_the_campaigns_own_ruleset(
+    store: PostgresEventStore,
+) -> None:
+    # D-63: the downtime hook runs under the CAMPAIGN's ruleset and settings — here a Uro Pool
+    # campaign on a uro-basic server — both for a campaign time-skip and a fork with a time-skip.
+    from uro_core.domain.events import sheet_updated
+    from uro_core.rulesets.uro_basic import UroBasic
+
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()), ruleset=UroBasic())
+    app = create_app(engine_deps(store, engine, {_TOK: "alice"}, admin_tokens={_TOK}))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        r = await client.post(_q("/worlds"), json={"name": "Weary", "ruleset": "uro-pool"})
+        world_id = r.json()["world_id"]
+        made = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"), json={"participant": "alice", "new_pc_name": "Ash"}
+        )
+        c, branch = made.json()["campaign_id"], made.json()["branch_id"]
+        pc = await store.campaign_pc(c)
+        sheet = await store.get_sheet(branch, pc)  # type: ignore[arg-type]
+        strained = {**sheet, "strain": 3}  # type: ignore[dict-item]
+        await store.append_beat(
+            branch,
+            [sheet_updated(actor_id=pc, sheet=strained, ruleset_id="uro-pool")],  # type: ignore[arg-type]
+        )
+        head = (await store.get_branch(branch)).head_commit  # type: ignore[union-attr]
+
+        skipped = await client.post(_q(f"/campaigns/{c}/time-skip"), json={"days": 1})
+        assert skipped.status_code == 200, skipped.text
+        assert (await store.get_sheet(branch, pc))["strain"] == 0  # type: ignore[arg-type,index]
+
+        fork = await client.post(
+            _q(f"/worlds/{world_id}/branches"),
+            json={"from_ref": head, "name": "later", "time_skip_days": 1},
+        )
+        assert fork.status_code == 200, fork.text
+        later = await store.get_branch_by_name(world_id, "later")
+        assert (await store.get_sheet(later.branch_id, pc))["strain"] == 0  # type: ignore[arg-type,index,union-attr]
