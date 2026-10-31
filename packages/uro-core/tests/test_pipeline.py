@@ -977,3 +977,85 @@ async def test_capitalized_placeholders_never_become_entities(store: PostgresEve
     assert [e.payload["name"] for e in _of_type(events, "ActorCreated")] == ["Ilse"]
     assert _of_type(events, "FactionCreated") == [] and _of_type(events, "EdgeAdded") == []
     assert _of_type(events, "BeliefChanged") == []  # an unnamed speaker holds no belief
+
+
+async def test_a_narrated_change_retires_the_fact_it_supersedes(store: PostgresEventStore) -> None:
+    # D-70 (the third live pass): Wren broke the Drowned Barque's seal, but "the hold has been
+    # opened" lost to "the Barque is sealed" — a contradiction always kept the OLD fact, so the next
+    # beats narrated the hold as still sealed. A change now retires a narrator-established fact.
+    from uro_core.pipeline.recall import build_narrator_messages
+
+    branch = await _branch(store)
+    sealed = Extraction(
+        claims=[ProposedClaim(statement="The Drowned Barque is sealed.", about=["Drowned Barque"])]
+    )
+    first = await run_gauntlet(store, branch, sealed)
+    await store.append_beat(branch, first)
+    old_id = _of_type(first, "ClaimRecorded")[0].payload["claim_id"]
+
+    opened = ProposedClaim(
+        statement="The Drowned Barque's hold has been opened.",
+        about=["Drowned Barque"],
+        supersedes=[old_id],
+        contradicts=[old_id],  # a model may list it in both
+    )
+    events = await run_gauntlet(store, branch, Extraction(claims=[opened]))
+    (retired,) = _of_type(events, "ClaimTruthChanged")
+    assert retired.payload == {"v": 1, "claim_id": old_id, "truth": "false", "cause": "superseded"}
+    (new,) = _of_type(events, "ClaimRecorded")
+    assert new.payload["truth"] == "true"
+    await store.append_beat(branch, events)
+
+    assert (await store.get_claim(branch, old_id)).truth == "false"  # type: ignore[union-attr]
+    recall = await assemble_recall(store, branch, "I climb down into the Drowned Barque", 8)
+    narrator = "\n".join(m.content for m in build_narrator_messages(recall, "I climb down"))
+    assert "has been opened" in narrator
+    assert "is sealed" not in narrator  # neither a fact nor an "unverified rumor" any more
+
+
+async def test_only_a_narrator_fact_can_be_superseded(store: PostgresEventStore) -> None:
+    # D-70's guard: authored, mechanical (and external/module) facts are protected — superseding
+    # one is treated like contradicting it; and dialogue is testimony, it never retires a fact.
+    branch = await _branch(store)
+    await store.append_beat(
+        branch,
+        [
+            claim_recorded(
+                claim_id="c:wall",
+                statement="Vel's sea wall stands.",
+                truth="true",
+                origin="worldpack",
+            ),
+            claim_recorded(
+                claim_id="c:down",
+                statement="Maren is beaten down.",
+                truth="true",
+                origin="mechanics",
+            ),
+            claim_recorded(
+                claim_id="c:gate", statement="The gate is barred.", truth="true", origin="narrator"
+            ),
+        ],
+    )
+    events = await run_gauntlet(
+        store,
+        branch,
+        Extraction(
+            claims=[
+                ProposedClaim(statement="Vel's sea wall has fallen.", supersedes=["c:wall"]),
+                ProposedClaim(statement="Maren is back on her feet.", supersedes=["c:down"]),
+                ProposedClaim(
+                    statement="The gate stands open.",
+                    provenance="dialogue",
+                    speaker="Ilse",
+                    supersedes=["c:gate"],
+                ),
+            ]
+        ),
+    )
+    assert _of_type(events, "ClaimTruthChanged") == []  # nothing retired
+    assert [e.payload["truth"] for e in _of_type(events, "ClaimRecorded")] == [
+        "unknown",  # an authored fact can't be overturned by narration
+        "unknown",  # nor a mechanical one
+        "unknown",  # dialogue is testimony
+    ]

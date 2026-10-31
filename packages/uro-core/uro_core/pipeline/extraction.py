@@ -57,6 +57,7 @@ from uro_core.domain.events import (
     actor_created,
     belief_changed,
     claim_recorded,
+    claim_truth_changed,
     edge_added,
     entity_alias_added,
     faction_created,
@@ -107,6 +108,9 @@ class ProposedClaim(BaseModel):
     provenance: Literal["narrator", "dialogue"] = "narrator"  # 'player' is not permitted
     speaker: str | None = None
     contradicts: list[str] = Field(default_factory=list)
+    # known claims this narration CHANGES — the world moved on, the old fact is no longer true (a
+    # seal broken, a door now open). D-70: only a fact the narrator itself established is retired.
+    supersedes: list[str] = Field(default_factory=list)
     confidence: float | None = None
     durable: bool = True  # false = flavor/atmosphere; the gauntlet drops it (kept only as a
     #                       structural safety net — the prompt should keep flavor out entirely)
@@ -287,6 +291,7 @@ def build_extractor_messages(
         '"resolves": [ids of KNOWN THREADS this narration settles], '
         '"claims": [{"statement", "about": [names], "provenance": "narrator"|"dialogue", '
         '"speaker": name (dialogue only), "contradicts": [known claim ids], '
+        '"supersedes": [known claim ids this narration CHANGES], '
         '"durable": false for any passing moment, gesture, mood, or sensation / true for a '
         "lasting fact, or news or a plan a character reports, "
         '"confidence": 0..1, how sure the SPEAKER sounds}]}'
@@ -629,6 +634,7 @@ async def run_gauntlet(
             believed[actor_id] = {b.claim_id for b in await store.beliefs_of(branch_id, actor_id)}
         return claim_id in believed[actor_id]
 
+    retired: set[str] = set()  # facts superseded this beat (D-70)
     for pc in extraction.claims:
         if not pc.durable:
             continue  # flavor / atmosphere — not canon (docs/05 promotion rules)
@@ -638,7 +644,24 @@ async def run_gauntlet(
         subject_refs = [(link_actor(s) or _name_token(s)) for s in pc.about if s.strip()]
         truth: Truth = "true" if pc.provenance == "narrator" else "unknown"
         if truth == "true":
+            # A CHANGE of state (D-70): the narrator says the world moved on ("the seal snaps").
+            # Only a fact the narrator itself established in play is retired; authored, mechanical,
+            # external and module facts are protected, so superseding one is treated like
+            # contradicting it. Before, the old fact always won and the world couldn't change.
+            for cid in pc.supersedes:
+                old = await store.get_claim(branch_id, cid)
+                if old is None or old.truth != "true" or cid in retired:
+                    continue
+                if old.origin == "narrator":
+                    events.append(
+                        claim_truth_changed(claim_id=cid, truth="false", cause="superseded")
+                    )
+                    retired.add(cid)
+                else:
+                    truth = "unknown"  # a protected fact: can't hold two contradictory truths
             for cid in pc.contradicts:
+                if cid in retired:
+                    continue  # (a model may list a changed fact in both)
                 existing = await store.get_claim(branch_id, cid)
                 if existing is not None and existing.truth == "true":
                     truth = "unknown"  # can't hold two contradictory truths

@@ -93,8 +93,10 @@ or reported speech) → 'dialogue' with that character as 'speaker' (it may be a
 how sure the SPEAKER sounds, not how sure you are that they said it: a hedged rumor ("there's talk
 of…", "or so a watchman claimed") is low, around 0.3; something they saw themselves is high. Name a new
 actor only if the prose explicitly names them. A character giving their own name is captured by
-naming them in `actors` — never also record "X says their name is X" as a claim. When a statement conflicts with a KNOWN CLAIM,
-put that claim's id in 'contradicts'. In `about`, name who or what the claim is about — the person,
-faction, or place, by the name the KNOWN lists use ("River Watch", not "the Watch"). Keep
-statements terse and self-contained. Output ONLY a
-JSON object.
+naming them in `actors` — never also record "X says their name is X" as a claim.
+CHANGES: when the narration changes something a KNOWN CLAIM states — a seal is broken, a door now
+stands open, a bridge has burned — record the new state and put the old claim's id in
+`supersedes`: the world moved on. Use 'contradicts' only when both can't be true at once (one of
+them is wrong). In `about`, name who or what the claim is about — the person, faction, or place,
+by the name the KNOWN lists use ("River Watch", not "the Watch"). Keep statements terse and
+self-contained. Output ONLY a JSON object.

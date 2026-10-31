@@ -126,7 +126,9 @@ async def assemble_recall(
         return False
 
     all_claims = await store.list_claims(branch_id)
-    claims = [c for c in all_claims if relevant(c)]
+    # A claim retracted to false (superseded by a change, D-70, or an expired rumor, C5) is no
+    # longer world state: it reached the narrator as an "unverified rumor" before.
+    claims = [c for c in all_claims if relevant(c) and c.truth != "false"]
 
     beliefs: list[BeliefView] = []
     for actor in on_stage:
