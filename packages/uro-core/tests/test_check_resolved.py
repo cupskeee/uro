@@ -77,31 +77,30 @@ async def test_each_check_commits_its_outcome(store: PostgresEventStore) -> None
 
 
 async def test_a_heat_meter_rises_on_every_failed_check(store: PostgresEventStore) -> None:
+    # `per_event: true` makes the rule fire for EACH failed check — without it a rule fires once per
+    # beat, so two failures in one beat would raise the heat by one (review).
     heat_up = {
         "id": "failure-raises-heat",
-        "trigger": {"event": "CheckResolved", "where": {"outcome": "failure"}},
+        "trigger": {"event": "CheckResolved", "where": {"outcome": "failure"}, "per_event": True},
         "then": [{"do": "adjust_counter", "scope_ref": "f:vault", "key": "heat", "delta": 1}],
         "scope": {"world": True},
     }
+    once = {**heat_up, "id": "once-per-beat", "trigger": {**heat_up["trigger"], "per_event": False}}
+    once["then"] = [{"do": "adjust_counter", "scope_ref": "f:vault", "key": "beats", "delta": 1}]
     campaign = await _campaign(
-        store, "uro-basic", {"rules_api_version": 7, "rules": [heat_up], "agendas": []}
+        store, "uro-basic", {"rules_api_version": 7, "rules": [heat_up, once], "agendas": []}
     )
     engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()), ruleset=_AlwaysFails())
-    plan = BeatPlan(mechanics=[PlanMechanic(affordance="sneak")])
+    plan = BeatPlan(mechanics=[PlanMechanic(affordance="sneak")] * 2)  # two failed checks a beat
     for _ in range(3):
-        await engine.run_beat(campaign, "p1", "I slip past the guard", plan=plan)
-    assert await store.get_counter(campaign.branch_id, "f:vault", "heat") == 3
+        await engine.run_beat(campaign, "p1", "I slip past the guards", plan=plan)
+    assert await store.get_counter(campaign.branch_id, "f:vault", "heat") == 6  # every failure
+    assert await store.get_counter(campaign.branch_id, "f:vault", "beats") == 3  # once per beat
 
-    succeeding = Engine(
-        store, ProviderRouter(bindings={}, default=_Stub()), ruleset=registry.resolve("uro-basic")
-    )
-    for _ in range(4):  # some of these succeed: only the failures raise the heat
-        await succeeding.run_beat(campaign, "p1", "I slip past the guard", plan=plan)
-    async with store.pool.acquire() as conn:
-        failures = await conn.fetchval(
-            "SELECT count(*) FROM events e JOIN commits c ON c.commit_id = e.commit_id "
-            "JOIN branches b ON b.world_id = c.world_id WHERE b.branch_id = $1 "
-            "AND e.event_type = 'CheckResolved' AND e.payload->>'outcome' = 'failure'",
-            campaign.branch_id,
-        )
-    assert await store.get_counter(campaign.branch_id, "f:vault", "heat") == failures
+    class _AlwaysSucceeds(UroBasic):
+        def resolve_check(self, req, rng):  # type: ignore[no-untyped-def]
+            return CheckResult(outcome="success", trace="d20 (20) → success")
+
+    lucky = Engine(store, ProviderRouter(bindings={}, default=_Stub()), ruleset=_AlwaysSucceeds())
+    await lucky.run_beat(campaign, "p1", "I slip past the guards", plan=plan)
+    assert await store.get_counter(campaign.branch_id, "f:vault", "heat") == 6  # a success: no heat

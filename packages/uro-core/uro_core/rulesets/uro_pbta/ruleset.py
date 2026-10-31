@@ -50,10 +50,12 @@ class PbtAConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    xp_on_miss: int = Field(1, ge=0, description="XP a missed free-roam move marks")
-    xp_on_conflict_miss: int = Field(1, ge=0, description="XP a PC's missed move in a fight marks")
-    xp_per_advance: int = Field(5, ge=1, description="XP that raises the weakest stat")
-    stat_cap: int = Field(3, ge=-1, description="the highest a stat can go")
+    xp_on_miss: int = Field(1, ge=0, le=100, description="XP a missed free-roam move marks")
+    xp_on_conflict_miss: int = Field(
+        1, ge=0, le=100, description="XP a PC's missed move in a fight marks"
+    )
+    xp_per_advance: int = Field(5, ge=1, le=100, description="XP that raises the weakest stat")
+    stat_cap: int = Field(3, ge=-1, le=10, description="the highest a stat can go")
 
 
 class Sheet(BaseModel):
@@ -120,11 +122,15 @@ class UroPbtA:
         stats = dict(s.stats)
         # Advance by FAILING: every _XP_PER_ADVANCE marks, bump the lowest stat (deterministic:
         # lowest value, then name), capped at _STAT_CAP. This is the anti-d20 progression axis.
+        # Advances are counted arithmetically and stop once the weakest stat is at the cap — never a
+        # loop per XP, and never LOWERING a stat that started above a low cap (review).
         cfg = self.config
-        while xp >= cfg.xp_per_advance:
-            xp -= cfg.xp_per_advance
+        advances, xp = divmod(xp, cfg.xp_per_advance)
+        for _ in range(advances):
             low = min(stats, key=lambda k: (stats[k], k))
-            stats[low] = min(cfg.stat_cap, stats[low] + 1)
+            if stats[low] >= cfg.stat_cap:
+                break
+            stats[low] += 1
         return s.model_copy(update={"xp": xp, "stats": stats}).model_dump()
 
     # --- moves (free-roam checks) ---

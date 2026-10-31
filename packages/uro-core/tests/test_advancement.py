@@ -5,6 +5,7 @@ world's settings say HOW MUCH. Before D-63 none of this was ever applied.
 
 from collections.abc import AsyncIterator
 
+import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import actor_created, sheet_updated
 from uro_core.domain.ids import new_id
@@ -195,3 +196,79 @@ async def test_play_marks_a_pc_as_a_pc_in_its_fights(store: PostgresEventStore) 
     after = await store.get_sheet(branch, pc)  # type: ignore[arg-type]
     assert after is not None and after["milestones"] == 1  # the PC survived and earned it
     assert (await store.get_sheet(branch, "a:bane"))["milestones"] == 0  # type: ignore[index]
+
+
+# --- phase-end review fixes ------------------------------------------------------------------
+
+
+def test_a_low_cap_never_lowers_a_trait_and_awards_are_bounded() -> None:
+    # Review: `min(cap, value + 1)` LOWERED a trait that started above a low cap, and an unbounded
+    # award setting looped once per point (a pack could stall the server).
+    from uro_core.rulesets.base import Award
+
+    pool = registry.resolve("uro-pool", "", {"trait_cap": 1})
+    sheet = _sheet("uro-pool")  # traits of 2, above the cap
+    assert pool.progression(sheet, Award(data={"milestone": 3}))["traits"] == sheet["traits"]
+    pbta = registry.resolve("uro-pbta", "", {"stat_cap": -1})
+    stats = _sheet("uro-pbta")
+    assert pbta.progression(stats, Award(data={"xp": 5}))["stats"] == stats["stats"]
+    for rid, key in (("uro-pbta", "xp_on_miss"), ("uro-pool", "milestones_per_fight")):
+        with pytest.raises(ValueError, match=key):
+            registry.resolve(rid, "", {key: 10**12})
+    many = registry.resolve("uro-pbta").progression(stats, Award(data={"xp": 10**9}))
+    assert all(v == 3 for v in many["stats"].values())  # capped, computed — not 2e8 loop turns
+
+
+async def test_a_check_never_lands_on_another_players_pc_or_an_npc(
+    store: PostgresEventStore,
+) -> None:
+    # Review (P7 x D-61): a plan could name another participant's PC (or an NPC) as a check's actor,
+    # so P1's beat committed strain/XP onto P2's PC. Now: another player's PC isn't rolled for, and
+    # only the acting PC's sheet takes a check's consequences.
+    from uro_core.pipeline.plan import BeatPlan, PlanMechanic
+    from uro_core.rulesets.uro_pool import UroPool
+
+    class _AlwaysStrains(UroPool):
+        def resolve_check(self, req, rng):  # type: ignore[no-untyped-def]
+            result = super().resolve_check(req, rng)
+            return result.model_copy(update={"sheet": {**req.sheet, "strain": 4}})
+
+    world = await store.create_world(f"Party-{new_id()}", ruleset_id="uro-pool")
+    branch = world.main_branch_id
+    campaign = await store.start_campaign(
+        world.world_id,
+        branch,
+        participant_id="p1",
+        new_pc_name="Ash",
+        new_pc_id=f"a:ash-{new_id()}",
+        pc_sheet=_sheet("uro-pool"),
+        ruleset_id="uro-pool",
+    )
+    bran = await store.bind_pc(
+        campaign.campaign_id,
+        "p2",
+        new_pc_name="Bran",
+        pc_sheet=_sheet("uro-pool"),
+        ruleset_id="uro-pool",
+    )
+    ash = await store.pc_for_participant(campaign.campaign_id, "p1")
+    await store.append_beat(
+        branch,
+        [
+            actor_created(actor_id="a:guard", name="Guard"),
+            sheet_updated(actor_id="a:guard", sheet=_sheet("uro-pool"), ruleset_id="uro-pool"),
+        ],
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()), ruleset=_AlwaysStrains())
+    plan = BeatPlan(
+        mechanics=[
+            PlanMechanic(affordance="investigate", actor=bran),
+            PlanMechanic(affordance="investigate", actor="a:guard"),
+            PlanMechanic(affordance="investigate", actor=ash),
+        ]
+    )
+    result = await engine.run_beat(campaign, "p1", "Bran, the guard and I search", plan=plan)
+    assert result.checks == 2  # the guard and Ash: Bran rolls in his own beats
+    assert (await store.get_sheet(branch, bran))["strain"] == 0  # type: ignore[index]
+    assert (await store.get_sheet(branch, "a:guard"))["strain"] == 0  # type: ignore[index]
+    assert (await store.get_sheet(branch, ash))["strain"] == 4  # type: ignore[arg-type,index]

@@ -3,7 +3,7 @@ name = "uro-coinflip"
 version = "0.1.0"
 description = "Example Uro ruleset plugin: every roll is a coin flip"
 requires-python = ">=3.12"
-dependencies = ["uro-core>=0.5"]
+dependencies = ["uro-core>=0.6"]  # the first release with plugin rulesets (D-65)
 
 # The one line that makes this a Uro ruleset plugin (D-65): an entry point in the `uro.rulesets`
 # group. Its NAME is the ruleset id a world declares (`[ruleset] id = "coinflip"`); it points at a

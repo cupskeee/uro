@@ -55,7 +55,7 @@ class BasicConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_level: int = Field(5, ge=1, le=20, description="the level ceiling")
-    levels_per_win: int = Field(1, ge=0, description="levels a PC gains for winning a fight")
+    levels_per_win: int = Field(1, ge=0, le=20, description="levels a PC gains for winning a fight")
     heal_on_level: bool = Field(True, description="a level-up restores full hit points")
 
 

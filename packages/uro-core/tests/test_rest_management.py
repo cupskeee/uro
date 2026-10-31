@@ -926,3 +926,28 @@ async def test_a_server_time_skip_rests_under_the_campaigns_own_ruleset(
         assert fork.status_code == 200, fork.text
         later = await store.get_branch_by_name(world_id, "later")
         assert (await store.get_sheet(later.branch_id, pc))["strain"] == 0  # type: ignore[arg-type,index,union-attr]
+
+
+async def test_a_time_skip_survives_a_world_whose_ruleset_is_gone(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Review: a world whose ruleset (a plugin) is no longer installed made every time-skip fail —
+    # the fork endpoint 500'd AFTER committing the fork. Now the skip runs, without downtime rules.
+    from uro_core.rulesets import registry
+    from uro_core.rulesets.uro_pool import UroPool
+
+    class _Gone(UroPool):
+        id = "gone"
+
+    registry.register("gone", _Gone)
+    world = await store.create_world(f"Orphan-{new_id()}", ruleset_id="gone")
+    registry._FACTORIES.pop("gone")  # the plugin is uninstalled
+    async with _client(store) as client:
+        head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+        r = await client.post(
+            _q(f"/worlds/{world.world_id}/branches"),
+            json={"from_ref": head, "name": "later", "time_skip_days": 3},
+        )
+        assert r.status_code == 200, r.text
+    later = await store.get_branch_by_name(world.world_id, "later")
+    assert await store.current_world_time(later.branch_id) == 3  # type: ignore[union-attr]

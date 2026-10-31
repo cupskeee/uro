@@ -40,9 +40,12 @@ def test_resolve_unknown_fails_loudly() -> None:
 
 
 def test_register_adds_a_factory() -> None:
-    registry.register("test-only", UroPbtA)
+    class _TestOnly(UroPbtA):
+        id = "test-only"  # a ruleset's id is the id it's registered under (campaigns pin it)
+
+    registry.register("test-only", _TestOnly)
     try:
-        assert isinstance(registry.resolve("test-only"), UroPbtA)
+        assert isinstance(registry.resolve("test-only"), _TestOnly)
         assert "test-only" in registry.available()
     finally:
         registry._FACTORIES.pop("test-only", None)  # keep global registry clean for other tests

@@ -68,6 +68,7 @@ from uro_core.rulesets.base import (
     Combatant,
     EncounterOutcome,
     Ruleset,
+    ruleset_contract_problem,
 )
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import Campaign, Commit
@@ -157,6 +158,9 @@ class Engine:
         semantic_k: int = 4,
         bare: bool = False,
     ) -> None:
+        problem = ruleset_contract_problem(ruleset) if ruleset is not None else None
+        if problem is not None:  # fail here, not mid-fight on a missing hook (D-65 review)
+            raise ValueError(f"ruleset {getattr(ruleset, 'id', '?')!r} can't be used: {problem}")
         self._store = store
         self._shared = _Shared(router)
         # The bound ruleset enables the planner + mechanics gate (D-28). None → Phase-1 flow.
@@ -954,6 +958,11 @@ class Engine:
         actor_ids |= {m.actor for m in plan.mechanics if m.actor}
         sheets: dict[str, dict[str, Any]] = {}
         for aid in actor_ids:
+            if aid != pc_actor_id and await self._store.is_pc(campaign.branch_id, aid):
+                # Another player's PC rolls in THEIR beats, never in this one (P7 x D-61 review,
+                # the same rule as the fight path's PvP guard): left unsheeted, the gate skips it.
+                logger.info("check on %r skipped: it is another participant's PC", aid)
+                continue
             sheet = await self._store.get_sheet(campaign.branch_id, aid)
             if sheet is not None:
                 sheets[aid] = sheet
@@ -962,7 +971,12 @@ class Engine:
             # than silently skip. (world new / campaign new sheet the PC; this is an edge.)
             logger.warning("ruleset-bound beat: PC %r has no sheet; checks skipped", pc_actor_id)
         rng = await self._beat_rng(campaign)
-        return resolve_mechanics(self._ruleset, plan, sheets, pc_actor_id, rng)
+        gate = resolve_mechanics(self._ruleset, plan, sheets, pc_actor_id, rng)
+        # Only the ACTING PC's sheet takes a check's consequences (strain, XP). An NPC's check rolls
+        # and is reported (CheckResolved), but costs and advancement are a player character's, as
+        # in a fight (D-63).
+        gate.sheets = {k: v for k, v in gate.sheets.items() if k == pc_actor_id}
+        return gate
 
     async def _beat_rng(self, campaign: Campaign) -> Rng:
         """A per-beat seeded Rng from the campaign SEED + the commit DEPTH it builds on (G-3).

@@ -41,7 +41,7 @@ _SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
 def _event_payload_fields() -> dict[str, frozenset[str]]:
     """event_type → its payload's field names, derived from the domain payload models
     (`<Name>Payload` → event `<Name>`). Used to reject a rule trigger that would VALIDATE but
-    never fire — an unknown event type (a typo like `CheckResolved`) or a `where` key that is not a
+    never fire — an unknown event type (a typo like `CheckResolve`) or a `where` key that is not a
     real payload field (`actor.member_of`). Gap-report finding, hit independently by 3 games:
     accepted-but-inert is a sharper footgun than a loud refusal."""
     out: dict[str, frozenset[str]] = {}
