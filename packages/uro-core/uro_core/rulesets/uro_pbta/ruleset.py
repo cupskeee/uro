@@ -149,8 +149,16 @@ class UroPbtA:
             outcome
         ]
         trace = f"{stat} move: 2d6 ({dice}) {mod:+d} = {total} → {label}"
+        # Advance by FAILING (docs/06): a miss marks XP, through this ruleset's own progression
+        # (which also spends a full track on the weakest stat).
+        after = self.progression(req.sheet, Award(data={"xp": 1})) if outcome == "miss" else None
+        if after is not None:
+            trace += " (marks XP)"
         return CheckResult(
-            outcome=outcome, trace=trace, detail={"dice": dice, "stat": mod, "total": total}
+            outcome=outcome,
+            trace=trace,
+            detail={"dice": dice, "stat": mod, "total": total},
+            sheet=after,
         )
 
     # --- conflict (the move-exchange; no initiative, no rounds) ---

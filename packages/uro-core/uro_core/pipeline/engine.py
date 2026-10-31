@@ -44,7 +44,7 @@ from uro_core.pipeline.extraction import (
     parse_extraction,
     run_gauntlet,
 )
-from uro_core.pipeline.mechanics import encounter_trigger, resolve_mechanics
+from uro_core.pipeline.mechanics import MechanicsResult, encounter_trigger, resolve_mechanics
 from uro_core.pipeline.plan import (
     BeatPlan,
     PlanMechanic,
@@ -59,7 +59,6 @@ from uro_core.providers.base import Message
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets.base import (
     CharSpec,
-    CheckResult,
     Combatant,
     EncounterOutcome,
     Ruleset,
@@ -103,6 +102,9 @@ class _Context(BaseModel):
     recall: RecallBundle
     plan: BeatPlan | None = None
     mechanics_traces: list[str] = Field(default_factory=list)
+    # actor_id → sheet after this beat's free-roam checks, for each actor a check changed (D-61):
+    # committed with the beat, and the starting sheet of any encounter in the same beat
+    check_sheets: dict[str, dict[str, Any]] = Field(default_factory=dict)
     directives: str = ""
     suggestions: list[str] = Field(default_factory=list)
     # The PC the ACTING participant drives this beat (OQ-7) — resolved once from participant_id and
@@ -405,11 +407,12 @@ class Engine:
             errors = validate_plan(plan, affordances, known)
             if errors:
                 raise PlannerError(f"supplied plan invalid: {'; '.join(errors)}")
-        checks = await self._mechanics(campaign, plan, recall, pc_actor_id)
+        gate = await self._mechanics(campaign, plan, recall, pc_actor_id)
         return _Context(
             recall=recall,
             plan=plan,
-            mechanics_traces=[c.trace for c in checks],
+            mechanics_traces=[c.trace for c in gate.checks],
+            check_sheets=gate.sheets,
             directives=plan.narration_directives,
             suggestions=plan.suggestions,
             pc_actor_id=pc_actor_id,
@@ -693,6 +696,17 @@ class Engine:
                 f"provider produced no narration for a beat by {participant_id}"
             )
         beat_id = new_id()
+        # What this beat's free-roam checks did to sheets (a push's strain, XP on a miss) — the
+        # ruleset's own result, committed like an encounter's final sheets (D-61)
+        check_events = [
+            sheet_updated(
+                actor_id=actor_id,
+                sheet=sheet,
+                ruleset_id=self.ruleset_id,
+                caused_by=CausedBy(kind="ruleset", beat_id=beat_id),
+            )
+            for actor_id, sheet in sorted(ctx.check_sheets.items())
+        ]
         if encounter_events is not None:
             # Combat beat: the ruleset's mechanical events ARE the state (no extraction). Wrap
             # them with ModeChanged in/out and the narrating BeatResolved, all one commit.
@@ -701,6 +715,7 @@ class Engine:
                 mode_changed(
                     from_mode="freeroam", to_mode="encounter", cause=intent_text, caused_by=cause
                 ),
+                *check_events,  # before the fight, which started from these sheets
                 *encounter_events,
                 mode_changed(
                     from_mode="encounter",
@@ -729,6 +744,7 @@ class Engine:
                     intent_text=intent_text,
                     narration=narration,
                 ),
+                *check_events,
                 *extracted,
             ]
             extracted_n = len(extracted)
@@ -769,7 +785,10 @@ class Engine:
         for actor_id, team in ((aggressor, "aggressor"), (defender, "defender")):
             if await self._store.get_actor(branch, actor_id) is None:
                 return None  # a ref that is not a known actor → not a real fight
-            sheet_dict = await self._store.get_sheet(branch, actor_id)
+            # a check earlier in this beat may have changed it (a push's strain): fight from that
+            sheet_dict = ctx.check_sheets.get(actor_id) or await self._store.get_sheet(
+                branch, actor_id
+            )
             if sheet_dict is None:  # a known-but-unsheeted combatant gets a default sheet, logged
                 sheet_dict = self._ruleset.new_character(CharSpec(), Rng(0))
                 setup.append(
@@ -878,7 +897,7 @@ class Engine:
 
     async def _mechanics(
         self, campaign: Campaign, plan: BeatPlan, recall: RecallBundle, pc_actor_id: str
-    ) -> list[CheckResult]:
+    ) -> MechanicsResult:
         """Mechanics gate [3]: resolve the plan's free-roam checks via the ruleset. No LLM."""
         assert self._ruleset is not None
         actor_ids = {pc_actor_id} if pc_actor_id else set()

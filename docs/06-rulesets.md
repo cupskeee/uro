@@ -98,10 +98,21 @@ change, but the holistic review found the shared runner kept only each turn's FI
 (now every trace is kept, so a simultaneous round's strikes all reach the narrator) and that a mutual
 knockout left no fallout (now everyone downed is wounded; with no winner, nothing is looted).
 
-Honest limit, shared by every ruleset: the pipeline never applies a *free-roam check's*
-consequences to the sheet (`progression` isn't called; PbtA's XP-on-a-miss is likewise not live),
-so a push during a check is recorded only in its detail; a push in an encounter persists via the
-final `SheetUpdated`.
+**Free-roam checks change sheets (D-61).** A check that changes its actor's sheet returns the new
+sheet in `CheckResult.sheet`. The ruleset applies its own rules, and the engine commits the result
+as `SheetUpdated` in the beat, just as an encounter's harm arrives through its final sheets. Today
+that means:
+- a pushed Uro Pool check costs +1 strain;
+- a PbtA miss marks XP, through PbtA's own `progression`, so a full track advances the weakest stat;
+- a d20 check changes nothing.
+
+The gate threads a changed sheet into the actor's next check in the same beat, so a second push
+sees the first one's strain. A fight in the same beat starts from the checked sheets.
+
+Still not live, a shared encounter-side gap: advancement *from encounters*. Nothing applies Uro
+Pool's milestone for surviving a fight, PbtA's XP for a missed conflict move, or a d20 level-up.
+Nothing triggers Uro Pool's `rest` either, so strain from pushes, in checks or fights, never
+clears.
 
 ## Encounters as the federation seam
 
