@@ -234,7 +234,12 @@ def test_check_difficulties_reach_the_dice() -> None:
     from uro_core.pipeline.plan import BeatPlan, PlanMechanic
 
     targets = {a.id: a.difficulty for a in POOL.affordances() if not a.starts_encounter}
-    assert targets == {"investigate": "hard", "talk_down": "normal", "hold_firm": "easy"}
+    assert targets == {
+        "investigate": "hard",
+        "talk_down": "normal",
+        "hold_firm": "easy",
+        "endure": "normal",
+    }
     plan = BeatPlan(mechanics=[PlanMechanic(affordance="investigate")])
     [result] = resolve_mechanics(POOL, plan, {"a:pc": _sheet(wits=3)}, "a:pc", Rng(0)).checks
     assert result.detail["target"] == 5  # "hard" → 5+

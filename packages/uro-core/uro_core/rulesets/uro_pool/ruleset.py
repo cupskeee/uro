@@ -195,6 +195,13 @@ class UroPool:
                 trigger_categories=["coerce"],
                 description="refuse to yield under pressure",
             ),
+            Affordance(  # physical risk: rowing through surf went unrolled without it (live)
+                id="endure",
+                difficulty="normal",
+                stat="might",
+                trigger_categories=["danger"],
+                description="row, climb, haul, or weather a physical danger",
+            ),
             Affordance(
                 id="strike",
                 stat="might",

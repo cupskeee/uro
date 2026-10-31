@@ -184,6 +184,12 @@ class UroBasic:
                 trigger_categories=["search"],
                 description="notice what is hidden",
             ),
+            Affordance(  # physical risk: without it, a climb or a forced lock went unrolled (live)
+                id="athletics",
+                stat="STR",
+                trigger_categories=["danger"],
+                description="climb, swim, force a door or lock, or endure a physical danger",
+            ),
             Affordance(
                 id="attack",
                 stat="STR",
