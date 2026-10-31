@@ -9,6 +9,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-31
+
+Upgrading: no database migration. Built-in rulesets gain a `danger` affordance each, and the
+extractor no longer splits a known character seen somewhere new (D-68, D-69).
+
 Found in the second live pass (docs/16, "the second live pass").
 
 ### Added
@@ -888,7 +893,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/cupskeee/uro/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/cupskeee/uro/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/cupskeee/uro/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/cupskeee/uro/compare/v0.5.0...v0.6.0
