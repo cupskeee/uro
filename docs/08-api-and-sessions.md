@@ -113,8 +113,9 @@ ship (BE-10):** `GET /usage[?stage=&world=&campaign=]` aggregates the `llm_calls
 stage and model (count, token sums, avg latency) — **operator-only** (D-44, it reveals
 model/token/latency cost); the engine only *exposes* metering, it never bills (docs/00). Since D-66
 every call through the `ProviderRouter` is recorded with the tokens its adapter reported and the
-world and branch it served, so `?world=` / `?campaign=` (a campaign's calls are its branch's) filter
-it; calls metered before 0.7 have no world and count only in the unfiltered total. `GET
+world and branch it served, so `?world=` / `?campaign=` filter it. `?campaign=` means the campaign's
+branch: every campaign on that branch shares one total. Calls metered before 0.7, and backfill and
+probe calls (which serve no world yet), have no world and count only in the unfiltered total. `GET
 /llm-calls[?stage=&world=&campaign=&limit=]` lists recent calls with each structured call's full
 response (operator-only, D-45: an extractor response holds claim truth values). `GET /rulesets` lists each built-in ruleset's `id`, `version`, and sheet schema
 (any-authed — public capability info). `GET /worlds/{w}/chronicle[?branch=&limit=]` is the
@@ -205,7 +206,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 | `vote_decided` | `choice` |
 | `vote_unsupported` | `participant_id` *(the server's arbiter has no vote shape)* |
 | `outcome_recorded` | `encounter_id`, + the distilled receipt (`committed_events`, `commit_id`, …) *(Chronicler mode, D-25 — broadcast when an external outcome is posted)* |
-| `commit` | `commit_id`, `branch_id`, `depth`, `beats[]` (`participant_id`, `intent`, `narration`) *(D-67, with `uro serve --nats`: a commit on this campaign's branch made ELSEWHERE, by another server, the CLI or an embedder. Never this server's own beat, which already arrived as `beat_committed`. Only narration, never raw events (D-45). Empty `beats` means the branch moved without a beat, such as a time-skip, so refetch state.)* |
+| `commit` | `commit_id`, `branch_id`, `depth`, `beats[]` (`participant_id`, `intent`, `narration`) *(D-67, with `uro serve --nats`: a commit on this campaign's branch made ELSEWHERE, by another server, the CLI or an embedder. Never the beat this campaign just played, which already arrived as `beat_committed`; its reactions do arrive here. The server pushes only commits its own database made, read from that database, never from the NATS message. Only narration, never raw events (D-45). Empty `beats` means the branch moved without a beat, such as a time-skip, so refetch state.)* |
 
 **Deliberately NOT emitted yet (a future GROW, not drift).** `scene_update` / `mode_change` (the highest-value add — Loom's Play surface can't show scene/mode) need the pipeline to surface within-beat mode state (encounters auto-resolve inside one beat under D-29, so between beats the mode is always free-roam — there is no persistent mode frame to send without new engine state). `mechanics_result` needs the same. `suggestions` (the planner's D-23 next-action hints) and a `beat_committed` `beat_id` (for deep-linking a committed beat) both need the `run_beat` streaming contract to yield structured frames, not only narration strings. `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
 

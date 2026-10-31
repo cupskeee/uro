@@ -321,6 +321,16 @@ class PostgresEventStore:
                 await conn.fetchval("SELECT count(*) FROM outbox WHERE published_at IS NULL")
             )
 
+    async def outbox_commit(self, commit_id: str) -> tuple[str, str] | None:
+        """(world_id, branch_id) of a commit this database made, from its outbox row — None if it
+        never made one (D-67: a live commit feed checks a message against this before trusting
+        it)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT world_id, branch_id FROM outbox WHERE commit_id = $1", commit_id
+            )
+        return (row["world_id"], row["branch_id"]) if row else None
+
     async def drain_outbox(
         self, deliver: Callable[[OutboxMessage], Awaitable[None]], *, limit: int = 100
     ) -> int:

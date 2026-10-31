@@ -30,8 +30,9 @@ class ProviderRouter:
     ) -> None:
         self._bindings = bindings
         self._default = default
-        # Every call through the router is metered when a recorder is set (D-66): the engine's, and
-        # the world-authoring stages' (backfill, probe) that never passed through the engine.
+        # The router's own recorder meters calls made without one (D-66): the world-authoring stages
+        # (backfill, probe). An Engine passes ITS store's recorder on every call, so two engines
+        # sharing one router each meter into their own store (review).
         self.recorder = recorder
 
     def _provider_for(self, role: str) -> LLMProvider:
@@ -59,6 +60,7 @@ class ProviderRouter:
         temperature: float = 0.9,
         max_tokens: int | None = None,
         branch_id: str | None = None,
+        recorder: Recorder | None = None,
     ) -> AsyncIterator[str]:
         provider = self._provider_for(role)
         req = CompletionRequest(
@@ -73,7 +75,7 @@ class ProviderRouter:
                 async for chunk in provider.stream(req):
                     yield chunk
             finally:  # narration is the beat's own text: metered, not stored again here
-                await self._record(role, messages, started, usage, None, branch_id)
+                await self._record(role, messages, started, usage, None, branch_id, recorder)
 
     async def complete(
         self,
@@ -84,6 +86,7 @@ class ProviderRouter:
         temperature: float = 0.2,
         max_tokens: int | None = None,
         branch_id: str | None = None,
+        recorder: Recorder | None = None,
     ) -> str:
         provider = self._provider_for(role)
         req = CompletionRequest(
@@ -99,11 +102,21 @@ class ProviderRouter:
             try:
                 raw = await provider.complete(req)
                 return raw
-            finally:  # a structured call: its full response is kept (a failure records none)
-                await self._record(role, messages, started, usage, raw, branch_id)
+            except Exception as exc:
+                # a failure keeps whatever the provider did return — a truncated extractor JSON is
+                # exactly the response worth reading afterwards (review)
+                raw = getattr(exc, "partial_response", None)
+                raise
+            finally:  # a structured call: its full response is kept
+                await self._record(role, messages, started, usage, raw, branch_id, recorder)
 
     async def embed(
-        self, role: str, texts: list[str], *, branch_id: str | None = None
+        self,
+        role: str,
+        texts: list[str],
+        *,
+        branch_id: str | None = None,
+        recorder: Recorder | None = None,
     ) -> list[list[float]]:
         provider = self._provider_for(role)
         started = time.perf_counter()
@@ -112,7 +125,7 @@ class ProviderRouter:
                 return await provider.embed(texts)
             finally:
                 messages = [Message(role="user", content=t) for t in texts]
-                await self._record(role, messages, started, usage, None, branch_id)
+                await self._record(role, messages, started, usage, None, branch_id, recorder)
 
     async def _record(
         self,
@@ -122,12 +135,15 @@ class ProviderRouter:
         usage: Usage,
         response: str | None,
         branch_id: str | None,
+        recorder: Recorder | None = None,
     ) -> None:
-        """Meter one call. Best-effort observability: it must never break the call it measures."""
-        if self.recorder is None:
+        """Meter one call into the caller's recorder, else the router's. Best-effort observability:
+        it must never break the call it measures."""
+        record = recorder or self.recorder
+        if record is None:
             return
         try:
-            await self.recorder(
+            await record(
                 LLMCall(
                     stage_tag=role,
                     prompt_hash=prompt_hash(messages),

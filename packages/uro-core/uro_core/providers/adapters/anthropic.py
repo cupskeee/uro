@@ -146,14 +146,18 @@ class AnthropicProvider:
         usage = data.get("usage") if isinstance(data, dict) else None
         if isinstance(usage, dict):  # D-66
             report_usage(tokens_in=usage.get("input_tokens"), tokens_out=usage.get("output_tokens"))
-        if data.get("stop_reason") == "max_tokens":
-            # truncated output → likely invalid JSON; fail loudly so the caller degrades.
-            raise ProviderError("anthropic response hit max_tokens (output truncated)")
         try:
             blocks = data.get("content") or []
             text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         except (AttributeError, TypeError, KeyError) as exc:
             raise ProviderError(f"anthropic returned an unexpected body shape: {exc}") from exc
+        if data.get("stop_reason") == "max_tokens":
+            # truncated output → likely invalid JSON; fail loudly so the caller degrades — carrying
+            # the text, so the metering router still stores what came back (D-66 review).
+            raise ProviderError(
+                "anthropic response hit max_tokens (output truncated)",
+                partial_response=prefill + text,
+            )
         return prefill + text
 
     async def embed(self, texts: list[str]) -> list[list[float]]:

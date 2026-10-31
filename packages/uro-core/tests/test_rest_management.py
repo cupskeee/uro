@@ -692,6 +692,24 @@ async def test_probe_and_backfill_follow_a_reloaded_router(store: PostgresEventS
     assert new.calls > 0 and old.calls == 0
 
 
+async def test_the_server_s_probe_and_backfill_are_metered(store: PostgresEventStore) -> None:
+    # Review: they call the router outside any engine, so the server gives its router the store's
+    # recorder; before, only beats were metered.
+    from uro_core.worldpack.parse import parse_pack
+
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    deps = engine_deps(store, engine, {_TOK: "alice"}, router=engine.router)
+    manifest = parse_pack(Path(__file__).resolve().parents[3] / "worlds" / "ashfall").manifest
+
+    async def planner_calls() -> int:
+        return len(await store.recent_llm_calls(stage="planner", limit=100_000))
+
+    before = await planner_calls()
+    assert deps.probe is not None
+    await deps.probe(manifest, 1)
+    assert await planner_calls() > before
+
+
 async def test_a_pbta_campaign_plays_on_a_uro_basic_server(store: PostgresEventStore) -> None:
     # End to end: `uro serve` binds uro-basic, a REST world pins uro-pbta, and a beat plays under
     # PbtA — the server no longer refuses it ("one ruleset per process").

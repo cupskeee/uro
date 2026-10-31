@@ -30,7 +30,9 @@ class NatsCommitFeed:
         self._sub: Subscription | None = None
 
     async def connect(self) -> None:
-        self._nc = await nats.connect(self._url)
+        # keep reconnecting through a NATS outage instead of giving up after the client's default
+        # ~2 minutes; the server's consume loop also reconnects if the feed ever ends (review)
+        self._nc = await nats.connect(self._url, max_reconnect_attempts=-1)
         self._sub = await self._nc.subscribe(f"{self._prefix}.>")
 
     def __aiter__(self) -> AsyncIterator[OutboxMessage]:

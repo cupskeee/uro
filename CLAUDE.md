@@ -197,4 +197,4 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
   - plugin contract gaps;
   - `per_event` was missing from the heat-meter example.
 
-Known open items: none of the earlier list remains. Token metering and raw-output storage landed in D-66, and `uro serve --nats` consumes the outbox (D-67).
+Known open items: none of the earlier list remains. Token metering and raw-output storage landed in D-66, and `uro serve --nats` consumes the outbox (D-67). The phase-end review of those two (Opus, medium) found 15 issues plus 2 from the critic, all fixed: the biggest is that `uro serve --nats` no longer trusts a NATS message. It pushes only commits its own database made, built from the stored events, told once per campaign, with a reconnecting feed. Calls made outside an engine (CLI backfill/probe, `provider test`) are metered too, and each engine meters into its own store. Corrections are under D-66/D-67.

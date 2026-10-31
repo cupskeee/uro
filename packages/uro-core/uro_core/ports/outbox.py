@@ -40,6 +40,10 @@ class OutboxStore(Protocol):
         """How many committed beats are waiting to be published."""
         ...
 
+    async def outbox_commit(self, commit_id: str) -> tuple[str, str] | None:
+        """(world_id, branch_id) of a commit this database made, or None (D-67)."""
+        ...
+
     async def drain_outbox(
         self, deliver: Callable[[OutboxMessage], Awaitable[None]], *, limit: int = 100
     ) -> int:
