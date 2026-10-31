@@ -615,7 +615,10 @@ def create_app(
         _auth(request)
         if deps.list_rulesets is None:
             raise HTTPException(status_code=501, detail="ruleset registry not enabled")
-        return {"rulesets": deps.list_rulesets()}
+        from uro_core.rulesets import registry
+
+        # installed plugins that can't be used, with the reason (D-65) — never silently missing
+        return {"rulesets": deps.list_rulesets(), "unusable": registry.broken()}
 
     # --- Model-connection registry (D-47, docs/20 — slice 2). The instance-level LLM provider
     # registry over HTTP, so uro-loom / any client configures it (uro-cli edits the DB directly).

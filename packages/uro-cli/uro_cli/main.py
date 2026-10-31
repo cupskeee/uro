@@ -1180,8 +1180,9 @@ def usage(stage: str = typer.Option(None, "--stage", help="only this pipeline st
 
 @ruleset_app.command("list")
 def ruleset_list() -> None:
-    """The rulesets a world can declare (`[ruleset] id` in world.toml), each with the settings a
-    game may give it under `[ruleset.config]` and their defaults (D-62)."""
+    """The rulesets a world can declare (`[ruleset] id` in world.toml): the built-ins and installed
+    plugins (D-65), each with the settings a game may give it under `[ruleset.config]` and their
+    defaults (D-62). A plugin that can't be used is listed with the reason."""
     for rid in registry.available():
         rs = registry.resolve(rid)
         typer.echo(
@@ -1190,6 +1191,8 @@ def ruleset_list() -> None:
         for key, spec in rs.config_schema().get("properties", {}).items():
             what = spec.get("description", "")
             typer.echo(f"    {key:<24} default {spec.get('default')!s:<5} {what}")
+    for rid, why in sorted(registry.broken().items()):  # an installed plugin that can't be used
+        typer.echo(f"{rid}  UNUSABLE: {why}")
 
 
 @campaign_app.command("list")

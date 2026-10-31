@@ -27,6 +27,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.rng import Rng
 
+# The ruleset port's version (D-65). A ruleset declares the version it was written against as
+# `api_version`; the registry refuses one that doesn't match, so a plugin built for an older or
+# newer port fails loudly at load instead of breaking mid-beat. Bump it when the port changes.
+# v1 = the D-63 port: settings (`config_schema`), `conclude_encounter`, `downtime`.
+RULESET_API_VERSION = 1
+
 # A character sheet is OPAQUE to the core: an arbitrary JSON object whose shape the bound
 # ruleset defines and validates. The port neither reads nor writes its fields.
 Sheet = dict[str, Any]
@@ -175,6 +181,7 @@ class Ruleset(Protocol):
 
     id: str
     version: str
+    api_version: int  # the port version it implements (RULESET_API_VERSION)
 
     def sheet_schema(self) -> dict[str, Any]: ...
 

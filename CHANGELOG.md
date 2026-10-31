@@ -10,6 +10,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Ruleset plugins (D-65).** A game can install its own ruleset as a Python package that declares
+  an entry point in the `uro.rulesets` group; the CLI and `uro serve` then play worlds that declare
+  it. Each plugin is checked against the port's contract (its id, the new `RULESET_API_VERSION`,
+  every method). One that fails is listed by `uro ruleset list` and `GET /rulesets` with the reason
+  and refused, and it can never replace a built-in. `examples/plugins/uro-coinflip` is a complete
+  example; docs/06 has "Writing a ruleset plugin".
 - **Check outcomes are events, so world rules can react to them (D-64).** Every free-roam check now
   commits `CheckResolved` (the actor, the affordance, the outcome in the ruleset's own words, the
   roll's trace). A pack's `rules.yaml` can trigger on it: "every failed check raises the heat" is

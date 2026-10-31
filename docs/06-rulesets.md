@@ -48,7 +48,7 @@ Contract notes:
 - **Triggers make affordances mandatory, not just available (D-21):** each affordance declares trigger categories — intent/risk classes that *must* invoke it (e.g. `persuade` triggers on any attempt to change an NPC's disposition or intent). Plan validation enforces triggers deterministically (`13-contracts.md`), and consequence gating is *intended* to backstop it at commit: protected-state changes without mechanics backing get downgraded, so "I persuade the king to hand me the crown" can't succeed by phrasing alone. **Phase-3 status: only the plan-side trigger check ships; the commit-time consequence-gating backstop is NOT built yet (`13`, `extraction.py`) — a misclassified intent can still slip a low-stakes change through, so this is not yet a hard boundary.**
 - **Who chooses each turn's action (D-26):** the pipeline drives the initiative loop; on a PC's turn the action comes from the player (`encounter_action`, `08`); on an NPC's turn it comes from `npc_action`. Either way it runs through `resolve_action` and is recorded as `EncounterTurnTaken` (emitter R, `12`). *(Phase-3 PoC status, D-29: encounters AUTO-RESOLVE — both sides use `npc_action` and the whole fight commits as one free-roam beat; interactive per-turn play via `encounter_action` is deferred.)* NPC selection lives in the **ruleset as deterministic code**, not an LLM planner — because Phase 3 requires seeded-RNG, recorded-response replay, and dry-run (`10`, `05`), which a live LLM chooser would break. (The "no LLM in rulesets" rule alone wouldn't forbid a *planner*-side chooser; the determinism requirement is what settles it.)
 - Effects map to domain events so mechanical outcomes are timeline citizens like everything else: harm reaches the timeline as the ruleset's opaque final `SheetUpdated` (D-30 — never an hp-scalar event), loot as `ItemTransferred`, and the fight bracketed by `EncounterStarted`/`EncounterEnded`. (`ActorDamaged` is legacy — pre-D-30 — retained only for replaying old logs.)
-- The world pack declares `ruleset = "id@version"` + config; a campaign snapshots the ruleset id+version at creation so worlds don't break under it. **Binding (inc 6.3, D-30):** a **registry** (`rulesets/registry.py`) resolves the declared id → a bound `Ruleset`; `create_world` records the pack's ruleset on `WorldGenesis`, a campaign started on the world **pins** it (`CampaignStarted.ruleset_id`/`ruleset_version` + the `campaigns` projection), and `play`/`dry-run` **rebind** from the campaign's pin — so a PbtA pack (`worlds/emberfell`) plays under `uro_pbta`, not the old hard-coded default. An unknown id fails loudly. **Per-game settings (D-62):** a pack's `[ruleset.config]` is validated by the ruleset itself (an unknown or invalid key fails `validate`, import and `create_world`, never silently ignored), stored on the world's WorldGenesis, and passed to every ruleset built for the world's campaigns, on the CLI and the server alike. Each built-in exposes its numbers as settings defaulting to the rules as written (`uro ruleset list` shows them): Uro Pool `push_strain`, `strain_limit`, `triumph_marks`, `milestones_per_advance`, `trait_cap`; PbtA `xp_on_miss`, `xp_per_advance`, `stat_cap`; Uro Basic `max_level`. The PoC ships an explicit registry of the three built-ins (`uro-basic`, `uro-pbta`, `uro-pool` — `uro ruleset list`, `GET /rulesets`); entry-point discovery (an external pip package registering its own ruleset) is the documented extension seam (`register()`). *(`uro serve` rebinds per campaign too (2026-10-30): its engine serves its own ruleset and unpinned campaigns, and each other ruleset gets a sibling engine (`Engine.with_ruleset`) built once and sharing the router and the per-branch react locks, so a reload reaches it and D-34's counter serialization holds across rulesets.)*
+- The world pack declares `ruleset = "id@version"` + config; a campaign snapshots the ruleset id+version at creation so worlds don't break under it. **Binding (inc 6.3, D-30):** a **registry** (`rulesets/registry.py`) resolves the declared id → a bound `Ruleset`; `create_world` records the pack's ruleset on `WorldGenesis`, a campaign started on the world **pins** it (`CampaignStarted.ruleset_id`/`ruleset_version` + the `campaigns` projection), and `play`/`dry-run` **rebind** from the campaign's pin — so a PbtA pack (`worlds/emberfell`) plays under `uro_pbta`, not the old hard-coded default. An unknown id fails loudly. **Per-game settings (D-62):** a pack's `[ruleset.config]` is validated by the ruleset itself (an unknown or invalid key fails `validate`, import and `create_world`, never silently ignored), stored on the world's WorldGenesis, and passed to every ruleset built for the world's campaigns, on the CLI and the server alike. Each built-in exposes its numbers as settings defaulting to the rules as written (`uro ruleset list` shows them): Uro Pool `push_strain`, `strain_limit`, `triumph_marks`, `milestones_per_advance`, `trait_cap`; PbtA `xp_on_miss`, `xp_per_advance`, `stat_cap`; Uro Basic `max_level`. The PoC ships an explicit registry of the three built-ins (`uro-basic`, `uro-pbta`, `uro-pool` — `uro ruleset list`, `GET /rulesets`); a game can also install its own ruleset as a **plugin** (D-65, see "Writing a ruleset plugin" below), and an embedder can `register()` one in-process. *(`uro serve` rebinds per campaign too (2026-10-30): its engine serves its own ruleset and unpinned campaigns, and each other ruleset gets a sibling engine (`Engine.with_ruleset`) built once and sharing the router and the per-branch react locks, so a reload reaches it and D-34's counter serialization holds across rulesets.)*
 
 ## Built-in: "Uro Basic"
 
@@ -126,6 +126,33 @@ The built-ins:
   (default 1; 0 turns it off) clear strain.
 - **PbtA:** each move a PC missed in a fight marks `xp_on_conflict_miss` (default 1). It has no
   downtime rule.
+
+## Writing a ruleset plugin (D-65)
+
+A game that needs rules none of the built-ins have ships them as its own Python package. Uro finds it
+through an entry point; the example is `examples/plugins/uro-coinflip`, a complete coin-flip
+ruleset in one file. A plugin needs:
+- **An entry point** in the `uro.rulesets` group. Its name is the ruleset id a world declares
+  (`[ruleset] id`), and it points at a factory taking the world's `[ruleset.config]` (a class whose
+  `__init__(config)` validates them works):
+  ```toml
+  [project.entry-points."uro.rulesets"]
+  coinflip = "uro_coinflip:CoinFlip"
+  ```
+- **`api_version = RULESET_API_VERSION`** (`uro_core.rulesets.base`), the port version it was written
+  against; v1 is the D-63 port.
+- **Every port method:** the character model and `progression`, `config_schema`, free-roam checks,
+  the encounter loop, and the D-63 hooks `conclude_encounter` and `downtime`.
+- **Settings validation that refuses unknown keys,** so a typo in a pack fails `validate`.
+
+The registry checks each plugin once, at first use: its id must match its entry-point name, its
+`api_version` must match, and every method must be present. A plugin that fails any of these, or
+fails to import, is listed by `uro ruleset list` (and `GET /rulesets` as `unusable`) with the
+reason, and any world declaring it is refused. It is never silently missing. A plugin can't take
+a built-in's id; the built-in stays.
+
+Installing a plugin is trusting its code, like any package you install. World packs still never
+ship code (D-33): a pack names a ruleset, it can't bring one.
 
 ## Encounters as the federation seam
 

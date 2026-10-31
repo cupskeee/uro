@@ -1,0 +1,16 @@
+[project]
+name = "uro-coinflip"
+version = "0.1.0"
+description = "Example Uro ruleset plugin: every roll is a coin flip"
+requires-python = ">=3.12"
+dependencies = ["uro-core>=0.5"]
+
+# The one line that makes this a Uro ruleset plugin (D-65): an entry point in the `uro.rulesets`
+# group. Its NAME is the ruleset id a world declares (`[ruleset] id = "coinflip"`); it points at a
+# factory that takes the world's `[ruleset.config]` — here, the ruleset class itself.
+[project.entry-points."uro.rulesets"]
+coinflip = "uro_coinflip:CoinFlip"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
