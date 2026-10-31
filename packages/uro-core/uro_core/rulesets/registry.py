@@ -73,7 +73,10 @@ def _discover() -> None:
             subject = factory if isinstance(factory, type) else factory({})
             problem = ruleset_contract_problem(subject, ep.name)
         except Exception as exc:  # a plugin's own fault: report it, don't take the engine down
-            problem = f"{ep.value} failed to load: {type(exc).__name__}: {exc}"
+            # only the exception TYPE leaves the process (it reaches GET /rulesets and validate);
+            # the detail goes to the log
+            logger.warning("ruleset plugin %r failed to load", ep.name, exc_info=exc)
+            problem = f"{ep.value} failed to load ({type(exc).__name__}; see the server log)"
         if problem is None:
             _FACTORIES[ep.name] = factory
         else:
@@ -126,7 +129,12 @@ def resolve(
         )
         raise ValueError(f"invalid [ruleset.config] for {rid}: {problems}") from exc
     except Exception as exc:  # a plugin's or an embedder's own fault (e.g. a pre-D-62 factory)
-        raise ValueError(f"ruleset {rid!r} failed to build: {type(exc).__name__}: {exc}") from exc
+        # only the exception TYPE leaves the process — this message reaches validate endpoints and
+        # listings (an info-exposure path otherwise, CodeQL py/stack-trace-exposure); detail → log
+        logger.warning("ruleset %r failed to build", rid, exc_info=exc)
+        raise ValueError(
+            f"ruleset {rid!r} failed to build ({type(exc).__name__}; see the server log)"
+        ) from exc
     problem = ruleset_contract_problem(ruleset, rid)  # every built ruleset, register()'s too
     if problem is not None:
         raise ValueError(f"ruleset {rid!r} can't be used: {problem}")
