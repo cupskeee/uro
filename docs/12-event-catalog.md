@@ -113,7 +113,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | event_type | payload | emit | notes |
 |---|---|---|---|
 | `HistorySeeded` | seed, simulated_years, era_summary | H | seeding also emits ordinary Created/Edge events; this is the header |
-| `AdaptationApplied` | trigger_refs, scope, summary | H | header for an adaptation pass — at fork/time-skip AND after a major in-play event (OQ-8); ripple events carry `caused_by=history, pass=adaptation` |
+| `AdaptationApplied` | trigger_refs, scope (`timeskip` in place, `fork-timeskip` on a fork), summary | H | header for an adaptation pass — at fork/time-skip AND after a major in-play event (OQ-8); ripple events carry `caused_by=history, pass=adaptation` |
 
 ## Rules of the catalog
 

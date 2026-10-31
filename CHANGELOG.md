@@ -16,7 +16,7 @@ Found in the first live run of v0.7.0 (docs/16, "the v0.7 live run").
 ### Added
 - **Why a model call failed.** A failed call now records its exception types and any HTTP
   status, e.g. `ProviderError ← HTTPStatusError (HTTP 429)`, never the exception text (it can
-  carry a credential). `uro calls` marks it `FAILED:`, `GET /llm-calls` returns it, and `uro usage`
+  carry a credential). A cancelled call records `CancelledError`. `uro calls` marks it `FAILED:`, `GET /llm-calls` returns it, and `uro usage`
   and `GET /usage` count failures per stage.
 
 ### Changed
@@ -31,13 +31,27 @@ Found in the first live run of v0.7.0 (docs/16, "the v0.7 live run").
 - **The extractor sees the latest claims** (the last 15 on the branch) as known, whatever they're
   about, so a fact said in new words a beat later isn't recorded again.
 - **Backfill** writes a conflict in the world's own voice; it used to address "the players".
+- **WebSocket (`/campaigns/{c}/play`):** an `intent` frame may carry an `id`; the frames that
+  settle it (`beat_started`, `beat_committed`, `beat_failed`, `not_your_turn`, `proposal_opened`,
+  `intent_rejected`) echo it as `intent_id`. Clients that send no `id` see no change.
+- **Embedders of `uro-server`:** `create_app` now runs a lifespan and takes `startup=` and
+  `shutdown=` async callables (that is how `uro serve` opens and closes its store). `on_event`
+  hooks attached to the returned app still run, after `startup` and before `shutdown`.
+- **Custom stores:** the store interface gains `recent_claims(branch_id, limit,
+  exclude_origins=())`.
+- **An in-place time-skip's `AdaptationApplied` scope** is `timeskip`; a fork's stays
+  `fork-timeskip`.
 
 ### Fixed
 - **A retold rumor no longer becomes fact.** The extractor now sees what the characters on stage
   already believe, as the narrator does. Before, a character retelling a third-hand rumor created
-  a new claim they believed outright, beside the rumor and its trail back to the witness.
+  a new claim they believed outright, beside the rumor and its trail back to the witness. Only an
+  exact restatement is deduplicated structurally; skipping a reworded retelling is up to the model
+  (it did, in the replayed live run).
 - **`uro connect` waits for each beat** before prompting again. The prompt used to come back
-  above the streaming narration, so it was easy to send an intent twice. It also prints a rejected
+  above the streaming narration, so it was easy to send an intent twice. Each intent carries an
+  `id` the server echoes as `intent_id` on the frames that settle it, so another player's identical
+  intent never releases yours. It also prints a rejected
   intent, which it used to ignore.
 - **An in-place time-skip** (`uro campaign time-skip`, `POST /campaigns/{c}/time-skip`) records
   its reason as `time-skip`, not `time-skip on fork`.

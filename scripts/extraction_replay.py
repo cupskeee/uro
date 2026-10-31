@@ -58,9 +58,12 @@ def _label(e: DomainEvent | dict[str, Any]) -> str:
 
 
 async def _beat_branch(store: PostgresEventStore, world_id: str) -> tuple[str, int]:
-    """The source world's branch with the most beats (its played campaign)."""
+    """The source world's branch with the most beats (its played campaign). An earlier replay is
+    a fork of this world with as many beats, so it is never a candidate (review)."""
     best = ("", -1)
     for b in await store.list_branches(world_id):
+        if b.name.startswith("replay-"):
+            continue
         n = len(await store.recent_beats(b.branch_id, 10_000))
         best = max(best, (b.branch_id, n), key=lambda x: x[1])
     return best

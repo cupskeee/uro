@@ -55,7 +55,7 @@ from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
-from uro_core.timeline.models import STARTING_GEAR
+from uro_core.timeline.models import FORK_TIME_SKIP, STARTING_GEAR
 
 from uro_server.sessions import SessionHub, TokenRegistry
 
@@ -144,6 +144,13 @@ def _new_pc_sheet(ruleset: Any) -> dict[str, Any]:
 
 
 _FEED_RETRY_S = 1.0  # first wait before reconnecting a failed live commit feed; doubles to 30s
+
+
+async def _call(hook: Callable[[], Any]) -> None:
+    """Run a startup/shutdown hook that may be sync or async (FastAPI accepts both)."""
+    result = hook()
+    if asyncio.iscoroutine(result):
+        await result
 
 
 class _Announced:
@@ -406,7 +413,7 @@ def engine_deps(
         # advances in-fiction time AND fires the world's downtime agenda rules (D-33), no LLM. A
         # rule-less world → a plain time-skip. Returns the new in-fiction day.
         playing = await time_engine(lambda: engine_for_branch(branch_id), f"branch {branch_id}")
-        await playing.agenda_tick(branch_id, days, reason="time-skip on fork")
+        await playing.agenda_tick(branch_id, days, reason=FORK_TIME_SKIP)
         return await store.current_world_time(branch_id)
 
     async def preview_beat(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
@@ -605,30 +612,41 @@ def create_app(
     shutdown: Callable[[], Awaitable[None]] | None = None,
 ) -> FastAPI:
     """The server app. `startup`/`shutdown` run at the start and end of its lifespan: `uro serve`
-    opens and closes its store there, on uvicorn's own loop. (FastAPI never runs `on_event` hooks
-    on an app that has a `lifespan`, so they must come in this way.)"""
+    opens and closes its store there, on uvicorn's own loop. FastAPI skips `on_event` hooks on an
+    app that has a `lifespan`, so this one runs any an embedder attaches itself (as v0.7's `uro
+    serve` did), after `startup` and before `shutdown`."""
 
     @contextlib.asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        """The caller's `startup` first, then the live commit feed (D-67) when one is configured;
-        torn down in reverse."""
-        if startup is not None:
-            await startup()
+    async def lifespan(served: FastAPI) -> AsyncIterator[None]:
+        """`startup`, any `on_event("startup")` hooks, then the live commit feed (D-67) when one is
+        configured; torn down in reverse. `shutdown` always runs — after a failed startup, and
+        even if closing the feed fails (NATS mid-reconnect) — so the store is never left open."""
         task: asyncio.Task[None] | None = None
         try:
+            if startup is not None:
+                await startup()
+            for hook in getattr(served.router, "on_startup", []):
+                await _call(hook)
             if commit_feed is not None:
                 await commit_feed.connect()
                 task = asyncio.create_task(consume_commits(commit_feed))
             yield
         finally:
-            if task is not None:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-            if commit_feed is not None:
-                await commit_feed.close()
-            if shutdown is not None:
-                await shutdown()
+            try:
+                if task is not None:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                if commit_feed is not None:
+                    try:
+                        await commit_feed.close()
+                    except Exception as exc:
+                        logger.warning("closing the live commit feed failed: %s", exc)
+                for hook in getattr(served.router, "on_shutdown", []):
+                    await _call(hook)
+            finally:
+                if shutdown is not None:
+                    await shutdown()
 
     app = FastAPI(title="Uro Engine server", lifespan=lifespan)
     hub = SessionHub()
@@ -2187,6 +2205,7 @@ def create_app(
                         campaign_id,
                         participant,
                         str(msg.get("text", "")),
+                        msg.get("id"),
                     )
                 elif mtype == "table_talk":
                     # The NON-CANON coordination lane (D-38): out-of-world debate/proposals. It only
@@ -2271,17 +2290,22 @@ async def _run_and_broadcast(
     campaign_id: str,
     participant: str,
     text: str,
+    intent_id: object = None,
 ) -> None:
     """Admit the intent, run the beat, and broadcast its narration + commit to the whole session
-    (docs/08 broadcast-shaped output) — so every connected client sees the SAME beat."""
+    (docs/08 broadcast-shaped output) — so every connected client sees the SAME beat. A client's
+    optional intent `id` is echoed as `intent_id` on the frames that settle it, so the sender can
+    tell its own outcome from another player's identical text (review)."""
     if not text.strip():
         return
+    echo = {"intent_id": intent_id[:64]} if isinstance(intent_id, str) and intent_id else {}
     decision = await arbiter.admit(campaign_id, participant, text)
     if decision == AdmitDecision.NOT_YOUR_TURN:
         # Valid intent, but another participant holds the turn (round-robin, OQ-7) — tell the
         # client to hold; it is NOT rejected, so a client may retry when the token rotates.
         await hub.publish(
-            campaign_id, {"type": "not_your_turn", "participant_id": participant, "text": text}
+            campaign_id,
+            {"type": "not_your_turn", "participant_id": participant, "text": text, **echo},
         )
         return
     if decision == AdmitDecision.QUEUED:
@@ -2290,16 +2314,19 @@ async def _run_and_broadcast(
         # lane and the holder can enact it on their turn. NOT a rejection (the client may see it
         # acted on next); NOT a silent not_your_turn (a proposal is a first-class, visible event).
         await hub.publish(
-            campaign_id, {"type": "proposal_opened", "participant_id": participant, "text": text}
+            campaign_id,
+            {"type": "proposal_opened", "participant_id": participant, "text": text, **echo},
         )
         return
     if decision != AdmitDecision.ADMITTED:  # REJECTED → no beat now
         await hub.publish(
-            campaign_id, {"type": "intent_rejected", "participant_id": participant, "text": text}
+            campaign_id,
+            {"type": "intent_rejected", "participant_id": participant, "text": text, **echo},
         )
         return
     await hub.publish(
-        campaign_id, {"type": "beat_started", "participant_id": participant, "intent": text}
+        campaign_id,
+        {"type": "beat_started", "participant_id": participant, "intent": text, **echo},
     )
     chunks: list[str] = []
     try:
@@ -2323,6 +2350,7 @@ async def _run_and_broadcast(
                 "participant_id": participant,
                 "intent": text,
                 "error": "beat failed; nothing was saved",
+                **echo,
             },
         )
         # A failed turn STILL yields the token (cross-phase review P7xP3): otherwise a
@@ -2341,6 +2369,7 @@ async def _run_and_broadcast(
             "intent": text,
             "narration": "".join(chunks).strip(),
             "commit_id": commit_id,  # matches the `commit` a client may get for it (D-67)
+            **echo,
         },
     )
     # The beat committed — let the arbiter rotate the turn token to the next participant (OQ-7).

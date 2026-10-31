@@ -320,3 +320,62 @@ async def test_a_failed_call_records_why(store: PostgresEventStore) -> None:
     assert row["error"] == "RuntimeError"
     (usage,) = await store.usage_by_stage(world_id=world.world_id)
     assert (usage["calls"], usage["failed"]) == (1, 1)
+
+
+class _Breaks:
+    """Fails mid-stream and on embed; `slow` hangs a complete so it can be cancelled."""
+
+    async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
+        yield "The "
+        raise RuntimeError("stream dropped")
+
+    async def complete(self, req: CompletionRequest) -> str:
+        await asyncio.sleep(10)
+        return "{}"
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("embedder down")
+
+
+async def test_every_kind_of_call_records_its_failure() -> None:
+    # Review: only `complete` was tested, and a cancelled call (a server stopping mid-beat) was
+    # recorded with no error, i.e. as a success.
+    router, calls = _recording(_Breaks())
+    with pytest.raises(RuntimeError):
+        _ = [c async for c in router.stream("narrator", MSG)]
+    with pytest.raises(RuntimeError):
+        await router.embed("embedder", ["x"])
+    task = asyncio.create_task(router.complete("planner", MSG))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert [(c.stage_tag, c.error) for c in calls] == [
+        ("narrator", "RuntimeError"),
+        ("embedder", "RuntimeError"),
+        ("planner", "CancelledError"),
+    ]
+
+    router, calls = _recording(_Fake())
+    _ = [c async for c in router.stream("narrator", MSG)]  # a consumer reading to the end
+    stream = router.stream("narrator", MSG)
+    await anext(stream)
+    await stream.aclose()  # a consumer stopping early is not a failure
+    assert [c.error for c in calls] == [None, None]
+
+
+async def test_a_codex_http_error_records_its_status() -> None:
+    # Review: the Codex adapter raised its own ProviderError for an HTTP error with nothing
+    # chained, so the live run's chat provider recorded a bare "ProviderError" with no status.
+    async def token(force: bool) -> str:
+        return "t"
+
+    codex = CodexResponsesProvider(
+        model="gpt-5",
+        token_provider=token,
+        transport=httpx.MockTransport(lambda r: httpx.Response(429, json={"error": "slow down"})),
+    )
+    router, calls = _recording(codex)
+    with pytest.raises(ProviderError):
+        await router.complete("planner", MSG)
+    assert calls[0].error == "ProviderError ← HTTPStatusError (HTTP 429)"

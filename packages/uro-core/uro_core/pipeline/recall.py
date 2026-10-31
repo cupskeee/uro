@@ -166,14 +166,15 @@ async def assemble_recall(
             if n.pinned or any(_mentions(haystack, ref.split(":", 1)[-1]) for ref in n.entity_refs)
         ]
 
-    # The latest claims, minus what's already recalled. A module rumor is left out: it is never a
-    # restatement target (D-58), so a narrator confirming one must still be free to record it.
+    # The latest claims, minus what's already recalled (over-fetched so those don't shrink the
+    # window). A module rumor is left out in the query itself: it is never a restatement target
+    # (D-58), so a narrator confirming one must still be free to record it — and a reaction pass
+    # that spreads many rumors must not crowd the window out (review).
     recalled_ids = {c.claim_id for c in [*claims, *belief_claims]}
-    recent_claims = [
-        c
-        for c in await store.recent_claims(branch_id, RECENT_CLAIMS)
-        if c.claim_id not in recalled_ids and c.origin != "module"
-    ]
+    latest = await store.recent_claims(
+        branch_id, RECENT_CLAIMS + len(recalled_ids), exclude_origins=("module",)
+    )
+    recent_claims = [c for c in latest if c.claim_id not in recalled_ids][:RECENT_CLAIMS]
 
     return RecallBundle(
         recent_beats=recent,

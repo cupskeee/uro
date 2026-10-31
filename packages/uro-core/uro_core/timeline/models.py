@@ -62,6 +62,10 @@ class LineageEntry(BaseModel):
 # campaign create/join), so the surfaces can't drift; an adopted actor keeps what it owns.
 STARTING_GEAR: tuple[str, ...] = ("a traveler's knife",)
 
+# The reason a FORK's time-skip records (`uro branch fork --time-skip-days`, the REST fork). An
+# in-place skip records "time-skip"; the two also get distinct AdaptationApplied scopes.
+FORK_TIME_SKIP = "time-skip on fork"
+
 
 class RulesetPin(BaseModel):
     """The ruleset a world declares, from its WorldGenesis: id, version, and the game's settings

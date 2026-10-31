@@ -7,6 +7,7 @@ lets per-role optimization arrive later without touching the pipeline.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -75,7 +76,7 @@ class ProviderRouter:
             try:
                 async for chunk in provider.stream(req):
                     yield chunk
-            except Exception as exc:  # (a consumer stopping early is not a failure)
+            except (Exception, asyncio.CancelledError) as exc:  # (a consumer stopping early isn't)
                 error = describe_failure(exc)
                 raise
             finally:  # narration is the beat's own text: metered, not stored again here
@@ -107,9 +108,10 @@ class ProviderRouter:
             try:
                 raw = await provider.complete(req)
                 return raw
-            except Exception as exc:
-                # a failure keeps whatever the provider did return — a truncated extractor JSON is
-                # exactly the response worth reading afterwards (review)
+            except (Exception, asyncio.CancelledError) as exc:
+                # (an interrupted call isn't a success either) A failure keeps whatever the
+                # provider did return — a truncated extractor JSON is exactly the response worth
+                # reading afterwards (review)
                 raw = getattr(exc, "partial_response", None)
                 error = describe_failure(exc)
                 raise
@@ -130,7 +132,7 @@ class ProviderRouter:
         with collect_usage() as usage:
             try:
                 return await provider.embed(texts)
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 error = describe_failure(exc)
                 raise
             finally:

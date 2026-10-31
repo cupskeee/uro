@@ -261,3 +261,38 @@ async def test_the_extractor_sees_the_latest_claims_whatever_their_subject(
     world_id = (await store.get_branch(branch)).world_id  # type: ignore[union-attr]
     fork = await store.fork_branch(world_id, head, f"before-{new_id()}")
     assert await store.recent_claims(fork.branch_id, 15) == []  # its own history only
+
+
+async def test_rumors_and_rerecordings_never_crowd_out_the_latest_claims(
+    store: PostgresEventStore,
+) -> None:
+    # Review: the window was cut to 15 BEFORE module rumors and repeat recordings were dropped, so
+    # one reaction pass spreading 15+ rumors — or a Chronicler bundle replayed 15 times — left the
+    # extractor no latest claims at all.
+    from uro_core.domain.events import module_cause
+
+    branch = await _branch(store)
+    await store.append_beat(
+        branch, [claim_recorded(claim_id=f"c:{new_id()}", statement="The Watch calls it talk.")]
+    )
+    await store.append_beat(
+        branch,
+        [
+            claim_recorded(
+                claim_id=f"c:{new_id()}",
+                statement=f"Rumor {n} spreads.",
+                origin="module",
+                caused_by=module_cause("rumor-mill"),
+            )
+            for n in range(20)
+        ],
+    )
+    replayed = f"c:e:{new_id()}"
+    for _ in range(16):
+        await store.append_beat(
+            branch,
+            [claim_recorded(claim_id=replayed, statement="A feat at the wall.", origin="external")],
+        )
+    recall = await assemble_recall(store, branch, "I ask what people say", 8)
+    statements = [c.statement for c in recall.recent_claims]
+    assert statements == ["A feat at the wall.", "The Watch calls it talk."]
