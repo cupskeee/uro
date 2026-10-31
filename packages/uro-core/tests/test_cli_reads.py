@@ -240,3 +240,28 @@ async def test_uro_calls_shows_what_the_extractor_returned(
     assert "extractor" in result.output and '"name": "Ilse"' in result.output
     usage = await asyncio.to_thread(CliRunner().invoke, app, ["usage", "--world", w.world_id])
     assert "extractor" in usage.output and "narrator" in usage.output
+
+
+async def test_uro_world_probe_is_metered(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Review: `world probe` / `world backfill` spend tokens like play does, so their calls are
+    # recorded too — whenever the database is reachable (they still run on a pack file without it).
+    monkeypatch.setenv("URO_DATABASE_URL", store.dsn)
+    pack = Path(__file__).resolve().parents[3] / "worlds" / "thornwood"
+
+    async def planner_calls() -> int:
+        return len(await store.recent_llm_calls(stage="planner", limit=100_000))
+
+    before = await planner_calls()
+    result = await asyncio.to_thread(
+        CliRunner().invoke, app, ["world", "probe", str(pack), "--provider", "stub", "--tries", "1"]
+    )
+    assert result.exit_code == 0, result.output
+    assert await planner_calls() > before
+
+    monkeypatch.setenv("URO_DATABASE_URL", "postgresql://nobody@127.0.0.1:1/none")
+    offline = await asyncio.to_thread(
+        CliRunner().invoke, app, ["world", "probe", str(pack), "--provider", "stub", "--tries", "1"]
+    )
+    assert offline.exit_code == 0, offline.output  # no database: unmetered, not broken

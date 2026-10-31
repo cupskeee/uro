@@ -330,26 +330,28 @@ async def probe_connection(
 ) -> dict[str, Any]:
     """A 1-call liveness probe of a connection (D-47 slice 3) — `POST /providers/{id}/test` and
     `uro provider test`. Returns `{ok, detail}`: a provider failure is `ok: False`, not an error.
-    KeyError if the connection doesn't exist."""
-    from uro_core.providers.base import CompletionRequest, Message
+    KeyError if the connection doesn't exist. The call is metered (stage `test`, D-66) when the
+    store can record it."""
+    from uro_core.providers.base import Message
 
     conn = await store.get_connection(connection_id)
     if conn is None:
         raise KeyError(connection_id)
     probe_model = model or default_probe_model(conn)
     provider = provider_from_connection(conn, probe_model, await _access_token(store, conn))
+    router = ProviderRouter(
+        bindings={"test": provider}, recorder=getattr(store, "record_llm_call", None)
+    )
     try:
         if classify_modality(conn.provider, probe_model) == "embedding":
-            await provider.embed(["ping"])
+            await router.embed("test", ["ping"])
         else:
-            await provider.complete(
-                CompletionRequest(
-                    messages=[Message(role="user", content="ping")],
-                    stage_tag="test",
-                    # A ceiling, not a target (see _PROBE_MAX_TOKENS): ~free on a chat model,
-                    # but gives a reasoning model room past its hidden-reasoning spend.
-                    max_tokens=_PROBE_MAX_TOKENS,
-                )
+            await router.complete(
+                "test",
+                [Message(role="user", content="ping")],
+                # A ceiling, not a target (see _PROBE_MAX_TOKENS): ~free on a chat model, but
+                # gives a reasoning model room past its hidden-reasoning spend.
+                max_tokens=_PROBE_MAX_TOKENS,
             )
     except Exception as exc:
         # NEVER echo the raw provider/httpx exception text: it can carry the plaintext key (e.g.

@@ -17,13 +17,15 @@ services:
       retries: 10
 
   # Optional (D-57): the NATS JetStream server the outbox relay publishes to. Not started by a plain
-  # `docker compose up` — opt in with `docker compose --profile nats up -d`.
+  # `docker compose up` — opt in with `docker compose --profile nats up -d`. Bound to localhost:
+  # anything that can publish to it can announce commits to `uro serve --nats` (which then checks
+  # each one against its own database before telling a client).
   nats:
     image: nats:2.10-alpine
     command: ["-js"]
     profiles: ["nats"]
     ports:
-      - "4222:4222"
+      - "127.0.0.1:4222:4222"
 
 volumes:
   pgdata:

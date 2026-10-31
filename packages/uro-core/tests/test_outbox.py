@@ -228,3 +228,54 @@ async def test_a_server_feed_receives_what_the_relay_publishes(outbox: PostgresE
         cleanup = await _nats.connect(NATS_URL)
         await cleanup.jetstream().delete_stream(stream)
         await cleanup.close()
+
+
+async def test_a_commit_is_known_by_its_outbox_row(outbox: PostgresEventStore) -> None:
+    # D-67 review: a server trusts a live-feed message only if its own database made the commit.
+    world = await outbox.create_world(f"outbox-{new_id()}")
+    commit = await outbox.append_beat(
+        world.main_branch_id, [actor_created(actor_id="a:k", name="K")]
+    )
+    assert await outbox.outbox_commit(commit.commit_id) == (world.world_id, world.main_branch_id)
+    assert await outbox.outbox_commit(new_id()) is None  # a forged id names nothing
+
+
+async def test_a_streamed_beat_names_its_commit_before_its_reactions_run(
+    store: PostgresEventStore,
+) -> None:
+    # D-67 review: a server registers its own commit the moment it's APPENDED. Reactions and
+    # memory follow and take time; a relay could publish the commit meanwhile, and the server
+    # must already know it as its own, or it would show the beat twice.
+    from collections.abc import AsyncIterator
+    from typing import Any
+
+    from uro_core.pipeline.engine import Engine
+    from uro_core.providers.adapters.stub import hashing_embedding
+    from uro_core.providers.base import CompletionRequest
+    from uro_core.providers.router import ProviderRouter
+
+    class _Quiet:
+        async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
+            yield "Rain."
+
+        async def complete(self, req: CompletionRequest) -> str:
+            return '{"actors": [], "claims": []}'
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [hashing_embedding(t) for t in texts]
+
+    order: list[str] = []
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Quiet()))
+    react = engine.react
+
+    async def noting_react(*args: Any, **kwargs: Any) -> Any:
+        order.append("react")
+        return await react(*args, **kwargs)
+
+    engine.react = noting_react  # type: ignore[method-assign]
+    world = await store.create_world(f"outbox-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    async for _ in engine.run_beat_stream(campaign, "p1", "I wait", on_commit=order.append):
+        pass
+    head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+    assert order == [head, "react"]

@@ -154,7 +154,9 @@ class Engine:
         if problem is not None:  # fail here, not mid-fight on a missing hook (D-65 review)
             raise ValueError(f"ruleset {getattr(ruleset, 'id', '?')!r} can't be used: {problem}")
         self._store = store
-        self._meter_into(router)
+        # this engine's calls are metered into ITS store, passed on every call (D-66): a router
+        # shared with another engine never meters this one's calls elsewhere (review)
+        self._recorder = getattr(store, "record_llm_call", None)  # a bare test double: none
         self._shared = _Shared(router)
         # The bound ruleset enables the planner + mechanics gate (D-28). None → Phase-1 flow.
         self._ruleset = ruleset
@@ -163,13 +165,6 @@ class Engine:
         # bare = ablation baseline (thesis T1): a raw-transcript GM — no structured/
         # semantic recall, no extraction, no memory. Just the narrator over recent beats.
         self._bare = bare
-
-    def _meter_into(self, router: ProviderRouter) -> None:
-        """Every call through this engine's router is metered into its store (D-66) — unless the
-        caller already gave the router a recorder of its own."""
-        record = getattr(self._store, "record_llm_call", None)  # a bare test double may have none
-        if router.recorder is None and record is not None:
-            router.recorder = record
 
     def with_ruleset(self, ruleset: Ruleset | None) -> Engine:
         """A sibling engine bound to another ruleset (a server hosting campaigns of several
@@ -210,7 +205,6 @@ class Engine:
         mixed-provider beat, never a crash or a leak. A true per-beat router snapshot (thread one
         router through the pipeline helpers) is the clean fix — deferred, low-impact. Siblings
         from `with_ruleset` share the router, so this rebinds them too."""
-        self._meter_into(router)
         self._shared.router = router
 
     @property
@@ -257,7 +251,9 @@ class Engine:
         )
         recent_texts = {b.narration for b in recall.recent_beats}
         try:
-            vectors = await self._router.embed("embedder", [intent_text], branch_id=branch_id)
+            vectors = await self._router.embed(
+                "embedder", [intent_text], branch_id=branch_id, recorder=self._recorder
+            )
             vector = vectors[0] if vectors else None
             if not vector or not any(
                 vector
@@ -289,7 +285,9 @@ class Engine:
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         role = self._narration_role(ctx, encounter_events)
-        stream = self._router.stream(role, messages, branch_id=campaign.branch_id)
+        stream = self._router.stream(
+            role, messages, branch_id=campaign.branch_id, recorder=self._recorder
+        )
         narration = "".join([chunk async for chunk in stream]).strip()
         return await self._finish(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
@@ -302,7 +300,7 @@ class Engine:
         intent_text: str,
         *,
         plan: BeatPlan | None = None,
-        on_commit: Callable[[BeatResult], None] | None = None,
+        on_commit: Callable[[str], None] | None = None,
     ) -> AsyncIterator[str]:
         """Stream narration to the caller, then extract + commit once the stream ends.
 
@@ -316,14 +314,22 @@ class Engine:
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         role = self._narration_role(ctx, encounter_events)
         collected: list[str] = []
-        async for chunk in self._router.stream(role, messages, branch_id=campaign.branch_id):
+        async for chunk in self._router.stream(
+            role, messages, branch_id=campaign.branch_id, recorder=self._recorder
+        ):
             collected.append(chunk)
             yield chunk
-        result = await self._finish(
-            campaign, participant_id, intent_text, "".join(collected).strip(), ctx, encounter_events
+        # a streaming caller learns the commit the MOMENT it's appended — before the post-commit
+        # work (memory, reactions), during which a relay could already publish it (D-67 review)
+        await self._finish(
+            campaign,
+            participant_id,
+            intent_text,
+            "".join(collected).strip(),
+            ctx,
+            encounter_events,
+            on_appended=on_commit,
         )
-        if on_commit is not None:  # a streaming caller learns what it committed (D-67)
-            on_commit(result)
 
     def _narration_role(self, ctx: _Context, encounter_events: list[DomainEvent] | None) -> str:
         """Which model voices this beat. Conversational beats route through the `dialogue` model
@@ -473,7 +479,9 @@ class Engine:
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         role = self._narration_role(ctx, encounter_events)
-        stream = self._router.stream(role, messages, branch_id=campaign.branch_id)
+        stream = self._router.stream(
+            role, messages, branch_id=campaign.branch_id, recorder=self._recorder
+        )
         narration = "".join([chunk async for chunk in stream]).strip()
         events, _, _ = await self._beat_events(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
@@ -488,11 +496,14 @@ class Engine:
         narration: str,
         ctx: _Context,
         encounter_events: list[DomainEvent] | None = None,
+        on_appended: Callable[[str], None] | None = None,
     ) -> BeatResult:
         events, extracted_n, beat_id = await self._beat_events(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
         )
         commit = await self._store.append_beat(campaign.branch_id, events)
+        if on_appended is not None:
+            on_appended(commit.commit_id)
         if not self._bare:
             await self._remember(
                 campaign.branch_id,
@@ -930,6 +941,7 @@ class Engine:
                 temperature=0.2,
                 max_tokens=1024,
                 branch_id=campaign.branch_id,
+                recorder=self._recorder,
             )
             plan = parse_plan(raw)
             if plan is None:
@@ -1005,7 +1017,9 @@ class Engine:
         out and fail a beat that persisted. The memory index is a rebuildable aux cache.
         """
         try:
-            vectors = await self._router.embed("embedder", [text], branch_id=branch_id)
+            vectors = await self._router.embed(
+                "embedder", [text], branch_id=branch_id, recorder=self._recorder
+            )
             vector = vectors[0] if vectors else None
             if not vector or not any(vector):  # empty/zero-norm → nothing worth indexing
                 return
@@ -1041,6 +1055,7 @@ class Engine:
                     temperature=0.1,
                     max_tokens=4096,
                     branch_id=branch_id,
+                    recorder=self._recorder,
                 )
             except ProviderError as exc:
                 # A call failure is the adapter's to retry, not ours — bail to narration-only.

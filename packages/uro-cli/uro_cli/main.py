@@ -11,7 +11,7 @@ import json
 import sys
 import time
 import webbrowser
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +86,27 @@ app.add_typer(policy_app, name="extraction-policy")
 _ROLES = tuple(sorted(ROLES))
 
 PARTICIPANT = "player-1"  # Phase 0 is single-player; participants arrive in Phase 5.
+
+
+@contextlib.asynccontextmanager
+async def _metered(router: ProviderRouter) -> AsyncIterator[ProviderRouter]:
+    """Meter a command's model calls when the database is reachable (D-66). Best effort: `world
+    backfill` and `world probe` work on a pack file alone, so a down database never stops them —
+    their calls just go unrecorded."""
+    store: PostgresEventStore | None = None
+    try:
+        connecting = build_store()
+        await asyncio.wait_for(connect_store(connecting), timeout=5)
+        store = connecting
+    except Exception:
+        pass  # no database: run unmetered
+    if store is not None:
+        router.recorder = store.record_llm_call
+    try:
+        yield router
+    finally:
+        if store is not None:
+            await store.close()
 
 
 def _run_async(coro_factory) -> None:  # type: ignore[no-untyped-def]
@@ -355,7 +376,8 @@ def world_backfill(
         if before.grade == "runnable":
             typer.echo("pack is already runnable — nothing to backfill")
             return
-        augmented, added = await backfill_gaps(pack, build_router(provider, model), report=before)
+        async with _metered(build_router(provider, model)) as router:
+            augmented, added = await backfill_gaps(pack, router, report=before)
         after = check_sufficiency(augmented)
         typer.echo(f"backfill: {before.grade} → {after.grade}")
         for a in added:
@@ -386,7 +408,8 @@ def world_probe(
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
-        report = await run_probes(pack.manifest, build_router(provider, model), tries=tries)
+        async with _metered(build_router(provider, model)) as router:
+            report = await run_probes(pack.manifest, router, tries=tries)
         typer.echo(f"probe report for {report.world}: {'OK' if report.ok else 'ISSUES'}")
         for r in report.results:
             gate = f"  (gates {r.gate_for})" if r.gate_for else ""
@@ -721,7 +744,7 @@ def connect(
                             for beat in msg.get("beats") or []:
                                 typer.echo(f"\n[{beat['participant_id']}] {beat['narration']}")
                             if not msg.get("beats"):
-                                typer.echo("\n  · the world moved on (time passed off-screen)")
+                                typer.echo("\n  · the world changed (no new narration)")
                         elif kind in ("participant_joined", "participant_left"):
                             typer.echo(f"  · {msg['participant_id']} {kind.split('_')[1]}")
 

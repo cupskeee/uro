@@ -2360,24 +2360,72 @@ class _QueueFeed:
         import queue
 
         self.q: Any = queue.Queue()
+        self.connects = 0
 
     async def connect(self) -> None:
-        pass
+        self.connects += 1
 
     def __aiter__(self) -> AsyncIterator[Any]:
         return self._messages()
 
     async def _messages(self) -> AsyncIterator[Any]:
         import asyncio
+        import queue
 
-        while (message := await asyncio.to_thread(self.q.get)) is not None:
+        while True:  # polled, so a cancelled consumer never leaves a thread blocked on the queue
+            try:
+                message = self.q.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.01)
+                continue
             yield message
 
     async def close(self) -> None:
-        self.q.put(None)
+        pass
+
+
+class _FeedStore:
+    """What a live feed checks a message against: the commits this database made (id → branch +
+    events; None events = unreadable) and the branch each campaign plays on (default b1)."""
+
+    def __init__(
+        self,
+        commits: dict[str, tuple[str, list[dict[str, Any]] | None]],
+        branches: dict[str, str] | None = None,
+    ) -> None:
+        self.commits, self.branches = commits, branches or {}
+
+    async def get_campaign(self, campaign_id: str) -> Campaign:
+        branch = self.branches.get(campaign_id, "b1")
+        return Campaign(campaign_id=campaign_id, world_id="w", branch_id=branch)
+
+    async def pc_seats(self, campaign_id: str) -> list[str]:
+        return []
+
+    async def outbox_commit(self, commit_id: str) -> tuple[str, str] | None:
+        return ("w", self.commits[commit_id][0]) if commit_id in self.commits else None
+
+    async def commit_detail(self, world_id: str, commit_id: str) -> BundleCommit | None:
+        if commit_id not in self.commits:
+            return None
+        events = self.commits[commit_id][1]
+        if events is None:
+            raise RuntimeError("unreadable commit")
+        return BundleCommit(
+            commit_id=commit_id,
+            parent_id=None,
+            depth=3,
+            events=[
+                BundleEvent(
+                    event_id=f"e{n}", seq=n, event_type=e["event_type"], payload=e["payload"]
+                )
+                for n, e in enumerate(events)
+            ],
+        )
 
 
 def _commit(commit_id: str, branch: str, *events: dict[str, Any]) -> Any:
+    """A feed message — a notification only: the server reads the commit from its own store."""
     from uro_core.ports.outbox import OutboxMessage
 
     return OutboxMessage(
@@ -2386,33 +2434,37 @@ def _commit(commit_id: str, branch: str, *events: dict[str, Any]) -> Any:
         branch_id=branch,
         commit_id=commit_id,
         parent_id=None,
-        depth=3,
+        depth=9,
         events=list(events),
     )
 
 
+_BEAT = {
+    "event_type": "BeatResolved",
+    "payload": {"participant_id": "p9", "intent_text": "I pray", "narration": "Bells ring."},
+}
+
+
 def test_live_commits_reach_the_campaign_s_clients_without_its_secrets() -> None:
     # D-67: a commit made ANYWHERE (another server, the CLI) reaches the clients of every live
-    # campaign on its branch, as a player may see it: the beats' narration, never raw events.
-    class _Store:
-        async def get_campaign(self, campaign_id: str) -> Campaign:
-            return Campaign(campaign_id=campaign_id, world_id="w", branch_id="b1")
-
-        async def pc_seats(self, campaign_id: str) -> list[str]:
-            return []
-
-    deps = _fake_deps()
-    deps.store = _Store()  # type: ignore[assignment]
-    deps.last_commit = lambda campaign_id: "c-own"  # what this server's own beat committed
-    feed = _QueueFeed()
-    beat = {
-        "event_type": "BeatResolved",
-        "payload": {"participant_id": "p9", "intent_text": "I pray", "narration": "Bells ring."},
-    }
+    # campaign on its branch, as a player may see it: the beats' narration, never raw events. The
+    # feed message only says WHICH commit: one this database never made is dropped, and the frame
+    # is built from the stored commit, never the message (review: NATS is not trusted).
     secret = {
         "event_type": "ClaimRecorded",
         "payload": {"statement": "the abbot lies", "truth": True},
     }
+    deps = _fake_deps()
+    deps.store = _FeedStore(  # type: ignore[assignment]
+        {
+            "c-own": ("b1", [_BEAT]),
+            "c-other-branch": ("b2", [_BEAT]),
+            "c-elsewhere": ("b1", [_BEAT, secret]),
+            "c-skip": ("b1", []),
+        }
+    )
+    deps.last_commit = lambda campaign_id: "c-own"  # what this server's own beat committed
+    feed = _QueueFeed()
     with (
         TestClient(create_app(deps, commit_feed=feed)) as client,
         client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws,
@@ -2421,12 +2473,14 @@ def test_live_commits_reach_the_campaign_s_clients_without_its_secrets() -> None
         ws.send_json({"type": "intent", "text": "I look around"})
         own = next(m for m in _recv_until(ws, "beat_committed") if m["type"] == "beat_committed")
         assert own["commit_id"] == "c-own"
-        feed.q.put(_commit("c-other-branch", "b2", beat))  # not this campaign's branch
-        feed.q.put(_commit("c-own", "b1", beat))  # this server's own beat: already shown
-        feed.q.put(_commit("c-elsewhere", "b1", beat, secret))
+        feed.q.put(_commit("c-other-branch", "b1", _BEAT))  # it CLAIMS b1; the store says b2
+        feed.q.put(_commit("c-own", "b1", _BEAT))  # this server's own beat: already shown
+        feed.q.put(_commit("c-forged", "b1", _BEAT))  # this database never made it
+        feed.q.put(_commit("c-elsewhere", "b2"))  # mislabelled and empty: the store's copy wins
+        feed.q.put(_commit("c-elsewhere", "b1", _BEAT))  # a relay's re-send: told once
         feed.q.put(_commit("c-skip", "b1"))  # a time-skip: no beat
         first = _recv_until(ws, "commit")[-1]
-        assert first["commit_id"] == "c-elsewhere"  # the other branch and the echo never came
+        assert first["commit_id"] == "c-elsewhere"  # nothing before it reached this campaign
         assert first["beats"] == [
             {"participant_id": "p9", "intent": "I pray", "narration": "Bells ring."}
         ]
@@ -2438,3 +2492,61 @@ def test_live_commits_reach_the_campaign_s_clients_without_its_secrets() -> None
             "depth": 3,
             "beats": [],
         }
+
+
+def test_a_server_s_own_beat_still_reaches_other_campaigns_on_its_branch() -> None:
+    # Review: the echo is skipped only for the campaign that PLAYED the beat — another campaign on
+    # the same branch hasn't seen it and must be told.
+    deps = _fake_deps()
+    deps.store = _FeedStore({"c-own": ("b1", [_BEAT]), "c-next": ("b1", [])})  # type: ignore[assignment]
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return campaign_id in ("camp-1", "camp-2")
+
+    deps.campaign_exists = campaign_exists
+    deps.last_commit = lambda campaign_id: "c-own" if campaign_id == "camp-1" else None
+    feed = _QueueFeed()
+    with (
+        TestClient(create_app(deps, commit_feed=feed)) as client,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as player,
+        client.websocket_connect("/campaigns/camp-2/play?token=tok-b") as neighbour,
+    ):
+        _recv_until(player, "participant_joined")
+        _recv_until(neighbour, "participant_joined")
+        player.send_json({"type": "intent", "text": "I ring the bell"})
+        _recv_until(player, "beat_committed")
+        feed.q.put(_commit("c-own", "b1"))
+        feed.q.put(_commit("c-next", "b1"))
+        assert _recv_until(neighbour, "commit")[-1]["commit_id"] == "c-own"
+        assert _recv_until(player, "commit")[-1]["commit_id"] == "c-next"  # never its own again
+
+
+def test_the_live_feed_survives_a_bad_commit_and_a_dropped_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Review: the feed task used to end for good when NATS dropped; now it reconnects with backoff,
+    # and one commit it can't read never stops the rest.
+    import uro_server.app as app_module
+
+    monkeypatch.setattr(app_module, "_FEED_RETRY_S", 0.01)
+
+    class _DropsOnce(_QueueFeed):
+        def __aiter__(self) -> AsyncIterator[Any]:
+            return self._dropped() if self.connects < 2 else self._messages()
+
+        async def _dropped(self) -> AsyncIterator[Any]:
+            raise ConnectionError("nats went away")
+            yield  # (an async generator)
+
+    deps = _fake_deps()
+    deps.store = _FeedStore({"c-bad": ("b1", None), "c-late": ("b1", [_BEAT])})  # type: ignore[assignment]
+    feed = _DropsOnce()
+    with (
+        TestClient(create_app(deps, commit_feed=feed)) as client,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws,
+    ):
+        _recv_until(ws, "participant_joined")
+        feed.q.put(_commit("c-bad", "b1"))
+        feed.q.put(_commit("c-late", "b1"))
+        assert _recv_until(ws, "commit")[-1]["commit_id"] == "c-late"
+    assert feed.connects == 2  # once at startup, once after the drop

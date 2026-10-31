@@ -14,6 +14,7 @@ import httpx
 import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.ids import new_id
+from uro_core.errors import ProviderError
 from uro_core.metering import RESPONSE_CAP, LLMCall
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.anthropic import AnthropicProvider
@@ -132,6 +133,23 @@ async def test_anthropic_reports_usage_for_complete_and_stream() -> None:
     _ = [c async for c in router.stream("narrator", MSG)]
     assert (calls[0].tokens_in, calls[0].tokens_out) == (40, 6)  # the cumulative output, once
 
+    truncated = AnthropicProvider(
+        model="claude-x",
+        api_key="k",
+        transport=_json(
+            {
+                "content": [{"type": "text", "text": '"actors": [{"na'}],
+                "usage": {"input_tokens": 9, "output_tokens": 50},
+                "stop_reason": "max_tokens",
+            }
+        ),
+    )
+    router, calls = _recording(truncated)
+    with pytest.raises(ProviderError, match="max_tokens"):
+        await router.complete("extractor", MSG, json_mode=True)
+    # the cut-off output is exactly what an operator needs to see (review)
+    assert calls[0].response == '{"actors": [{"na' and calls[0].tokens_out == 50
+
 
 async def test_codex_reports_usage_from_response_completed() -> None:
     async def token(force: bool) -> str:
@@ -229,3 +247,35 @@ async def test_a_beat_records_its_calls_with_world_branch_and_response(
     assert by_branch[0]["tokens_in"] == 100 and by_branch[0]["calls"] == 1
     other = await store.create_world(f"Quiet-{new_id()}")
     assert await store.usage_by_stage(world_id=other.world_id) == []
+
+
+async def test_a_call_meters_into_its_engine_s_store_not_the_router_s(
+    store: PostgresEventStore,
+) -> None:
+    # One router can serve engines over different stores; each call is recorded by the store of
+    # the engine that made it, never by whichever recorder the router was built with (review).
+    elsewhere: list[LLMCall] = []
+
+    async def record_elsewhere(call: LLMCall) -> None:
+        elsewhere.append(call)
+
+    router = ProviderRouter(
+        bindings={}, default=_Story(reply="Mara waves."), recorder=record_elsewhere
+    )
+    world = await store.create_world(f"Own-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await Engine(store, router).run_beat(campaign, "p1", "I wave at Mara")
+    assert elsewhere == []
+    assert await store.recent_llm_calls(world_id=world.world_id)
+
+
+async def test_a_connection_probe_is_metered(store: PostgresEventStore) -> None:
+    from uro_core.providers.registry import probe_connection
+
+    conn = await store.add_connection(name=f"stub-{new_id()}", provider="stub")
+    try:
+        before = len(await store.recent_llm_calls(stage="test", limit=10_000))
+        assert (await probe_connection(store, conn, "stub-chat"))["ok"]
+        assert len(await store.recent_llm_calls(stage="test", limit=10_000)) == before + 1
+    finally:
+        await store.delete_connection(conn)

@@ -17,7 +17,11 @@ Upgrading: run `uro db migrate` (migration 024 adds three columns to `llm_calls`
   a beat played through the CLI, another server or an embedder appears live, and so does a
   time-skip.
   - The new `commit` frame carries only the commit and its beats' narration, never raw events.
-  - A server never echoes its own beats; `beat_committed` now includes `commit_id`.
+  - A server never echoes a beat to the campaign that played it; `beat_committed` now includes
+    `commit_id`.
+  - The server pushes only commits its own database made, read from that database. A message on
+    NATS is never trusted, and the compose file now publishes NATS on localhost only.
+  - The subscription reconnects after a NATS outage.
   - `uro connect` prints these commits.
 - **Token counts, per-world usage, and the raw output of every structured call (D-66).**
   - **Tokens:** every LLM call is now recorded with the tokens its provider reported. The OpenAI,
@@ -29,8 +33,9 @@ Upgrading: run `uro db migrate` (migration 024 adds three columns to `llm_calls`
   - **Raw output:** a structured call (extractor, planner, judge, backfill) stores its full response,
     readable with `uro calls --stage extractor` or `GET /llm-calls` (operator-only). A beat that
     committed less than its narration said can be diagnosed afterwards.
-  - **Coverage:** metering moved into the provider router, so backfill and probe calls are metered
-    for the first time.
+  - **Coverage:** metering moved into the provider router, so backfill, probe and `provider test`
+    calls are metered for the first time (from the CLI whenever the database is reachable). A
+    truncated Anthropic response stores the text that came back.
 
 ## [0.6.0] - 2026-10-31
 

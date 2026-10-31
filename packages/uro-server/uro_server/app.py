@@ -19,7 +19,7 @@ import tempfile
 import time
 import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -49,8 +49,8 @@ from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.errors import ExportError
-from uro_core.export import WorldBundle
-from uro_core.pipeline.engine import BeatResult, Engine
+from uro_core.export import BundleCommit, WorldBundle
+from uro_core.pipeline.engine import Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
@@ -143,43 +143,50 @@ def _new_pc_sheet(ruleset: Any) -> dict[str, Any]:
     return sheet
 
 
-class _RecentCommits:
-    """The commits this server broadcast itself, most recent `cap` — so the live commit feed (D-67),
-    which also carries them once the relay publishes, doesn't send a client the same beat twice."""
+_FEED_RETRY_S = 1.0  # first wait before reconnecting a failed live commit feed; doubles to 30s
 
-    def __init__(self, cap: int = 2048) -> None:
-        self._ids: dict[str, None] = {}
+
+class _Announced:
+    """Which campaigns' clients have already been told about which commit — as `beat_committed`,
+    `outcome_recorded`, or a `commit` frame — so the live feed (D-67) tells each campaign once:
+    never echoing a server's own beat to the campaign that played it, still telling another
+    campaign on the same branch, and swallowing a relay's re-send. Bounded to the most recent `cap`
+    commits."""
+
+    def __init__(self, cap: int = 65536) -> None:
+        self._seen: dict[str, set[str]] = {}
         self._cap = cap
 
-    def add(self, commit_id: str | None) -> None:
-        if commit_id:
-            self._ids[commit_id] = None
-            while len(self._ids) > self._cap:
-                self._ids.pop(next(iter(self._ids)))
+    def add(self, commit_id: str | None, campaign_id: str) -> None:
+        if not commit_id:
+            return
+        self._seen.setdefault(commit_id, set()).add(campaign_id)
+        while len(self._seen) > self._cap:
+            self._seen.pop(next(iter(self._seen)))
 
-    def __contains__(self, commit_id: object) -> bool:
-        return commit_id in self._ids
+    def told(self, commit_id: str, campaign_id: str) -> bool:
+        return campaign_id in self._seen.get(commit_id, ())
 
 
-def _commit_message(message: OutboxMessage) -> dict[str, Any]:
+def _commit_frame(commit: BundleCommit, branch_id: str) -> dict[str, Any]:
     """A commit as a PLAYER may see it (D-45): its coordinates and the narration of its beats —
-    prose every player already reads — never its raw events (truth values, hidden beliefs). A
-    commit with no beat (a time-skip, a reaction) still says the branch moved, so a client knows
-    to refetch."""
+    prose every player already reads — never its raw events (truth values, hidden beliefs). Built
+    from the STORE's copy of the commit, never from the feed message. A commit with no beat (a
+    reaction, a time-skip) still says the world changed, so a client knows to refetch."""
     beats = [
         {
-            "participant_id": e["payload"].get("participant_id", ""),
-            "intent": e["payload"].get("intent_text", ""),
-            "narration": e["payload"].get("narration", ""),
+            "participant_id": e.payload.get("participant_id", ""),
+            "intent": e.payload.get("intent_text", ""),
+            "narration": e.payload.get("narration", ""),
         }
-        for e in message.events
-        if e.get("event_type") == "BeatResolved" and isinstance(e.get("payload"), dict)
+        for e in commit.events
+        if e.event_type == "BeatResolved"
     ]
     return {
         "type": "commit",
-        "commit_id": message.commit_id,
-        "branch_id": message.branch_id,
-        "depth": message.depth,
+        "commit_id": commit.commit_id,
+        "branch_id": branch_id,
+        "depth": commit.depth,
         "beats": beats,
     }
 
@@ -224,6 +231,9 @@ class ServerDeps:
     # campaign → the commit its last beat run here made (D-67): sent with `beat_committed`, and
     # remembered so the live commit feed doesn't push this server's own beat back to its clients
     last_commit: Callable[[str], str | None] | None = None
+    # which campaigns were already told about which commit (filled when a commit is APPENDED, so a
+    # fast relay can't beat it, D-67 review)
+    announced: _Announced = field(default_factory=_Announced)
     # Management surface (docs/18 B3): the EngineStore port (a Protocol — the server still sees only
     # ports) powers the CRUD/read endpoints; `advance_time` runs an engine-backed time-skip+agendas.
     # None → those endpoints return 501 (a fake-deps test that only exercises play/outcome).
@@ -337,6 +347,10 @@ def engine_deps(
         return siblings[key]
 
     last_commits: dict[str, str] = {}
+    announced = _Announced()
+    # calls made OUTSIDE the engine (backfill, probe) through its router are metered too (D-66)
+    if engine.router.recorder is None:  # (a bare test double records nothing, like the Engine)
+        engine.router.recorder = getattr(store, "record_llm_call", None)
 
     async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[str]:
         campaign = await store.get_campaign(campaign_id)
@@ -344,8 +358,9 @@ def engine_deps(
             return
         playing = await engine_for(campaign)
 
-        def committed(result: BeatResult) -> None:
-            last_commits[campaign_id] = result.commit_id
+        def committed(commit_id: str) -> None:
+            last_commits[campaign_id] = commit_id
+            announced.add(commit_id, campaign_id)  # beat_committed will tell this campaign
 
         stream = playing.run_beat_stream(campaign, participant, text, on_commit=committed)
         async for chunk in stream:
@@ -366,6 +381,7 @@ def engine_deps(
         # authored-commit callers shouldn't re-implement the react step. react() is
         # exception-isolated, so the outcome beat is durable even if a rule raises.
         commit = await engine.append_and_react(campaign, result.events)
+        announced.add(commit.commit_id, campaign_id)  # outcome_recorded tells this campaign
         # The per-ref receipt (docs/18 B6) tells the reporting game what was applied/downgraded/
         # dropped and why — otherwise a Chronicler consumer couldn't see the D-32 downgrades.
         return {
@@ -478,6 +494,7 @@ def engine_deps(
             }  # rebind; leave the running router intact
         if new_router is None:
             return {"reloaded": False, "detail": "registry has no bindings; router unchanged"}
+        new_router.recorder = getattr(store, "record_llm_call", None)  # backfill/probe: metered
         engine.rebind_router(new_router)
         return {"reloaded": True}
 
@@ -553,6 +570,7 @@ def engine_deps(
         run_beat=run_beat,
         report_outcome=report_outcome,
         last_commit=last_commits.get,
+        announced=announced,
         store=store,
         advance_time=advance_time,
         advance_branch_time=advance_branch_time,
@@ -587,27 +605,66 @@ def create_app(
     app = FastAPI(title="Uro Engine server")
     hub = SessionHub()
     arb = arbiter or SoloArbiter()
-    own_commits = _RecentCommits()
     campaign_branches: dict[str, str | None] = {}  # campaign → branch (never changes), cached
 
+    async def branch_of(campaign_id: str) -> str | None:
+        if campaign_id not in campaign_branches and deps.store is not None:
+            campaign = await deps.store.get_campaign(campaign_id)
+            campaign_branches[campaign_id] = campaign.branch_id if campaign else None
+        return campaign_branches.get(campaign_id)
+
     async def push_commit(message: OutboxMessage) -> None:
-        """A commit from anywhere (another server, the CLI, an embedder) reaches the clients of
-        every live campaign on its branch (D-67) — unless this server broadcast it itself."""
-        if message.commit_id in own_commits:
+        """Tell every live campaign on a commit's branch about it, once (D-67). The feed message
+        is only a NOTIFICATION: the commit must be one this database made (its outbox row), its
+        branch comes from that row, and the frame is built from the stored events — so a forged
+        or mislabelled message on NATS pushes nothing (review)."""
+        store = deps.store
+        if store is None:
             return
-        for campaign_id in hub.campaigns():
-            if campaign_id not in campaign_branches and deps.store is not None:
-                campaign = await deps.store.get_campaign(campaign_id)
-                campaign_branches[campaign_id] = campaign.branch_id if campaign else None
-            if campaign_branches.get(campaign_id) == message.branch_id:
-                await hub.publish(campaign_id, _commit_message(message))
+        where = await store.outbox_commit(message.commit_id)
+        if where is None:
+            logger.warning("ignoring a live commit this database never made: %s", message.commit_id)
+            return
+        world_id, branch_id = where
+        targets = [
+            c
+            for c in hub.campaigns()
+            if await branch_of(c) == branch_id and not deps.announced.told(message.commit_id, c)
+        ]
+        if not targets:
+            return
+        commit = await store.commit_detail(world_id, message.commit_id)
+        if commit is None:
+            return
+        frame = _commit_frame(commit, branch_id)
+        for campaign_id in targets:
+            deps.announced.add(message.commit_id, campaign_id)
+            await hub.publish(campaign_id, frame)
 
     async def consume_commits(feed: CommitFeed) -> None:
-        async for message in feed:
+        """Run the feed for the server's lifetime: one bad commit never stops it, and a feed that
+        ends or fails is reconnected with backoff (a NATS outage, review)."""
+        backoff = _FEED_RETRY_S
+        while True:
             try:
-                await push_commit(message)
-            except Exception as exc:  # one bad commit must not stop the feed
-                logger.warning("couldn't push commit %s: %s", message.commit_id, exc)
+                async for message in feed:
+                    backoff = _FEED_RETRY_S
+                    try:
+                        await push_commit(message)
+                    except Exception as exc:
+                        logger.warning("couldn't push commit %s: %s", message.commit_id, exc)
+                logger.warning("live commit feed ended; reconnecting")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("live commit feed failed (%s); reconnecting", exc)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+            try:
+                await feed.close()
+                await feed.connect()
+            except Exception as exc:
+                logger.warning("live commit feed reconnect failed: %s", exc)
 
     if commit_feed is not None:  # (hooks only when a feed is configured)
         feed = commit_feed
@@ -1081,7 +1138,7 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"invalid outcome bundle: {exc}") from exc
-        own_commits.add(result.get("commit_id"))  # already announced: not again via the feed
+        deps.announced.add(result.get("commit_id"), campaign_id)  # (also done by engine_deps)
         await hub.publish(
             campaign_id, {"type": "outcome_recorded", "encounter_id": encounter_id, **result}
         )
@@ -2111,7 +2168,6 @@ def create_app(
                 mtype = msg.get("type")
                 if mtype == "intent":
                     await _run_and_broadcast(
-                        own_commits,
                         deps,
                         arb,
                         hub,
@@ -2196,7 +2252,6 @@ async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> No
 
 
 async def _run_and_broadcast(
-    own_commits: _RecentCommits,
     deps: ServerDeps,
     arbiter: TurnArbiter,
     hub: SessionHub,
@@ -2264,7 +2319,7 @@ async def _run_and_broadcast(
         await arbiter.beat_committed(campaign_id, participant, "")
         return
     commit_id = deps.last_commit(campaign_id) if deps.last_commit is not None else None
-    own_commits.add(commit_id)
+    deps.announced.add(commit_id, campaign_id)  # (engine_deps already did, at append time)
     await hub.publish(
         campaign_id,
         {
