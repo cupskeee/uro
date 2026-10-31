@@ -265,3 +265,39 @@ async def test_uro_world_probe_is_metered(
         CliRunner().invoke, app, ["world", "probe", str(pack), "--provider", "stub", "--tries", "1"]
     )
     assert offline.exit_code == 0, offline.output  # no database: unmetered, not broken
+
+
+async def test_a_time_skip_records_why_it_happened(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Live run (2026-10-31): `campaign time-skip` advances the campaign's own branch, yet its
+    # TimeAdvanced said "time-skip on fork". A fork's skip says so; an in-place one doesn't.
+    monkeypatch.setenv("URO_DATABASE_URL", store.dsn)
+    w = await store.create_world(f"skips-{new_id()}")
+    campaign = await store.create_campaign(w.world_id, w.main_branch_id)
+    head = (await store.get_branch(w.main_branch_id)).head_commit  # type: ignore[union-attr]
+
+    async def reasons(branch_id: str) -> list[str]:
+        async with store.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT e.payload->>'reason' AS reason FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "WHERE c.world_id = $1 AND e.event_type = 'TimeAdvanced' "
+                "AND e.commit_id IN (SELECT head_commit FROM branches WHERE branch_id = $2) ",
+                w.world_id,
+                branch_id,
+            )
+        return [r["reason"] for r in rows]
+
+    def uro(*args: str) -> str:
+        result = CliRunner().invoke(app, list(args))
+        assert result.exit_code == 0, result.output
+        return result.output
+
+    await asyncio.to_thread(uro, "campaign", "time-skip", campaign.campaign_id, "--days", "2")
+    assert await reasons(w.main_branch_id) == ["time-skip"]
+    await asyncio.to_thread(
+        uro, "branch", "fork", w.world_id, "--at", head, "--name", "later", "--time-skip-days", "3"
+    )
+    fork = next(b for b in await store.list_branches(w.world_id) if b.name == "later")
+    assert await reasons(fork.branch_id) == ["time-skip on fork"]

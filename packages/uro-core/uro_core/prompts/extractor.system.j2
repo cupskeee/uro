@@ -13,7 +13,9 @@ ruin) in `places` with a short `description`. Only a real, persistent location t
 NOT a place merely mentioned in passing, a direction, or atmospheric scenery. When in doubt, omit
 it; a location that matters will recur. If the prose says a place sits inside a larger one ("the
 Broken Spindle in Alder Hollow"), set `parent` to that larger place — only when it SAYS so, never
-inferred from nearness or because it is the only place you know.
+inferred from nearness or because it is the only place you know. A place needs a NAME the prose
+gives it ("the Brinehouse", "Alder Hollow"): a bare common noun — "the tavern", "the road", "the
+docks" — is not a name; never put it in `places`.
 
 FACTIONS: put a named, standing GROUP (a house, order, guild, church, company) in `factions`.
 Only a real organization the prose names — not a passing crowd or a common noun.
@@ -39,13 +41,16 @@ name for an entity everywhere. Two people who share a name but belong to differe
 are DIFFERENT people; keep their affiliations distinct so they aren't merged.
 
 ALREADY KNOWN: the KNOWN lists are the world state so far. Never restate a KNOWN CLAIM or a KNOWN
-THREAD — the same fact in new words is still a restatement. Extract only what this narration
+THREAD — the same fact in new words is still a restatement. KNOWN CLAIMS includes the rumors the
+characters in the scene already believe: a character retelling one of those is a restatement. Extract only what this narration
 ADDS. (Listing a known actor or place again is harmless; do it only to attach an affiliation the
 prose newly states.)
 
 DO NOT EXTRACT (this is flavor, not canon — omit it, or mark durable=false): sensory and
 atmospheric description (weather, lighting, smells, a crackling fire), the player's own actions
-or movements, momentary gestures and mood, and generic scene-setting. When in doubt, leave it
+or movements, momentary gestures and mood, generic scene-setting, and a character's sayings,
+proverbs, or advice ("there's a kernel of truth in every rumor", "keep your wits about you") —
+they say nothing about the world. When in doubt, leave it
 out — a missed detail costs nothing, but flavor recorded as fact pollutes the world state.
 
 THE TEST for `durable`: would this still be true, and worth knowing, a month from now? A
@@ -53,6 +58,9 @@ momentary EXPRESSION, GESTURE, POSTURE, MOOD, or physical SENSATION is never dur
 the instant the beat ends. Neither is an EVENT that just happened in the scene (someone fled, a
 sound drew closer, the group fell silent) unless it leaves a lasting change (a bridge now
 collapsed, a person now gone for good). Extract the standing fact, not the passing moment.
+NEWS a character REPORTS is different: what they say happened elsewhere or earlier ("a woman came
+asking after you"), or someone's stated plan ("the Duke means to seal the harbor") is testimony
+the story builds on — record it as a dialogue claim with durable=true.
 
 EXAMPLES (from real over-extraction — study the OMIT column; these are the mistakes to avoid):
 
@@ -69,6 +77,8 @@ EXAMPLES (from real over-extraction — study the OMIT column; these are the mis
   The marsh track ends at a timber causeway.  | You followed the wagon ruts into the marsh.
   Tavi wears a metal bracelet. (first time)   | Tavi has a bracelet. (already a KNOWN CLAIM)
   Thread: Harrowmere's villagers vanished.    | Thread: a twig snapped somewhere nearby.
+  (Mera says) A woman came asking after you.  | (Mera says) Every rumor has a kernel of truth.
+  (Mera says) The Duke will seal the docks.   | Place: "the tavern" (a common noun, no name).
 
 Note the pattern: a standing trait/role/relationship/lasting-change/injury is durable; a
 one-moment expression, sensation, scene event, or crowd reaction is not — and the player
@@ -76,7 +86,9 @@ character's own feelings, gestures, and movements are never extracted. Anything 
 never extracted again.
 
 PROVENANCE: a fact the NARRATOR asserts as real → 'narrator'; something a CHARACTER says (quotes
-or reported speech) → 'dialogue' with that character as 'speaker' (it may be a lie). Name a new
+or reported speech) → 'dialogue' with that character as 'speaker' (it may be a lie). CONFIDENCE is
+how sure the SPEAKER sounds, not how sure you are that they said it: a hedged rumor ("there's talk
+of…", "or so a watchman claimed") is low, around 0.3; something they saw themselves is high. Name a new
 actor only if the prose explicitly names them. A character giving their own name is captured by
 naming them in `actors` — never also record "X says their name is X" as a claim. When a statement conflicts with a KNOWN CLAIM,
 put that claim's id in 'contradicts'. Keep statements terse and self-contained. Output ONLY a

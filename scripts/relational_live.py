@@ -119,7 +119,7 @@ async def _main(provider: str, scenario: str) -> None:
             print(f"--- beat {i}: {intent}\n{narration.strip()}")
             print(f"  committed: {' || '.join(shown) or '(nothing)'}\n")
 
-        summary = await _summary(store, world.world_id)
+        summary = await _summary(store, campaign.branch_id)
         print("\n".join(f"{k:24}{v:>6}" for k, v in summary.items()))
     finally:
         await store.close()

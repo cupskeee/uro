@@ -711,11 +711,27 @@ def connect(
         try:
             async with websockets.connect(uri) as ws:
                 typer.echo(f"connected to {campaign_id} as {token!r}. Type an action; /quit.\n")
+                # An intent's beat is SETTLED by one of these, each echoing the intent's text. The
+                # prompt waits for it: shown at once, it sat above the streaming narration and was
+                # gone by the time the beat committed (extraction runs after the narration), so a
+                # player retyped the intent and played it twice (live run, 2026-10-31).
+                settles = {
+                    "beat_committed",
+                    "beat_failed",
+                    "not_your_turn",
+                    "proposal_opened",
+                    "intent_rejected",
+                }
+                pending: dict[str, asyncio.Event] = {}  # intent text → set when it settles
 
                 async def receive() -> None:
                     async for raw in ws:
                         msg = json.loads(raw)
                         kind = msg.get("type")
+                        if kind in settles:
+                            text = str(msg.get("intent", msg.get("text", "")))
+                            if text in pending:
+                                pending.pop(text).set()
                         if kind == "narration_chunk":
                             typer.echo(msg["text"], nl=False)
                         elif kind == "beat_committed":
@@ -744,6 +760,10 @@ def connect(
                             )
                         elif kind == "beat_failed":
                             typer.echo(f"\n  ✗ beat failed: {msg['error']}")
+                        elif kind == "intent_rejected":
+                            typer.echo(
+                                f"  ✗ [{msg['participant_id']}] intent rejected: {msg['text']!r}"
+                            )
                         elif kind == "commit":  # made elsewhere: another server, the CLI (D-67)
                             for beat in msg.get("beats") or []:
                                 typer.echo(f"\n[{beat['participant_id']}] {beat['narration']}")
@@ -763,7 +783,18 @@ def connect(
                     elif intent.startswith("/vote "):  # non-canon consensus vote (D-38)
                         await ws.send(json.dumps({"type": "vote", "choice": intent[6:]}))
                     elif intent:
+                        settled = pending[intent] = asyncio.Event()
                         await ws.send(json.dumps({"type": "intent", "text": intent}))
+                        waiting = asyncio.ensure_future(settled.wait())
+                        # a slow beat (a reasoning model's extraction) still settles well inside
+                        # this; past it — or if the server goes away — the prompt comes back anyway
+                        await asyncio.wait(
+                            {waiting, receiver}, timeout=600, return_when=asyncio.FIRST_COMPLETED
+                        )
+                        waiting.cancel()
+                        pending.pop(intent, None)
+                        if receiver.done():  # the server closed the connection
+                            break
                 receiver.cancel()
         except OSError as exc:
             typer.echo(f"could not connect to {server}: {exc} (is `uro serve` running?)", err=True)
@@ -968,7 +999,9 @@ def branch_fork(
                 pick = registry.resolve_for_branch(store, branch.branch_id)
                 ruleset = await _time_skip_ruleset(pick)
                 engine = Engine(store, build_router("stub", None), ruleset=ruleset)
-                await engine.agenda_tick(branch.branch_id, time_skip_days)
+                await engine.agenda_tick(
+                    branch.branch_id, time_skip_days, reason="time-skip on fork"
+                )
         finally:
             await store.close()
         forked = branch.forked_from if branch.forked_from else "-"
@@ -1283,6 +1316,7 @@ def calls(
             typer.echo(
                 f"{r['created_at']:%Y-%m-%d %H:%M:%S}  {r['stage_tag']:<10} {r['model'] or '-'}  "
                 f"{tokens}  {r['latency_ms']}ms"
+                + (f"  FAILED: {r['error']}" if r.get("error") else "")
             )
             if r["response"] is not None:
                 typer.echo(f"  {r['response']}")

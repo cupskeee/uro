@@ -3,10 +3,13 @@
 
 Isolates the extractor from the narrator: the prose is fixed — read from the source world's
 `BeatResolved` events — so runs across extractor versions compare like with like (a live re-run
-would change the story too). Each beat replays, in order, onto a FRESH world: recall is assembled
-as in live play (recent beats + state so far), the extractor runs on the recorded narration, and
-the gauntlet commits. A per-beat log and a summary then set the replay beside what the original
-run committed. Analyze further from Postgres (the replay world is named in the output).
+would change the story too). Each beat replays, in order, onto a FORK of the source world taken
+just before its first beat — so the extractor starts from exactly what the original saw: the
+pack's cast, the campaign's PC, a seeded rumor and who believes it. Recall is assembled as in live
+play (recent beats + state so far), the extractor runs on the recorded narration, and the gauntlet
+commits. A per-beat log and a summary then set the replay beside what the original run committed.
+Analyze further from Postgres (the replay branch is named in the output). Commits between beats
+that weren't beats (a time-skip, a reaction) aren't replayed.
 
     uv run python scripts/extraction_replay.py Solara                  # the registry's extractor
     uv run python scripts/extraction_replay.py Solara --provider stub  # dry-run the harness
@@ -25,7 +28,7 @@ from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.domain.events import DomainEvent, actor_created, beat_resolved
+from uro_core.domain.events import DomainEvent, beat_resolved
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.extraction import (
     _statement_key,
@@ -63,15 +66,42 @@ async def _beat_branch(store: PostgresEventStore, world_id: str) -> tuple[str, i
     return best
 
 
-async def _summary(store: PostgresEventStore, world_id: str) -> dict[str, int]:
-    # Only commits that hold a played beat — so the campaign's starting PC (and any pack genesis)
-    # isn't counted as something the extractor produced.
+_LINEAGE = (
+    "WITH RECURSIVE chain AS ("
+    "  SELECT c.commit_id, c.parent_id, c.depth FROM commits c "
+    "  JOIN branches b ON b.head_commit = c.commit_id WHERE b.branch_id = $1 "
+    "  UNION ALL SELECT p.commit_id, p.parent_id, p.depth FROM commits p "
+    "  JOIN chain ch ON p.commit_id = ch.parent_id) "
+)
+_HAS_BEAT = (
+    "EXISTS (SELECT 1 FROM events b WHERE b.commit_id = ch.commit_id "
+    "AND b.event_type = 'BeatResolved')"
+)
+
+
+async def _before_first_beat(store: PostgresEventStore, branch_id: str) -> str:
+    """The commit just before the branch's first beat: the state its play started from."""
+    async with store.pool.acquire() as conn:
+        parent = await conn.fetchval(
+            f"{_LINEAGE} SELECT ch.parent_id FROM chain ch WHERE {_HAS_BEAT} "
+            "ORDER BY ch.depth LIMIT 1",
+            branch_id,
+        )
+    if parent is None:
+        raise SystemExit("the source has no beats to replay")
+    return str(parent)
+
+
+async def _summary(store: PostgresEventStore, branch_id: str) -> dict[str, int]:
+    # Only commits that hold a played beat, along the branch's own history — so the campaign's
+    # starting PC, any pack genesis and the shared pre-play state aren't counted as something the
+    # extractor produced.
     async with store.pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT e.event_type, e.payload FROM events e JOIN commits c USING (commit_id) "
-            "WHERE c.world_id = $1 AND EXISTS (SELECT 1 FROM events b WHERE b.commit_id = "
-            "c.commit_id AND b.event_type = 'BeatResolved') ORDER BY c.depth, e.seq",
-            world_id,
+            f"{_LINEAGE} SELECT e.event_type, e.payload FROM chain ch "
+            f"JOIN events e ON e.commit_id = ch.commit_id WHERE {_HAS_BEAT} "
+            "ORDER BY ch.depth, e.seq",
+            branch_id,
         )
     counts = Counter(r["event_type"] for r in rows)
     seen: set[tuple[str, frozenset[str], str]] = set()
@@ -139,25 +169,10 @@ async def _main(source: str, provider: str) -> None:
                 raise SystemExit("the model-connection registry is empty (see `uro provider`)")
             router = built
         policy = await store.get_extraction_policy()
-        replay = await store.create_world(f"replay-{source}-{new_id()}")
-        branch = replay.main_branch_id
-        # Seed the source campaign's PCs (outside any beat): live, the PC is a KNOWN actor once
-        # named, so without it the replay would mint a duplicate the original never could.
-        async with store.pool.acquire() as conn:
-            pcs = await conn.fetch(
-                "SELECT a.name, a.role FROM proj_pcs p JOIN proj_actors a ON "
-                "a.branch_id = p.branch_id AND a.actor_id = p.actor_id WHERE p.branch_id = $1",
-                src_branch,
-            )
-        if pcs:
-            await store.append_beat(
-                branch,
-                [
-                    actor_created(actor_id=f"a:{new_id()}", name=r["name"], tier=2, role=r["role"])
-                    for r in pcs
-                ],
-            )
-        print(f"replaying {n} beats of {source!r} → world {replay.name!r} ({provider})\n")
+        start = await _before_first_beat(store, src_branch)
+        fork = await store.fork_branch(src.world_id, start, f"replay-{new_id()}")
+        branch = fork.branch_id
+        print(f"replaying {n} beats of {src.name!r} → branch {fork.name!r} ({provider})\n")
 
         calls = 0
         for i, b in enumerate(beats, 1):
@@ -184,8 +199,8 @@ async def _main(source: str, provider: str) -> None:
             shown = [_label(e) for e in events if e.event_type in kinds]
             print(f"beat {i:>2}: {' || '.join(shown) or '(nothing)'}{note}")
 
-        before = await _summary(store, src.world_id)
-        after = await _summary(store, replay.world_id)
+        before = await _summary(store, src_branch)
+        after = await _summary(store, branch)
         print(f"\n{'':24}{'original':>10}{'replay':>10}")
         for k in before:
             print(f"{k:24}{before[k]:>10}{after[k]:>10}")

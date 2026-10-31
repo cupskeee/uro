@@ -9,6 +9,35 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+Upgrading: run `uro db migrate` (migration 025 adds an `error` column to `llm_calls`).
+
+Found in the first live run of v0.7.0 (docs/16, "the v0.7 live run").
+
+### Added
+- **Why a model call failed.** A failed call now records its exception types and any HTTP
+  status, e.g. `ProviderError ← HTTPStatusError (HTTP 429)`, never the exception text (it can
+  carry a credential). `uro calls` marks it `FAILED:`, `GET /llm-calls` returns it, and `uro usage`
+  and `GET /usage` count failures per stage.
+
+### Changed
+- **The extractor's instructions:**
+  - News a character reports and stated plans are kept as testimony ("a woman came asking after
+    you"); they used to be dropped as passing events.
+  - Sayings and advice ("there's a kernel of truth in every rumor") are no longer recorded as
+    claims, and a place needs a name ("the tavern" is not one).
+  - `confidence` now means how sure the speaker sounds, so a hedged rumor is recorded as one.
+- **Backfill** writes a conflict in the world's own voice; it used to address "the players".
+
+### Fixed
+- **A retold rumor no longer becomes fact.** The extractor now sees what the characters on stage
+  already believe, as the narrator does. Before, a character retelling a third-hand rumor created
+  a new claim they believed outright, beside the rumor and its trail back to the witness.
+- **`uro connect` waits for each beat** before prompting again. The prompt used to come back
+  above the streaming narration, so it was easy to send an intent twice. It also prints a rejected
+  intent, which it used to ignore.
+- **An in-place time-skip** (`uro campaign time-skip`, `POST /campaigns/{c}/time-skip`) records
+  its reason as `time-skip`, not `time-skip on fork`.
+
 ## [0.7.0] - 2026-10-31
 
 Upgrading: run `uro db migrate` (migration 024 adds three columns to `llm_calls`).

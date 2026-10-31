@@ -6,6 +6,7 @@ NPC retells a distorted version, the belief chain traceable back to those witnes
 ZERO survivors and nobody ever mentions it.
 """
 
+import json
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -144,3 +145,47 @@ async def test_chronicler_casualty_is_recorded_dead(store: PostgresEventStore) -
     assert (await store.get_actor(branch, "a:champion")).status == "dead"  # a real death trace
     recall = await assemble_recall(store, branch, "I look for the champion", 5)
     assert not any(a.actor_id == "a:champion" for a in recall.actors)  # not surfaced as present
+
+
+async def test_a_retold_rumor_stays_a_rumor(store: PostgresEventStore) -> None:
+    # Live run (2026-10-31): Mera retold the rumor, and her retelling was recorded as a NEW claim
+    # she believed at 0.8, beside the third-hand rumor (0.27) traced to the witness. The extractor
+    # had never been shown what she believed, so it couldn't tell the retelling was old news.
+    branch = await _world_with_rumor_mill(store)
+    outcome = fight("a:hero", ["a:champion", "a:raider1", "a:raider2"], seed=7, survivors=1)
+    await store.append_beat(branch, await distill_outcome(store, branch, outcome))
+    feat = next(c for c in await store.claims_about(branch, "a:hero") if "champion" in c.statement)
+    claims_before = len(await store.list_claims(branch))
+
+    class _Retelling(_SpyNarrator):
+        extractor_context = ""
+
+        async def complete(self, req: CompletionRequest) -> str:
+            if req.stage_tag != "extractor":
+                return "{}"
+            self.extractor_context = "\n".join(m.content for m in req.messages)
+            retold = {
+                "statement": feat.statement,
+                "about": ["Sable the wizard"],
+                "provenance": "dialogue",
+                "speaker": "Mera",
+                "durable": True,
+                "confidence": 0.8,
+            }
+            return json.dumps({"claims": [retold]})
+
+    spy = _Retelling()
+    campaign = await store.start_campaign(
+        (await store.get_branch(branch)).world_id,
+        branch,
+        participant_id="p1",
+        new_pc_name="Traveler",
+        new_pc_id="a:traveler",
+    )
+    await Engine(store, ProviderRouter(bindings={}, default=spy)).run_beat(
+        campaign, "p1", "I ask Mera what she has heard of late"
+    )
+    assert f"[{feat.claim_id}]" in spy.extractor_context  # her rumor is KNOWN to the extractor
+    assert len(await store.list_claims(branch)) == claims_before  # the retelling minted nothing
+    mera = next(b for b in await store.beliefs_of(branch, "a:mera") if b.claim_id == feat.claim_id)
+    assert mera.confidence < 0.45 and mera.learned_from == "a:townsfolk"  # still a rumor

@@ -969,6 +969,13 @@ async def test_a_time_skip_survives_a_world_whose_ruleset_is_gone(
         assert r.status_code == 200, r.text
     later = await store.get_branch_by_name(world.world_id, "later")
     assert await store.current_world_time(later.branch_id) == 3  # type: ignore[union-attr]
+    async with store.pool.acquire() as conn:  # a fork's skip says it was one (live run 2026-10-31)
+        reason = await conn.fetchval(
+            "SELECT payload->>'reason' FROM events WHERE commit_id = $1 "
+            "AND event_type = 'TimeAdvanced'",
+            later.head_commit,  # type: ignore[union-attr]
+        )
+    assert reason == "time-skip on fork"
 
 
 async def test_usage_by_world_and_the_raw_calls_endpoint(store: PostgresEventStore) -> None:
