@@ -880,3 +880,50 @@ async def test_a_resolved_plot_can_recur(store: PostgresEventStore) -> None:
     await store.append_beat(branch, await run_gauntlet(store, branch, Extraction(resolves=[tid])))
     again = Extraction(threads=[ProposedThread(stakes="Raiders threaten the ford.")])
     assert len(_of_type(await run_gauntlet(store, branch, again), "ThreadCreated")) == 1
+
+
+async def test_placeholders_and_common_nouns_never_become_entities(
+    store: PostgresEventStore,
+) -> None:
+    # Live run (2026-10-31, gpt-4o-mini): `"located_in": "unknown"` created a place called
+    # "unknown", the role "unknown" was stored, and "the tavern" became a place.
+    branch = await _branch(store)
+    ex = Extraction(
+        actors=[ProposedActor(name="Mera", role="unknown", located_in="unknown")],
+        places=[ProposedPlace(name="the tavern"), ProposedPlace(name="N/A")],
+        factions=[ProposedFaction(name="the guild")],
+    )
+    events = await run_gauntlet(store, branch, ex)
+    (mera,) = _of_type(events, "ActorCreated")
+    assert mera.payload["role"] == ""
+    assert _of_type(events, "PlaceCreated") == [] and _of_type(events, "FactionCreated") == []
+    assert _of_type(events, "EdgeAdded") == []
+    await store.append_beat(branch, events)
+
+    # a lowercase mention of a place that DOES exist still links to it
+    await store.append_beat(
+        branch,
+        await run_gauntlet(store, branch, Extraction(places=[ProposedPlace(name="The Tavern")])),
+    )
+    later = await run_gauntlet(
+        store, branch, Extraction(actors=[ProposedActor(name="Mera", located_in="the tavern")])
+    )
+    assert _of_type(later, "PlaceCreated") == [] and _of_type(later, "ActorCreated") == []
+    assert len(_of_type(later, "EdgeAdded")) == 1  # Mera located_in The Tavern
+
+
+async def test_a_known_person_seen_somewhere_new_is_the_same_person(
+    store: PostgresEventStore,
+) -> None:
+    # D-68 (narrowing D-50): live, the authored Duke Halbrecht and Old Weck were created a second
+    # time for being "in the Brinehouse" — inside Vel, where they're authored. Only a different
+    # FACTION makes a namesake distinct (test_same_name_actors_of_different_houses_stay_distinct).
+    branch = await _branch(store)
+    first = Extraction(
+        actors=[ProposedActor(name="Duke Halbrecht", member_of="Vel", located_in="Vel")]
+    )
+    await store.append_beat(branch, await run_gauntlet(store, branch, first))
+    seen = Extraction(actors=[ProposedActor(name="Duke Halbrecht", located_in="The Brinehouse")])
+    events = await run_gauntlet(store, branch, seen)
+    assert _of_type(events, "ActorCreated") == []  # linked, not split
+    assert _of_type(events, "EdgeAdded") == []  # he keeps his place (no move is recorded)
