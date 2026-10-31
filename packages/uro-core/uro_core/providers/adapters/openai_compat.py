@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
@@ -86,7 +87,7 @@ class OpenAICompatProvider:
             "messages": [m.model_dump() for m in req.messages],
             "stream": True,
         }
-        if self._base_url.startswith("https://api.openai.com"):
+        if urlparse(self._base_url).hostname == "api.openai.com":
             # token usage arrives as a final chunk only when asked for (D-66); not every
             # OpenAI-compatible server accepts the option, so it's sent to OpenAI only — usage any
             # server sends unasked is still read below

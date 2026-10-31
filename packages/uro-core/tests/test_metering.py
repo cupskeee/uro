@@ -89,6 +89,11 @@ async def test_openai_reports_usage_for_complete_stream_and_embed() -> None:
     )
     _ = [c async for c in _recording(compat)[0].stream("narrator", MSG)]
     assert "stream_options" not in seen[1]  # not every compatible server accepts it
+    lookalike = OpenAICompatProvider(
+        model="x", base_url="https://api.openai.com.example/v1", transport=_sse(frames, seen)
+    )
+    _ = [c async for c in _recording(lookalike)[0].stream("narrator", MSG)]
+    assert "stream_options" not in seen[2]  # the HOST must be api.openai.com, not a prefix
 
     embed = OpenAICompatProvider(
         model="emb",
