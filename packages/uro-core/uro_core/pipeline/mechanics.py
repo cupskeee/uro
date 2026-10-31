@@ -23,10 +23,20 @@ from uro_core.rulesets.base import CheckRequest, CheckResult, Ruleset
 from uro_core.rulesets.rng import Rng
 
 
+class ResolvedCheck(BaseModel):
+    actor_id: str
+    affordance: str
+    result: CheckResult
+
+
 class MechanicsResult(BaseModel):
-    checks: list[CheckResult] = Field(default_factory=list)
+    resolved: list[ResolvedCheck] = Field(default_factory=list)  # in plan order
     # actor_id → that actor's sheet after this beat's checks, for every actor a check changed
     sheets: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @property
+    def checks(self) -> list[CheckResult]:
+        return [r.result for r in self.resolved]
 
 
 def encounter_trigger(ruleset: Ruleset, plan: BeatPlan) -> PlanMechanic | None:
@@ -61,7 +71,7 @@ def resolve_mechanics(
             continue  # unsheeted actor — no check to make
         req = CheckRequest(sheet=sheet, stat=aff.stat, difficulty=aff.difficulty)
         result = ruleset.resolve_check(req, rng)
-        out.checks.append(result)
+        out.resolved.append(ResolvedCheck(actor_id=actor_id, affordance=aff.id, result=result))
         if result.sheet is not None and result.sheet != sheet:
             current[actor_id] = out.sheets[actor_id] = result.sheet
     return out
