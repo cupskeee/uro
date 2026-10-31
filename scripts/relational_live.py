@@ -85,7 +85,8 @@ async def _main(provider: str, scenario: str) -> None:
                 raise SystemExit("the model-connection registry is empty (see `uro provider`)")
             router = built
         world = await store.create_world(f"{scenario}-live-{new_id()}")
-        sheet, ruleset_id = _build_pc_sheet()
+        rs = build_ruleset()  # the default ruleset, as `uro world new` uses
+        sheet, ruleset_id = _build_pc_sheet(rs), rs.id
         campaign = await store.start_campaign(
             world.world_id,
             world.main_branch_id,

@@ -120,9 +120,15 @@ async def _main(source: str, provider: str) -> None:
     store = PostgresEventStore(DSN)
     await store.connect()
     try:
-        src = await store.get_world_by_name(source)
+        src = await store.get_world(source)  # an id, else a name that names exactly one world
         if src is None:
-            raise SystemExit(f"no world named {source!r}")
+            named = [w for w in await store.list_worlds() if w.name == source]
+            if len(named) > 1:
+                ids = ", ".join(w.world_id for w in named)
+                raise SystemExit(f"{len(named)} worlds are named {source!r}; give an id: {ids}")
+            if not named:
+                raise SystemExit(f"no world {source!r}")
+            src = named[0]
         src_branch, n = await _beat_branch(store, src.world_id)
         beats = await store.recent_beats(src_branch, 10_000)
         if provider == "stub":
@@ -190,7 +196,7 @@ async def _main(source: str, provider: str) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("world", help="name of the source world whose narrations to replay")
+    ap.add_argument("world", help="the source world (id or name) whose narrations to replay")
     ap.add_argument("--provider", choices=["registry", "stub"], default="registry")
     args = ap.parse_args()
     asyncio.run(_main(args.world, args.provider))
