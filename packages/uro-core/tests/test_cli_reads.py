@@ -205,3 +205,38 @@ def test_a_pack_with_broken_yaml_is_a_pack_error(tmp_path: Path) -> None:
     (dst / "entities" / "places.yaml").write_text("- name: [unclosed\n")
     with pytest.raises(PackError, match="not valid YAML"):
         parse_pack(dst)
+
+
+async def test_uro_calls_shows_what_the_extractor_returned(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from collections.abc import AsyncIterator
+
+    from uro_core.pipeline.engine import Engine
+    from uro_core.providers.adapters.stub import hashing_embedding
+    from uro_core.providers.base import CompletionRequest
+    from uro_core.providers.router import ProviderRouter
+
+    class _P:
+        async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
+            yield "Ilse nods."
+
+        async def complete(self, req: CompletionRequest) -> str:
+            return '{"actors": [{"name": "Ilse"}], "claims": []}'
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [hashing_embedding(t) for t in texts]
+
+    monkeypatch.setenv("URO_DATABASE_URL", store.dsn)
+    w = await store.create_world(f"calls-{new_id()}")
+    campaign = await store.create_campaign(w.world_id, w.main_branch_id)
+    await Engine(store, ProviderRouter(bindings={}, default=_P())).run_beat(campaign, "p1", "hi")
+    result = await asyncio.to_thread(
+        CliRunner().invoke,
+        app,
+        ["calls", "--stage", "extractor", "--campaign", campaign.campaign_id],
+    )
+    assert result.exit_code == 0, result.output
+    assert "extractor" in result.output and '"name": "Ilse"' in result.output
+    usage = await asyncio.to_thread(CliRunner().invoke, app, ["usage", "--world", w.world_id])
+    assert "extractor" in usage.output and "narrator" in usage.output

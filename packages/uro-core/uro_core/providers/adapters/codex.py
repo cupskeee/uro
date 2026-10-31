@@ -23,7 +23,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 import httpx
 
 from uro_core.errors import ProviderError
-from uro_core.providers.base import CompletionRequest
+from uro_core.providers.base import CompletionRequest, report_usage
 from uro_core.providers.codex_auth import CODEX_BASE_URL, CodexAuthError, codex_inference_headers
 
 # force_refresh -> a valid access token (refreshed+persisted by the caller if it wired that in).
@@ -147,6 +147,11 @@ class CodexResponsesProvider:
                 piece = evt.get("delta")
                 if piece:
                     yield piece
+            elif etype == "response.completed":  # carries the call's token usage (D-66)
+                usage = (evt.get("response") or {}).get("usage") or {}
+                report_usage(
+                    tokens_in=usage.get("input_tokens"), tokens_out=usage.get("output_tokens")
+                )
             elif etype in ("response.failed", "error"):
                 err = evt.get("error") or (evt.get("response") or {}).get("error") or {}
                 msg = err.get("message") if isinstance(err, dict) else str(err)

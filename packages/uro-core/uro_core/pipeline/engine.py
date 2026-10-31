@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
-import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -38,7 +36,6 @@ from uro_core.errors import (
     ProviderError,
     UnboundParticipantError,
 )
-from uro_core.metering import LLMCall
 from uro_core.pipeline.encounter import run_encounter
 from uro_core.pipeline.extraction import (
     build_extractor_messages,
@@ -121,11 +118,6 @@ class _Context(BaseModel):
     pc_actor_id: str = ""
 
 
-def _hash_messages(messages: list[Message]) -> str:
-    payload = json.dumps([m.model_dump() for m in messages], sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 class _Shared:
     """What an Engine shares with its `with_ruleset` siblings: one router (a reload reaches every
     sibling), the per-branch style cache, and the per-branch react locks."""
@@ -162,6 +154,7 @@ class Engine:
         if problem is not None:  # fail here, not mid-fight on a missing hook (D-65 review)
             raise ValueError(f"ruleset {getattr(ruleset, 'id', '?')!r} can't be used: {problem}")
         self._store = store
+        self._meter_into(router)
         self._shared = _Shared(router)
         # The bound ruleset enables the planner + mechanics gate (D-28). None → Phase-1 flow.
         self._ruleset = ruleset
@@ -170,6 +163,13 @@ class Engine:
         # bare = ablation baseline (thesis T1): a raw-transcript GM — no structured/
         # semantic recall, no extraction, no memory. Just the narrator over recent beats.
         self._bare = bare
+
+    def _meter_into(self, router: ProviderRouter) -> None:
+        """Every call through this engine's router is metered into its store (D-66) — unless the
+        caller already gave the router a recorder of its own."""
+        record = getattr(self._store, "record_llm_call", None)  # a bare test double may have none
+        if router.recorder is None and record is not None:
+            router.recorder = record
 
     def with_ruleset(self, ruleset: Ruleset | None) -> Engine:
         """A sibling engine bound to another ruleset (a server hosting campaigns of several
@@ -210,6 +210,7 @@ class Engine:
         mixed-provider beat, never a crash or a leak. A true per-beat router snapshot (thread one
         router through the pipeline helpers) is the clean fix — deferred, low-impact. Siblings
         from `with_ruleset` share the router, so this rebinds them too."""
+        self._meter_into(router)
         self._shared.router = router
 
     @property
@@ -255,10 +256,8 @@ class Engine:
             world_ref=world_ref,
         )
         recent_texts = {b.narration for b in recall.recent_beats}
-        started = time.perf_counter()
         try:
-            vectors = await self._router.embed("embedder", [intent_text])
-            await self._meter("embedder", [Message(role="user", content=intent_text)], started)
+            vectors = await self._router.embed("embedder", [intent_text], branch_id=branch_id)
             vector = vectors[0] if vectors else None
             if not vector or not any(
                 vector
@@ -290,10 +289,8 @@ class Engine:
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         role = self._narration_role(ctx, encounter_events)
-        started = time.perf_counter()
-        chunks = [chunk async for chunk in self._router.stream(role, messages)]
-        await self._meter(role, messages, started)
-        narration = "".join(chunks).strip()
+        stream = self._router.stream(role, messages, branch_id=campaign.branch_id)
+        narration = "".join([chunk async for chunk in stream]).strip()
         return await self._finish(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
         )
@@ -317,12 +314,10 @@ class Engine:
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         role = self._narration_role(ctx, encounter_events)
-        started = time.perf_counter()
         collected: list[str] = []
-        async for chunk in self._router.stream(role, messages):
+        async for chunk in self._router.stream(role, messages, branch_id=campaign.branch_id):
             collected.append(chunk)
             yield chunk
-        await self._meter(role, messages, started)
         await self._finish(
             campaign, participant_id, intent_text, "".join(collected).strip(), ctx, encounter_events
         )
@@ -475,10 +470,8 @@ class Engine:
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
         role = self._narration_role(ctx, encounter_events)
-        started = time.perf_counter()
-        chunks = [chunk async for chunk in self._router.stream(role, messages)]
-        await self._meter(role, messages, started)
-        narration = "".join(chunks).strip()
+        stream = self._router.stream(role, messages, branch_id=campaign.branch_id)
+        narration = "".join([chunk async for chunk in stream]).strip()
         events, _, _ = await self._beat_events(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
         )
@@ -927,11 +920,14 @@ class Engine:
         messages = build_planner_messages(affordances, recall, pc_actor_id, intent_text, env=env)
         reason = "no plan produced"
         for _ in range(3):  # 1 attempt + 2 re-asks (docs/13)
-            started = time.perf_counter()
             raw = await self._router.complete(
-                "planner", messages, json_mode=True, temperature=0.2, max_tokens=1024
+                "planner",
+                messages,
+                json_mode=True,
+                temperature=0.2,
+                max_tokens=1024,
+                branch_id=campaign.branch_id,
             )
-            await self._meter("planner", messages, started)
             plan = parse_plan(raw)
             if plan is None:
                 reason = "output was not a valid BeatPlan JSON object"
@@ -1005,10 +1001,8 @@ class Engine:
         here — a failed embed, an empty vector, or a memory-write DB error — may raise
         out and fail a beat that persisted. The memory index is a rebuildable aux cache.
         """
-        started = time.perf_counter()
         try:
-            vectors = await self._router.embed("embedder", [text])
-            await self._meter("embedder", [Message(role="user", content=text)], started)
+            vectors = await self._router.embed("embedder", [text], branch_id=branch_id)
             vector = vectors[0] if vectors else None
             if not vector or not any(vector):  # empty/zero-norm → nothing worth indexing
                 return
@@ -1033,19 +1027,22 @@ class Engine:
         messages = build_extractor_messages(recall, narration, env=env)
         raw = ""
         for _ in range(3):  # 1 attempt + 2 re-asks (docs/13)
-            started = time.perf_counter()
             try:
                 # Generous cap: extraction JSON can be dense; a truncated response parses to
-                # nothing and silently drops state (worse than a slow beat).
+                # nothing and silently drops state (worse than a slow beat). The router meters
+                # each attempt and stores its full response (D-66).
                 raw = await self._router.complete(
-                    "extractor", messages, json_mode=True, temperature=0.1, max_tokens=4096
+                    "extractor",
+                    messages,
+                    json_mode=True,
+                    temperature=0.1,
+                    max_tokens=4096,
+                    branch_id=branch_id,
                 )
             except ProviderError as exc:
                 # A call failure is the adapter's to retry, not ours — bail to narration-only.
                 logger.warning("extractor call failed; committing narration-only beat: %s", exc)
-                await self._meter("extractor", messages, started)
                 return []
-            await self._meter("extractor", messages, started)
             extraction = parse_extraction(raw)
             if extraction is not None:
                 policy = await self._store.get_extraction_policy()
@@ -1058,8 +1055,8 @@ class Engine:
                     "Return ONLY the corrected JSON object, nothing else.",
                 ),
             ]
-        # Log an excerpt of the last response: without it a lost beat can't be diagnosed after the
-        # fact (a live beat that named three NPCs and committed nothing never could be, D-51).
+        # Log an excerpt of the last response; every attempt's full response is in llm_calls too
+        # (D-66: `uro calls --stage extractor`), so a lost beat can be diagnosed after the fact.
         logger.warning(
             "extractor output not parseable after re-asks; committing narration-only beat. "
             "Last response (first %d chars): %r",
@@ -1067,18 +1064,3 @@ class Engine:
             raw[:_EXCERPT],
         )
         return []
-
-    async def _meter(self, stage_tag: str, messages: list[Message], started: float) -> None:
-        # Metering is best-effort observability — it must never break a beat.
-        try:
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            await self._store.record_llm_call(
-                LLMCall(
-                    stage_tag=stage_tag,
-                    prompt_hash=_hash_messages(messages),
-                    latency_ms=latency_ms,
-                    model=self._router.model_for(stage_tag),
-                )
-            )
-        except Exception as exc:
-            logger.warning("metering failed for stage %s: %s", stage_tag, exc)

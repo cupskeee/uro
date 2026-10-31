@@ -1393,7 +1393,13 @@ class _FakeUsageStore:
             )
         ]
 
-    async def usage_by_stage(self, stage: str | None = None) -> list[dict[str, Any]]:
+    async def usage_by_stage(
+        self,
+        stage: str | None = None,
+        *,
+        world_id: str | None = None,
+        branch_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         self.stage_arg = stage
         return [
             {
@@ -1439,15 +1445,6 @@ def test_usage_403_for_a_plain_player_token() -> None:
 def test_usage_401_without_a_valid_token() -> None:
     resp = TestClient(create_app(_operator_deps(_FakeUsageStore()))).get("/usage?token=nope")
     assert resp.status_code == 401
-
-
-def test_usage_400_for_unsupported_world_or_campaign_filter() -> None:
-    # Honest: llm_calls isn't keyed by world/campaign — reject, never silently ignore.
-    client = TestClient(create_app(_operator_deps(_FakeUsageStore())))
-    for q in ("world=w:1", "campaign=camp-1"):
-        resp = client.get(f"/usage?token=tok-a&{q}")
-        assert resp.status_code == 400
-        assert "not supported yet" in resp.json()["detail"]
 
 
 def test_world_chronicle_operator_reads_a_named_branch() -> None:

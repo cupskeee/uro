@@ -71,7 +71,8 @@ GET  /campaigns/{c}/codex         [?participant=]                  a participant
 POST /campaigns/{c}/codex        {text, participant?, key?, pinned?, refs?}   add a note (self/admin, D-39) (BE-9)
 GET  /campaigns/{c}/tokens                                         runtime tokens, metadata only (self/admin, D-39)
 POST /campaigns/{c}/tokens/revoke {token} | {participant}           revoke one token, or all of a participant's (self/admin, D-39)
-GET  /usage                      [?stage=]                        LLM-call telemetry by stage (OPERATOR-only, D-44) (BE-10)
+GET  /usage                      [?stage=&world=&campaign=]       LLM-call telemetry by stage (OPERATOR-only, D-44) (BE-10, D-66)
+GET  /llm-calls                  [?stage=&world=&campaign=&limit=] recent calls with each structured call's response (OPERATOR-only, D-45) (D-66)
 GET  /rulesets                                                    registry: id@version + sheet shape + settings schema, plus installed plugins that can't be used (`unusable`, with the reason) (any-authed) (BE-10, D-62, D-65)
 GET  /version                                                     the server's uro-server/uro-core versions (any-authed; /healthz stays a bare probe)
 GET  /providers                                                   model-connection registry snapshot: connections+roles+credential-metadata (OPERATOR-only, D-47)
@@ -108,13 +109,14 @@ HTTP (BE-8):** `GET …/export` returns the whole world as a portable, SHA-256 h
 tampered bundle with `400` (`ExportError`) **before** any write, else re-instantiates a fresh world
 (remapped ids, projections rebuilt by replay). Both are **operator-only** (import a structural write
 → D-44; export bulk omniscient disclosure → D-45). **Telemetry + registry + world-scoped chronicle
-ship (BE-10):** `GET /usage[?stage=]` aggregates the `llm_calls` metering by engine stage and model (count,
-token sums — 0 until token counts are recorded — avg latency) — **operator-only** (D-44, it reveals model/token/latency cost); the engine
-only *exposes* metering, it never bills (docs/00). `?world=`/`?campaign=` are **not supported yet**
-(the `llm_calls` rows carry no world/campaign column) and return `400` rather than silently ignoring
-the filter — a consumer never mistakes a global total for a per-world one; keying metering by
-world/campaign is a forward-only migration + threading campaign context through the `_meter` seam
-(deferred). `GET /rulesets` lists each built-in ruleset's `id`, `version`, and sheet schema
+ship (BE-10):** `GET /usage[?stage=&world=&campaign=]` aggregates the `llm_calls` metering by engine
+stage and model (count, token sums, avg latency) — **operator-only** (D-44, it reveals
+model/token/latency cost); the engine only *exposes* metering, it never bills (docs/00). Since D-66
+every call through the `ProviderRouter` is recorded with the tokens its adapter reported and the
+world and branch it served, so `?world=` / `?campaign=` (a campaign's calls are its branch's) filter
+it; calls metered before 0.7 have no world and count only in the unfiltered total. `GET
+/llm-calls[?stage=&world=&campaign=&limit=]` lists recent calls with each structured call's full
+response (operator-only, D-45: an extractor response holds claim truth values). `GET /rulesets` lists each built-in ruleset's `id`, `version`, and sheet schema
 (any-authed — public capability info). `GET /worlds/{w}/chronicle[?branch=&limit=]` is the
 **world-scoped** twin of the campaign chronicle: it reads ANY named branch's recent beats (incl.
 sibling what-if forks), so it's a GM/operator timeline-inspection surface (operator-only, same family
@@ -250,7 +252,8 @@ uro chronicle <campaign> | uro chronicle --world W --branch B   # recent beats, 
 uro events <world> [--branch --type --entity --caused-by]      # the raw event log (operator view, D-45)
 uro show <world> <commit|prefix|marker>   # one commit's events;  ids print in FULL (a ULID's first 10 chars are a timestamp)
 uro branch diff <world> <a> <b> [--sections]   # + added / - removed / ~ changed, per projection
-uro usage [--stage S]                     # LLM-call telemetry by stage;  uro ruleset list
+uro usage [--stage S] [--world W | --campaign C]   # LLM-call telemetry by stage;  uro ruleset list
+uro calls [--stage extractor] [--campaign C]       # recent calls with what each structured one returned (D-66)
 uro campaign time-skip <campaign> --days N   # advance the campaign's OWN branch + fire downtime agendas (fork: `branch fork --time-skip-days`)
 uro campaign outcome <campaign> bundle.json  # record an external game's outcome (Chronicler, D-25/D-32) — same gate as the endpoint
 uro extraction-policy show | set --no-places …   # which emergent categories play may create (D-49)

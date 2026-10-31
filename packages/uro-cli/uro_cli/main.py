@@ -278,6 +278,8 @@ def world_create(
             needs_fill = backfill and check_sufficiency(pack).grade != "runnable"
             router = build_router(provider, model) if needs_fill else None
             await connect_store(store)
+            if router is not None:  # the backfill's calls are metered like any other (D-66)
+                router.recorder = store.record_llm_call
             result = await import_pack(store, pack, backfill_router=router)
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
@@ -1174,20 +1176,68 @@ def chronicle(
     _run_async(_run)
 
 
+async def _call_scope(
+    store: PostgresEventStore, world: str | None, campaign: str | None
+) -> tuple[str | None, list[str] | None]:
+    """--world / --campaign → (world_id, branch_ids); a campaign's calls are its branch's (D-66)."""
+    world_id = (await _world_or_exit(store, world)).world_id if world else None
+    branch_ids = [(await _campaign_or_exit(store, campaign)).branch_id] if campaign else None
+    return world_id, branch_ids
+
+
 @app.command()
-def usage(stage: str = typer.Option(None, "--stage", help="only this pipeline stage")) -> None:
-    """LLM-call telemetry by stage: calls, models, tokens (0 until metered), average latency."""
+def usage(
+    stage: str = typer.Option(None, "--stage", help="only this pipeline stage"),
+    world: str = typer.Option(None, "--world", help="only calls that served this world"),
+    campaign: str = typer.Option(None, "--campaign", help="only calls on this campaign's branch"),
+) -> None:
+    """LLM-call telemetry by stage: calls, models, token counts, average latency (D-66)."""
 
     async def _run() -> None:
         store = build_store()
         await connect_store(store)
         try:
-            rows = await store.usage_by_stage(stage)
+            world_id, branch_ids = await _call_scope(store, world, campaign)
+            rows = await store.usage_by_stage(stage, world_id=world_id, branch_ids=branch_ids)
         finally:
             await store.close()
         typer.echo(f"total calls: {sum(int(r['calls']) for r in rows)}")
         for r in rows:
             typer.echo(f"  {_row(r)}")
+
+    _run_async(_run)
+
+
+@app.command()
+def calls(
+    stage: str = typer.Option(None, "--stage", help="e.g. extractor, planner"),
+    world: str = typer.Option(None, "--world", help="only calls that served this world"),
+    campaign: str = typer.Option(None, "--campaign", help="only calls on this campaign's branch"),
+    limit: int = typer.Option(5, "--limit", min=1, max=200, help="how many, newest first"),
+) -> None:
+    """Recent LLM calls with what each structured one returned (D-66) — e.g. the extractor's raw
+    JSON for a beat that committed less than its narration said."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            world_id, branch_ids = await _call_scope(store, world, campaign)
+            rows = await store.recent_llm_calls(
+                stage=stage, world_id=world_id, branch_ids=branch_ids, limit=limit
+            )
+        finally:
+            await store.close()
+        if not rows:
+            typer.echo("(no metered calls)")
+        for r in rows:
+            tokens = f"{r['tokens_in'] or '?'}→{r['tokens_out'] or '?'} tokens"
+            typer.echo(
+                f"{r['created_at']:%Y-%m-%d %H:%M:%S}  {r['stage_tag']:<10} {r['model'] or '-'}  "
+                f"{tokens}  {r['latency_ms']}ms"
+            )
+            if r["response"] is not None:
+                typer.echo(f"  {r['response']}")
 
     _run_async(_run)
 

@@ -9,6 +9,22 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+Upgrading: run `uro db migrate` (migration 024 adds three columns to `llm_calls`).
+
+### Added
+- **Token counts, per-world usage, and the raw output of every structured call (D-66).**
+  - **Tokens:** every LLM call is now recorded with the tokens its provider reported. The OpenAI,
+    Anthropic and Codex adapters report them, and a custom provider that doesn't still works,
+    metered without tokens.
+  - **Per-world usage:** each call records the world and branch it served, so `uro usage` and
+    `GET /usage` filter by `--world` / `--campaign`. The server used to answer that filter with a
+    400.
+  - **Raw output:** a structured call (extractor, planner, judge, backfill) stores its full response,
+    readable with `uro calls --stage extractor` or `GET /llm-calls` (operator-only). A beat that
+    committed less than its narration said can be diagnosed afterwards.
+  - **Coverage:** metering moved into the provider router, so backfill and probe calls are metered
+    for the first time.
+
 ## [0.6.0] - 2026-10-31
 
 Upgrading: no database migration this release. Worth knowing before you upgrade:

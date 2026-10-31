@@ -951,3 +951,30 @@ async def test_a_time_skip_survives_a_world_whose_ruleset_is_gone(
         assert r.status_code == 200, r.text
     later = await store.get_branch_by_name(world.world_id, "later")
     assert await store.current_world_time(later.branch_id) == 3  # type: ignore[union-attr]
+
+
+async def test_usage_by_world_and_the_raw_calls_endpoint(store: PostgresEventStore) -> None:
+    # D-66: /usage takes ?world= / ?campaign= (it 400'd: no column to filter on), and /llm-calls
+    # shows what each structured call returned.
+    class _Extracting(_Stub):
+        async def complete(self, req: CompletionRequest) -> str:
+            return '{"actors": [{"name": "Wren"}], "claims": []}'
+
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Extracting()))
+    app = create_app(
+        engine_deps(store, engine, {_TOK: "alice", "tok-player": "bob"}, admin_tokens={_TOK})
+    )
+    transport = httpx.ASGITransport(app=app)
+    world = await store.create_world(f"Counted-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    await engine.run_beat(campaign, "p1", "I meet Wren")
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        u = (await client.get(_q(f"/usage?world={world.world_id}"))).json()
+        assert {r["stage_tag"] for r in u["by_stage"]} >= {"narrator", "extractor"}
+        c = (await client.get(_q(f"/usage?campaign={campaign.campaign_id}&stage=extractor"))).json()
+        assert c["total_calls"] == 1
+        calls = (await client.get(_q(f"/llm-calls?world={world.world_id}&stage=extractor"))).json()
+        assert "Wren" in calls["calls"][0]["response"]
+        assert (await client.get("/llm-calls?token=tok-player")).status_code == 403
+        assert (await client.get(_q("/usage?world=nope"))).status_code == 404
+        assert (await client.get(_q("/llm-calls?campaign=nope"))).status_code == 404
