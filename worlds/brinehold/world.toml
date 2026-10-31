@@ -18,6 +18,11 @@ seasons = ["thaw", "high-tide", "gales", "ice"]
 id = "uro-pool"
 version = "0"
 
+# The game's settings for its ruleset (D-62); every key is optional, the defaults are the rules
+# as written. `uro ruleset list` shows them all.
+# [ruleset.config]
+# push_strain = 2      # pushing costs twice the strain in this harsher sea
+
 [history]
 seed_era = "the-year-the-seawall-broke"
 simulate_years = 30

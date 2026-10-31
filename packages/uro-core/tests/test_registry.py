@@ -69,7 +69,8 @@ async def test_world_and_campaign_bind_the_declared_ruleset(store: PostgresEvent
         f"Ember-{new_id()}", ruleset_id="uro-pbta", ruleset_version=">=0"
     )
     main = world.main_branch_id
-    assert await store.world_ruleset(main) == ("uro-pbta", ">=0")
+    pin = await store.world_ruleset(main)
+    assert (pin.id, pin.version) == ("uro-pbta", ">=0")
 
     pbta_sheet = registry.resolve("uro-pbta").new_character(CharSpec(), Rng(0))
     campaign = await store.start_campaign(
@@ -95,7 +96,8 @@ async def test_world_and_campaign_bind_the_declared_ruleset(store: PostgresEvent
 
 async def test_blank_world_defaults_to_uro_basic(store: PostgresEventStore) -> None:
     world = await store.create_world(f"Blank-{new_id()}")
-    assert await store.world_ruleset(world.main_branch_id) == ("", "")
+    pin = await store.world_ruleset(world.main_branch_id)
+    assert (pin.id, pin.version) == ("", "")
     assert isinstance(registry.resolve(""), UroBasic)  # empty → default
 
 

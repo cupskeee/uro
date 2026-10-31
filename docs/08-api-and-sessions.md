@@ -38,7 +38,7 @@ management surface over the `EngineStore` port (`ServerDeps.store`; `501` when a
 transport-only deps). **Built now:**
 
 ```
-POST /worlds                     {name, tone?, rule_pack?, ruleset?, ruleset_version?}   create world (JSON body; OPERATOR-only, D-46)
+POST /worlds                     {name, tone?, rule_pack?, ruleset?, ruleset_version?, ruleset_config?}   create world (JSON body; OPERATOR-only, D-46; bad settings → 400, D-62)
 POST /worlds/create              (multipart .zip) [?backfill=]     import a pack as a new world, its ruleset pinned (OPERATOR-only, D-44)
 POST /worlds/{w}/seed            (multipart .zip) [?seed=]         History seeding; the pack must be the world's own (OPERATOR-only, D-44)
 POST /worlds/validate            (multipart .zip of the pack)      grade an uploaded pack, no import (BE-6)
@@ -72,7 +72,7 @@ POST /campaigns/{c}/codex        {text, participant?, key?, pinned?, refs?}   ad
 GET  /campaigns/{c}/tokens                                         runtime tokens, metadata only (self/admin, D-39)
 POST /campaigns/{c}/tokens/revoke {token} | {participant}           revoke one token, or all of a participant's (self/admin, D-39)
 GET  /usage                      [?stage=]                        LLM-call telemetry by stage (OPERATOR-only, D-44) (BE-10)
-GET  /rulesets                                                    registry: id@version + sheet shape (any-authed) (BE-10)
+GET  /rulesets                                                    registry: id@version + sheet shape + settings schema (any-authed) (BE-10, D-62)
 GET  /version                                                     the server's uro-server/uro-core versions (any-authed; /healthz stays a bare probe)
 GET  /providers                                                   model-connection registry snapshot: connections+roles+credential-metadata (OPERATOR-only, D-47)
 POST /providers                  {name, provider, base_url?, auth_id?}   register a connection (OPERATOR-only, D-47)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import json
 import logging
 import secrets
 import tempfile
@@ -129,26 +130,16 @@ def _safe_extract_pack(data: bytes, dest: Path) -> Path:
     raise HTTPException(status_code=400, detail="no world.toml found in the archive")
 
 
-def _default_sheet(ruleset_id: str, version: str) -> tuple[dict[str, Any], str]:
-    """A default character sheet from a world's declared ruleset (docs/06, D-30) — mirrors the
-    CLI's `_build_pc_sheet` so a REST-created PC is sheeted+pinned exactly like a CLI-created one
-    (else the ruleset's move/harm layer never engages, and an empty pin plays the campaign under
-    the server's default ruleset). Built via the registry, independent of the server's own ruleset.
-    Returns (sheet, resolved ruleset id)."""
+def _new_pc_sheet(ruleset: Any) -> dict[str, Any]:
+    """A default character sheet from the world's ruleset, built with the world's settings
+    (docs/06, D-30, D-62) — like the CLI's `_build_pc_sheet`, so a REST-created PC is sheeted and
+    pinned exactly like a CLI-created one (an empty pin would play the campaign under the
+    server's default ruleset, with mechanics off)."""
     from uro_core.rulesets.base import CharSpec
-    from uro_core.rulesets.registry import resolve as _resolve
     from uro_core.rulesets.rng import Rng
 
-    ruleset = _resolve(ruleset_id, version)
-    return ruleset.new_character(CharSpec(), Rng(0)), ruleset.id
-
-
-def _resolve_ruleset_id(ruleset_id: str, version: str) -> str:
-    """The resolved ruleset id for a world's declared (id, version) — for pinning a campaign whose
-    PC we don't (re)sheet (an adopted actor that already has one)."""
-    from uro_core.rulesets.registry import resolve as _resolve
-
-    return _resolve(ruleset_id, version).id
+    sheet: dict[str, Any] = ruleset.new_character(CharSpec(), Rng(0))
+    return sheet
 
 
 class _CodexPendingStore:
@@ -257,21 +248,23 @@ def engine_deps(
     # pinned, like `uro play`. The process's own engine serves its ruleset and unpinned campaigns;
     # any other ruleset gets a sibling engine, built once, sharing the router (a reload reaches it)
     # and the per-branch react locks (D-34: one branch, one lock, whichever engine runs the pass).
-    siblings: dict[tuple[str, str], Engine] = {}
+    # A world's settings (`[ruleset.config]`, D-62) are part of the key: two Uro Pool worlds with
+    # different settings play different rules.
+    siblings: dict[tuple[str, str, str], Engine] = {}
 
-    def engine_for(campaign: Campaign) -> Engine:
-        rid = campaign.ruleset_id
-        if not rid or rid == engine.ruleset_id:
-            return engine
-        key = (rid, campaign.ruleset_version)
+    async def engine_for(campaign: Campaign) -> Engine:
+        from uro_core.rulesets.registry import campaign_pin, resolve
+
+        pin = await campaign_pin(store, campaign)
+        if pin.id == engine.ruleset_id and not pin.config:
+            return engine  # the process's own ruleset, with default settings
+        key = (pin.id, pin.version, json.dumps(pin.config, sort_keys=True))
         if key not in siblings:
-            from uro_core.rulesets.registry import resolve
-
             try:
-                ruleset = resolve(rid, campaign.ruleset_version)
+                ruleset = resolve(pin.id, pin.version, pin.config)
             except KeyError as exc:  # pinned to a ruleset this build doesn't have
                 raise ValueError(
-                    f"campaign {campaign.campaign_id} is bound to ruleset {rid!r}, which this "
+                    f"campaign {campaign.campaign_id} is bound to ruleset {pin.id!r}, which this "
                     "server doesn't have"
                 ) from exc
             siblings[key] = engine.with_ruleset(ruleset)
@@ -281,7 +274,8 @@ def engine_deps(
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             return
-        async for chunk in engine_for(campaign).run_beat_stream(campaign, participant, text):
+        playing = await engine_for(campaign)
+        async for chunk in playing.run_beat_stream(campaign, participant, text):
             yield chunk
 
     async def report_outcome(campaign_id: str, bundle_json: dict[str, Any]) -> dict[str, Any]:
@@ -329,7 +323,7 @@ def engine_deps(
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
-        events = await engine_for(campaign).preview_beat(campaign, participant, intent)
+        events = await (await engine_for(campaign)).preview_beat(campaign, participant, intent)
         return [e.model_dump() for e in events]
 
     def list_rulesets() -> list[dict[str, Any]]:
@@ -341,7 +335,14 @@ def engine_deps(
         out: list[dict[str, Any]] = []
         for rid in ruleset_registry.available():
             rs = ruleset_registry.resolve(rid)
-            out.append({"id": rs.id, "version": rs.version, "sheet_schema": rs.sheet_schema()})
+            out.append(
+                {
+                    "id": rs.id,
+                    "version": rs.version,
+                    "sheet_schema": rs.sheet_schema(),
+                    "config_schema": rs.config_schema(),
+                }
+            )
         return out
 
     # BE-7: the AI world-authoring stages bind the SAME process router the Engine holds (serve
@@ -1014,16 +1015,14 @@ def create_app(
         tone = body.get("tone")
         if isinstance(tone, str):  # allow a bare-string tone from a JSON consumer
             tone = [tone]
-        # The world's ruleset, as a pack's `[ruleset]` declares it (id + optional version; D-30) —
-        # without it a REST-created world could only ever play the default. Unknown → 400.
+        # The world's ruleset, as a pack's `[ruleset]` declares it — id, optional version, and the
+        # game's settings (D-30, D-62). create_world refuses an unknown id or bad settings → 400.
         ruleset_id, ruleset_version = body.get("ruleset") or "", body.get("ruleset_version") or ""
         if not isinstance(ruleset_id, str) or not isinstance(ruleset_version, str):
             raise HTTPException(status_code=400, detail="ruleset and ruleset_version are strings")
-        if ruleset_id:
-            try:
-                _resolve_ruleset_id(ruleset_id, ruleset_version)
-            except KeyError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        ruleset_config = body.get("ruleset_config") or {}
+        if not isinstance(ruleset_config, dict):
+            raise HTTPException(status_code=400, detail="ruleset_config must be an object")
         try:
             # create_world validates a Reaction-Layer rule_pack LOUDLY (the "silent pack death" fix,
             # docs/18): a malformed pack from a REST client is bad INPUT → 400, not a 500.
@@ -1034,6 +1033,7 @@ def create_app(
                 rule_pack=pack,
                 ruleset_id=ruleset_id,
                 ruleset_version=ruleset_version,
+                ruleset_config=ruleset_config,
             )
         except ValueError as exc:  # pydantic ValidationError (bad rule_pack) subclasses ValueError
             raise HTTPException(status_code=400, detail=f"invalid world: {exc}") from exc
@@ -1055,7 +1055,7 @@ def create_app(
         zip-slip-safe extraction). Importing a pack is `POST /worlds/create` (operator-only)."""
         _auth(request)
         from uro_core.errors import PackError
-        from uro_core.rulesets import registry
+        from uro_core.worldpack.create import ruleset_problem
         from uro_core.worldpack.parse import parse_pack
         from uro_core.worldpack.sufficiency import check_sufficiency
 
@@ -1068,6 +1068,7 @@ def create_app(
                 raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
             report = check_sufficiency(parsed)
             rid = parsed.manifest.ruleset.id
+            problem = ruleset_problem(parsed)  # an unknown id, or settings it refuses (D-62)
             return {
                 "name": parsed.manifest.name,
                 "grade": report.grade,
@@ -1079,7 +1080,8 @@ def create_app(
                 },
                 "dimensions": [d.model_dump() for d in report.dimensions],
                 "ruleset_id": rid,
-                "ruleset_ok": rid in registry.available(),
+                "ruleset_ok": problem is None,
+                "ruleset_problem": problem,
                 "gaps": report.gaps,
             }
 
@@ -1547,15 +1549,17 @@ def create_app(
             # Pin the WORLD's declared ruleset + sheet the PC (D-30 + Phase-3), like the CLI `uro
             # campaign new` path — a REST-created PbtA campaign must not silently fall to an empty
             # pin + no sheet (which plays it under the default ruleset and disables mechanics).
-            world_rid, world_rver = await store.world_ruleset(branch.branch_id)
+            from uro_core.rulesets.registry import resolve_for_branch
+
+            pin = await store.world_ruleset(branch.branch_id)
+            ruleset = await resolve_for_branch(store, branch.branch_id)  # with the world's settings
             pc_sheet: dict[str, Any] | None = None
             if new_pc_name is not None or (
                 adopt_actor_id is not None
                 and await store.get_sheet(branch.branch_id, adopt_actor_id) is None
             ):
-                pc_sheet, ruleset_id = _default_sheet(world_rid, world_rver)
-            else:  # adopting an already-sheeted actor: keep its sheet, still pin the ruleset
-                ruleset_id = _resolve_ruleset_id(world_rid, world_rver)
+                pc_sheet = _new_pc_sheet(ruleset)
+            ruleset_id = ruleset.id  # an adopted, already-sheeted actor keeps its sheet
             c = await store.start_campaign(
                 world_id,
                 branch.branch_id,
@@ -1565,7 +1569,7 @@ def create_app(
                 pc_sheet=pc_sheet,
                 starting_items=list(STARTING_GEAR) if new_pc_name is not None else None,
                 ruleset_id=ruleset_id,
-                ruleset_version=world_rver,
+                ruleset_version=pin.version,
                 seed=seed,
             )
         except (ValueError, KeyError) as exc:  # bad PC choice, or world pins an absent ruleset
@@ -1622,7 +1626,9 @@ def create_app(
                 adopt_actor_id is not None
                 and await store.get_sheet(campaign.branch_id, adopt_actor_id) is None
             ):
-                pc_sheet, _ = _default_sheet(campaign.ruleset_id, campaign.ruleset_version)
+                from uro_core.rulesets.registry import resolve_for_campaign
+
+                pc_sheet = _new_pc_sheet(await resolve_for_campaign(store, campaign))
             actor_id = await store.bind_pc(
                 campaign_id,
                 participant,

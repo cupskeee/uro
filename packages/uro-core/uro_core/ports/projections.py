@@ -23,6 +23,7 @@ from uro_core.timeline.models import (
     EdgeView,
     FactionView,
     PlaceView,
+    RulesetPin,
     ThreadView,
 )
 
@@ -79,9 +80,9 @@ class ProjectionQueries(Protocol):
         (docs/09), from its WorldGenesis. ('', {}) for a world created without a pack."""
         ...
 
-    async def world_ruleset(self, branch_id: str) -> tuple[str, str]:
-        """The (ruleset_id, ruleset_version) a branch's world declares (docs/06, D-30), from its
-        WorldGenesis. ('', '') for a world with no pinned ruleset → the registry default."""
+    async def world_ruleset(self, branch_id: str) -> RulesetPin:
+        """The ruleset a branch's world declares — id, version, settings (docs/06, D-30, D-62) —
+        from its WorldGenesis. An empty pin for a world with none → the registry default."""
         ...
 
     async def world_rule_pack(self, branch_id: str) -> dict[str, Any]:

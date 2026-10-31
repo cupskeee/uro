@@ -20,7 +20,8 @@ from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.pipeline.engine import Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
-from uro_core.rulesets.base import CharSpec
+from uro_core.rulesets import registry
+from uro_core.rulesets.base import CharSpec, Ruleset
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import STARTING_GEAR, World
 
@@ -132,11 +133,10 @@ async def _world_or_exit(store: PostgresEventStore, ident: str) -> World:
     return named[0]
 
 
-def _build_pc_sheet(ruleset_id: str = "", version: str = "") -> tuple[dict[str, Any], str]:
-    """A default character sheet from the world's bound ruleset, so every PC can be checked
-    (docs/06). `ruleset_id` selects it via the registry — a PbtA world mints a PbtA sheet."""
-    ruleset = build_ruleset(ruleset_id, version)
-    return ruleset.new_character(CharSpec(), Rng(0)), ruleset.id
+def _build_pc_sheet(ruleset: Ruleset) -> dict[str, Any]:
+    """A default character sheet from the world's bound ruleset (with the world's settings), so
+    every PC can be checked (docs/06) — a PbtA world mints a PbtA sheet."""
+    return ruleset.new_character(CharSpec(), Rng(0))
 
 
 @app.callback()
@@ -184,7 +184,8 @@ def world_new(
     sheeted PC. Prints the campaign id."""
 
     async def _run() -> None:
-        sheet, ruleset_id = _build_pc_sheet(ruleset)  # an unknown id fails here, before any write
+        rs = build_ruleset(ruleset)  # an unknown id fails here, before any write
+        sheet, ruleset_id = _build_pc_sheet(rs), rs.id
         store = build_store()
         await connect_store(store)
         try:
@@ -211,7 +212,7 @@ def world_new(
 def world_validate(path: str) -> None:
     """Parse a world pack and report its sufficiency (docs/09) — the creator loop, no import."""
     from uro_core.errors import PackError
-    from uro_core.rulesets import registry
+    from uro_core.worldpack.create import ruleset_problem
     from uro_core.worldpack.parse import parse_pack
     from uro_core.worldpack.sufficiency import check_sufficiency
 
@@ -229,12 +230,10 @@ def world_validate(path: str) -> None:
     typer.echo(f"grade: {report.grade.upper()}")
     for d in report.dimensions:
         typer.echo(f"  {'ok ' if d.ok else 'GAP'} {d.name:<10} {d.detail}")
-    # Catch a bad ruleset id at VALIDATE, not as a raw KeyError at `campaign new` (phase-6 review).
+    # Catch a bad ruleset id or settings at VALIDATE, not at `campaign new` (phase-6 review, D-62).
+    problem = ruleset_problem(pack)
     rid = pack.manifest.ruleset.id
-    if rid in registry.available():
-        typer.echo(f"  ok  ruleset    {rid}")
-    else:
-        typer.echo(f"  GAP ruleset    unknown ruleset {rid!r} (installed: {registry.available()})")
+    typer.echo(f"  ok  ruleset    {rid}" if problem is None else f"  GAP ruleset    {problem}")
     if report.grade != "runnable":
         typer.echo("\ngaps to fix (or run backfill):")
         for g in report.gaps:
@@ -474,7 +473,7 @@ def play(
                 # Rebind the campaign's OWN ruleset (D-30) — a PbtA campaign plays under uro_pbta.
                 ruleset=None
                 if (bare or no_mechanics)
-                else build_ruleset(campaign.ruleset_id, campaign.ruleset_version),
+                else await registry.resolve_for_campaign(store, campaign),
                 bare=bare,
             )
 
@@ -1180,14 +1179,16 @@ def usage(stage: str = typer.Option(None, "--stage", help="only this pipeline st
 
 @ruleset_app.command("list")
 def ruleset_list() -> None:
-    """The built-in rulesets a world can declare (`ruleset = "id@version"` in world.toml)."""
-    from uro_core.rulesets import registry
-
+    """The rulesets a world can declare (`[ruleset] id` in world.toml), each with the settings a
+    game may give it under `[ruleset.config]` and their defaults (D-62)."""
     for rid in registry.available():
         rs = registry.resolve(rid)
         typer.echo(
             f"{rs.id}@{rs.version}  sheet: {', '.join(rs.sheet_schema().get('properties', {}))}"
         )
+        for key, spec in rs.config_schema().get("properties", {}).items():
+            what = spec.get("description", "")
+            typer.echo(f"    {key:<24} default {spec.get('default')!s:<5} {what}")
 
 
 @campaign_app.command("list")
@@ -1314,17 +1315,16 @@ def campaign_new(
                 raise typer.Exit(1)
             # Bind the WORLD's declared ruleset (docs/06, D-30): a PbtA world's campaign is
             # played under uro_pbta, not the hard-coded default. ('' → registry default.)
-            world_rid, world_rver = await store.world_ruleset(b.branch_id)
+            pin = await store.world_ruleset(b.branch_id)
+            rs = await registry.resolve_for_branch(store, b.branch_id)  # with the world's settings
             # Every PC needs a sheet so the mechanics gate can check it. A fresh PC gets one; an
             # adopted actor is sheeted only if it lacks one (a re-adopted PC keeps its sheet).
             pc_sheet = None
-            ruleset_id = ""
             if pc is not None or (
                 adopt is not None and await store.get_sheet(b.branch_id, adopt) is None
             ):
-                pc_sheet, ruleset_id = _build_pc_sheet(world_rid, world_rver)
-            else:
-                ruleset_id = build_ruleset(world_rid, world_rver).id
+                pc_sheet = _build_pc_sheet(rs)
+            ruleset_id = rs.id
             campaign = await store.start_campaign(
                 w.world_id,
                 b.branch_id,
@@ -1334,7 +1334,7 @@ def campaign_new(
                 pc_sheet=pc_sheet,
                 starting_items=list(STARTING_GEAR) if pc is not None else None,
                 ruleset_id=ruleset_id,
-                ruleset_version=world_rver,
+                ruleset_version=pin.version,
                 seed=seed,
             )
         finally:
@@ -1451,7 +1451,7 @@ def campaign_join(
             if pc is not None or (
                 adopt is not None and await store.get_sheet(campaign.branch_id, adopt) is None
             ):
-                pc_sheet, _ = _build_pc_sheet(campaign.ruleset_id, campaign.ruleset_version)
+                pc_sheet = _build_pc_sheet(await registry.resolve_for_campaign(store, campaign))
             actor = await store.bind_pc(
                 campaign_id,
                 participant,
@@ -1493,7 +1493,7 @@ def dry_run(
             engine = Engine(
                 store,
                 build_router(provider, model, role_models),
-                ruleset=build_ruleset(campaign.ruleset_id, campaign.ruleset_version),
+                ruleset=await registry.resolve_for_campaign(store, campaign),
             )
             events = await engine.preview_beat(campaign, PARTICIPANT, intent)
         finally:

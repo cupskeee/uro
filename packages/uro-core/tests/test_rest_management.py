@@ -6,6 +6,7 @@ transport (auth/broadcast) with fake deps. Deterministic — no LLM (management 
 
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -639,7 +640,8 @@ async def test_a_pack_is_imported_and_seeded_over_the_api(store: PostgresEventSt
         assert r.status_code == 200, r.text
         made = r.json()
         assert made["name"] == name and made["grade"] in ("runnable", "thin")
-        assert await store.world_ruleset(made["main_branch_id"]) == ("uro-pbta", ">=0")
+        pin = await store.world_ruleset(made["main_branch_id"])
+        assert (pin.id, pin.version) == ("uro-pbta", ">=0")
         player = await client.post("/worlds/create?token=tok-player", files=upload)
         assert player.status_code == 403  # a structural write: operator-only (D-44)
         flag = await client.post(_q("/worlds/create?backfill=yes"), files=upload)
@@ -834,3 +836,53 @@ async def test_review_fixes_on_the_management_surface(
             assert await store.get_secret(oauth) == ("at2", "rt2")
         finally:
             await store.delete_credential(oauth)
+
+
+async def test_a_rest_worlds_settings_reach_the_engine_that_plays_it(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D-62: POST /worlds takes `ruleset_config`; the server plays each campaign under its world's
+    # settings — a different engine per (ruleset, settings), the process engine for the defaults.
+    from uro_core.rulesets.uro_basic import UroBasic
+
+    played: list[tuple[str, dict[str, Any], int]] = []
+
+    async def fake_stream(self: Engine, campaign: Any, participant: str, text: str):  # type: ignore[no-untyped-def]
+        cfg = self._ruleset.config.model_dump() if self._ruleset is not None else {}
+        played.append((self.ruleset_id, cfg, id(self)))
+        yield "ok"
+
+    monkeypatch.setattr(Engine, "run_beat_stream", fake_stream)
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()), ruleset=UroBasic())
+    deps = engine_deps(store, engine, {_TOK: "alice"}, admin_tokens={_TOK})
+    transport = httpx.ASGITransport(app=create_app(deps))
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        bad = await client.post(
+            _q("/worlds"), json={"name": "X", "ruleset": "uro-pool", "ruleset_config": {"no": 1}}
+        )
+        assert bad.status_code == 400 and "uro-pool" in bad.text
+        campaigns = []
+        for name, rid, cfg in (
+            ("Tuned", "uro-pool", {"push_strain": 2}),
+            ("Plain", "uro-pool", {}),
+            ("Basic", "", {}),
+            ("TunedBasic", "uro-basic", {"max_level": 3}),  # the server's ruleset, other settings
+        ):
+            r = await client.post(
+                _q("/worlds"), json={"name": name, "ruleset": rid, "ruleset_config": cfg}
+            )
+            assert r.status_code == 200, r.text
+            made = await client.post(
+                _q(f"/worlds/{r.json()['world_id']}/campaigns"),
+                json={"participant": "alice", "new_pc_name": "Ash"},
+            )
+            campaigns.append(made.json()["campaign_id"])
+    for c in campaigns:
+        assert [chunk async for chunk in deps.run_beat(c, "alice", "go")] == ["ok"]
+    (tuned, plain, basic, tuned_basic) = played
+    assert (
+        tuned[:2] == ("uro-pool", {**tuned[1], "push_strain": 2}) and plain[1]["push_strain"] == 1
+    )
+    assert tuned[2] != plain[2]  # different settings → a different engine
+    assert basic[2] == id(engine)  # the process ruleset with default settings → its own engine
+    assert tuned_basic[1]["max_level"] == 3 and tuned_basic[2] != id(engine)

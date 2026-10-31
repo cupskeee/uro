@@ -71,6 +71,7 @@ from uro_core.timeline.models import (
     MemoryHit,
     ParticipantNote,
     PlaceView,
+    RulesetPin,
     ThreadView,
     World,
 )
@@ -249,6 +250,7 @@ class PostgresEventStore:
         ruleset_version: str = "",
         rule_pack: dict[str, Any] | None = None,
         extra_events: list[DomainEvent] | None = None,
+        ruleset_config: dict[str, Any] | None = None,
     ) -> World:
         """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, docs/09, 17) plus any
@@ -261,6 +263,15 @@ class PostgresEventStore:
             from uro_core.worldpack.rules import RulePack
 
             RulePack(**rule_pack)  # raises on a bad version / unknown trigger / malformed action
+        if ruleset_id or ruleset_config:
+            # Same rule for the ruleset (D-62): an unknown id or a bad `[ruleset.config]` fails
+            # here, not at the first campaign or beat.
+            from uro_core.rulesets import registry
+
+            try:
+                registry.resolve(ruleset_id, ruleset_version, ruleset_config)
+            except KeyError as exc:
+                raise ValueError(str(exc.args[0])) from exc
         genesis = [
             world_genesis(
                 name,
@@ -268,6 +279,7 @@ class PostgresEventStore:
                 prompt_overrides=prompt_overrides,
                 ruleset_id=ruleset_id,
                 ruleset_version=ruleset_version,
+                ruleset_config=ruleset_config,
                 rule_pack=rule_pack,
             ),
             *(extra_events or []),
@@ -1906,10 +1918,11 @@ class PostgresEventStore:
             return {}
         return row["payload"].get("rule_pack", {}) or {}
 
-    async def world_ruleset(self, branch_id: str) -> tuple[str, str]:
-        """The (ruleset_id, ruleset_version) a branch's world declares, read from its WorldGenesis
-        (docs/06). ('', '') for a world created without a pack → the registry default (uro-basic).
-        A campaign started on the branch binds this, so the pack's ruleset flows to play."""
+    async def world_ruleset(self, branch_id: str) -> RulesetPin:
+        """The ruleset a branch's world declares — id, version and settings (D-62) — read from its
+        WorldGenesis (docs/06). An empty pin for a world created without one → the registry
+        default (uro-basic). A campaign started on the branch binds this, so the pack's ruleset
+        and settings flow to play."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT e.payload FROM events e "
@@ -1919,9 +1932,13 @@ class PostgresEventStore:
                 branch_id,
             )
         if row is None:
-            return "", ""
+            return RulesetPin()
         payload = row["payload"]
-        return payload.get("ruleset_id", ""), payload.get("ruleset_version", "")
+        return RulesetPin(
+            id=payload.get("ruleset_id", ""),
+            version=payload.get("ruleset_version", ""),
+            config=payload.get("ruleset_config") or {},
+        )
 
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]:
         """Item ids an actor owns (docs/02) — used to loot a defeated combatant."""
