@@ -8,6 +8,7 @@ like test_cli_reads. The `stub` provider kind keeps refresh/test offline.
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -148,3 +149,23 @@ async def test_cli_time_skip_rests_a_uro_pool_pc(
     )
     assert result.exit_code == 0, result.output
     assert (await store.get_sheet(w.main_branch_id, pc))["strain"] == 0  # type: ignore[arg-type,index]
+
+
+def test_serve_opens_its_store_and_accepts_a_player(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The REAL `uro serve` wiring, not an app a test builds around an already-open store: serve's
+    # store must open when the app starts. When the live feed moved into a lifespan (#129), FastAPI
+    # silently skipped serve's on_event hooks, the store never opened, and every connect was a 500.
+    import uvicorn
+    from starlette.testclient import TestClient
+
+    served: list[Any] = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: served.append(app))
+    code, out = _uro("serve", "--provider", "stub", "--token", "tok-a=p1")
+    assert code == 0, out
+    with (
+        TestClient(served[0]) as client,
+        client.websocket_connect(f"/campaigns/{env.campaign}/play?token=tok-a") as ws,
+    ):
+        assert any(ws.receive_json()["type"] == "participant_joined" for _ in range(5))
