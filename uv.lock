@@ -1219,7 +1219,7 @@ wheels = [
 
 [[package]]
 name = "uro-cli"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "packages/uro-cli" }
 dependencies = [
     { name = "python-dotenv" },
@@ -1242,7 +1242,7 @@ requires-dist = [
 
 [[package]]
 name = "uro-core"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "packages/uro-core" }
 dependencies = [
     { name = "jinja2" },
@@ -1287,7 +1287,7 @@ provides-extras = ["postgres", "llm", "nats", "all"]
 
 [[package]]
 name = "uro-server"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "packages/uro-server" }
 dependencies = [
     { name = "fastapi" },
