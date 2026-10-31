@@ -55,7 +55,7 @@ The report's key insight, kept and sharpened. Generated prose constantly invents
 - **Named entity introduced** ("Eorl, the bandit lord") → `ActorCreated` at T1.
 - **Player interacts with an extra repeatedly / pins them** → `ActorPromoted` T0→T1→T2. Any random NPC can become important (owner requirement); importance is *behavior-driven*, never pre-authored.
 - **Claim asserted by narration as true** ("the cellar door is locked") → `ClaimRecorded`, `truth=true`.
-- **Claim asserted by a character in dialogue** → `ClaimRecorded` with `truth=unknown` + `BeliefChanged` for the speaker — NPCs can lie without corrupting world truth.
+- **Claim asserted by a character in dialogue** → `ClaimRecorded` with `truth=unknown` + `BeliefChanged` for the speaker — NPCs can lie without corrupting world truth. The belief's confidence is how sure the speaker sounds. A character retelling something already known is a restatement, not a new claim: the extractor sees as KNOWN the claims recalled for the scene, what the characters on stage believe, and the latest claims on the branch whatever their subject (`RecallBundle.recent_claims`, the last 15; live run 2026-10-31).
 - **Claim asserted by the player or their PC** → testimony, exactly like NPC dialogue: `truth=unknown` + listener beliefs, never `truth=true`. Raw player text never reaches the extractor at all (trust model, `13-contracts.md`).
 - **Pure flavor** (weather color, incidental gestures) → not canonicalized; survives only in the beat log.
 

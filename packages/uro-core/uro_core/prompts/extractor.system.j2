@@ -60,7 +60,9 @@ sound drew closer, the group fell silent) unless it leaves a lasting change (a b
 collapsed, a person now gone for good). Extract the standing fact, not the passing moment.
 NEWS a character REPORTS is different: what they say happened elsewhere or earlier ("a woman came
 asking after you"), or someone's stated plan ("the Duke means to seal the harbor") is testimony
-the story builds on — record it as a dialogue claim with durable=true.
+the story builds on — record it as a dialogue claim with durable=true. When that news raises a plot
+the story will have to deal with (boats coming in empty and nobody saying why), ALSO put it in
+`threads` — a claim records what was said, a thread tracks the plot.
 
 EXAMPLES (from real over-extraction — study the OMIT column; these are the mistakes to avoid):
 
@@ -91,5 +93,7 @@ how sure the SPEAKER sounds, not how sure you are that they said it: a hedged ru
 of…", "or so a watchman claimed") is low, around 0.3; something they saw themselves is high. Name a new
 actor only if the prose explicitly names them. A character giving their own name is captured by
 naming them in `actors` — never also record "X says their name is X" as a claim. When a statement conflicts with a KNOWN CLAIM,
-put that claim's id in 'contradicts'. Keep statements terse and self-contained. Output ONLY a
+put that claim's id in 'contradicts'. In `about`, name who or what the claim is about — the person,
+faction, or place, by the name the KNOWN lists use ("River Watch", not "the Watch"). Keep
+statements terse and self-contained. Output ONLY a
 JSON object.

@@ -392,3 +392,12 @@ v0.7.0 (runbook: `docs/live-run.md` §8) and read back from Postgres. Models: th
 | Why a model call failed | **fixed (proven)** | a planner call failed in 22 ms and left nothing to read; failed calls now record their exception types and HTTP status, never the exception text (`test_a_failure_is_described_by_type_never_by_its_text`, migration 025). |
 | `uro connect` prompt | **fixed (proven)** | the prompt came back at once, above the streaming narration, and was gone when the beat committed — the owner retyped an intent and played it twice. It now waits for each beat to settle (`test_the_prompt_waits_for_each_beat_to_settle`). |
 | Leg 4 baseline (`relational_live.py`, 15 beats) | **recorded** | 3 places, a faction with membership edges, 2 named actors, 1 thread; no claim dropped as "not durable"; 5 beats recorded nothing (beat 12 lost what the strangers said they want). The before-image for replaying the prompt changes. |
+
+**Replayed (2026-10-31, `scripts/extraction_replay.py`, `gpt-5.6-luna`, after #132).** Each world's
+recorded narration replayed onto a fork taken just before its first beat:
+
+| World | Original → replay | Read |
+|---|---|---|
+| War story (Leg 3) | Mera's retelling: a new claim at 0.8 → **nothing new**; her belief stays 0.272 with its `learned_from` trail. Sayings 3 → 0; "the tavern" place gone; new hearsay recorded at 0.25–0.35. | fixed — on a different model than the original's `gpt-4o-mini` |
+| Ashfall (Leg 1) | the two dropped news claims **kept**; claims 14 → 15; **threads 2 → 0** | the news instruction said "record it as a dialogue claim", and both original threads had started as reported news; reworded to say news that raises a plot is also a thread |
+| Relational (Leg 4) | beat 12's gap filled; beat 8's rumors become the barkeep's testimony, not narrator facts; thread 1 → 1; claims 13 → 24, one fact **three times** in new words | the repeats named no subject ("the Watch"), so recall never surfaced them to the extractor; it now also sees the branch's latest 15 claims (`test_the_extractor_sees_the_latest_claims_whatever_their_subject`) and is asked to name a claim's subject as the KNOWN lists do. Second replay pending. |

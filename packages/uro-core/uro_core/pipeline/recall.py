@@ -58,6 +58,15 @@ class RecallBundle(BaseModel):
     # The acting player's out-of-world notes (B8) — knowledge that survives a fork (time-loop/NG+),
     # rendered as the player's private recollection ONLY; never canon, never an NPC belief.
     participant_notes: list[ParticipantNote] = Field(default_factory=list)
+    # Claims recorded in the last few beats that aren't otherwise recalled — often ones with no
+    # subject on stage ("the Watch says it's frightened talk"). For the EXTRACTOR only, so a
+    # reworded repeat of something said a beat ago reads as known (live run, 2026-10-31: one fact
+    # recorded three times); the narrator doesn't render them.
+    recent_claims: list[ClaimView] = Field(default_factory=list)
+
+
+# how many of the latest claims the extractor sees as known (live run, 2026-10-31)
+RECENT_CLAIMS = 15
 
 
 def _name_token(name: str) -> str:
@@ -157,6 +166,15 @@ async def assemble_recall(
             if n.pinned or any(_mentions(haystack, ref.split(":", 1)[-1]) for ref in n.entity_refs)
         ]
 
+    # The latest claims, minus what's already recalled. A module rumor is left out: it is never a
+    # restatement target (D-58), so a narrator confirming one must still be free to record it.
+    recalled_ids = {c.claim_id for c in [*claims, *belief_claims]}
+    recent_claims = [
+        c
+        for c in await store.recent_claims(branch_id, RECENT_CLAIMS)
+        if c.claim_id not in recalled_ids and c.origin != "module"
+    ]
+
     return RecallBundle(
         recent_beats=recent,
         actors=on_stage,
@@ -167,6 +185,7 @@ async def assemble_recall(
         places=places,
         factions=factions,
         participant_notes=participant_notes,
+        recent_claims=recent_claims,
     )
 
 

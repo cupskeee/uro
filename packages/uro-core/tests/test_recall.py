@@ -216,3 +216,48 @@ async def test_assemble_recall_surfaces_a_mentioned_place(store: PostgresEventSt
     names = {p.name: p.status for p in recall.places}
     assert names.get("Vel") == "destroyed"  # the mentioned place + its current state
     assert "Faroff" not in names  # not mentioned → not surfaced
+
+
+async def test_the_extractor_sees_the_latest_claims_whatever_their_subject(
+    store: PostgresEventStore,
+) -> None:
+    # Live run (2026-10-31): "the Watch says it's frightened talk" was recorded three times in new
+    # words. The claim named no subject, so recall never surfaced it and the extractor couldn't
+    # tell a rewording was a repeat. The latest claims now reach the extractor regardless.
+    from uro_core.domain.events import module_cause
+    from uro_core.pipeline.extraction import build_extractor_messages
+
+    branch = await _branch(store)
+    head = (await store.get_branch(branch)).head_commit  # type: ignore[union-attr]
+    for n in range(3):
+        await store.append_beat(
+            branch, [claim_recorded(claim_id=f"c:{new_id()}", statement=f"Old news {n}.")]
+        )
+    await store.append_beat(
+        branch,
+        [
+            claim_recorded(claim_id=f"c:{new_id()}", statement="Boats vanish on the river."),
+            claim_recorded(
+                claim_id=f"c:{new_id()}",
+                statement="The Red Band is said to row by night.",
+                origin="module",
+                caused_by=module_cause("rumor-mill"),
+            ),
+        ],
+    )
+    latest = await store.recent_claims(branch, 2)
+    assert [c.statement for c in latest] == [
+        "The Red Band is said to row by night.",
+        "Boats vanish on the river.",
+    ]  # newest first, at most `limit`
+
+    recall = await assemble_recall(store, branch, "I ask about the river", 8)
+    statements = [c.statement for c in recall.recent_claims]
+    assert "Boats vanish on the river." in statements and "Old news 0." in statements
+    assert "The Red Band is said to row by night." not in statements  # never a restatement target
+    known = build_extractor_messages(recall, "The barkeep shrugs.")[1].content
+    assert "Boats vanish on the river." in known
+
+    world_id = (await store.get_branch(branch)).world_id  # type: ignore[union-attr]
+    fork = await store.fork_branch(world_id, head, f"before-{new_id()}")
+    assert await store.recent_claims(fork.branch_id, 15) == []  # its own history only
