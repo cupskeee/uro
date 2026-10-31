@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 import httpx
 
 from uro_core.errors import ProviderError
-from uro_core.providers.base import CompletionRequest, Message
+from uro_core.providers.base import CompletionRequest, Message, report_usage
 
 _VERSION = "2023-06-01"
 
@@ -86,6 +86,8 @@ class AnthropicProvider:
                 ) as resp,
             ):
                 resp.raise_for_status()
+                tokens_in: int | None = None
+                tokens_out: int | None = None
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -97,6 +99,11 @@ class AnthropicProvider:
                     except json.JSONDecodeError:
                         continue
                     kind = event.get("type")
+                    if kind == "message_start":  # input tokens arrive up front (D-66)
+                        usage = (event.get("message") or {}).get("usage") or {}
+                        tokens_in = usage.get("input_tokens", tokens_in)
+                    if isinstance(event.get("usage"), dict):  # output: cumulative, keep the last
+                        tokens_out = event["usage"].get("output_tokens", tokens_out)
                     if kind == "content_block_delta":
                         delta = event.get("delta") or {}
                         if delta.get("type") == "text_delta" and delta.get("text"):
@@ -110,6 +117,7 @@ class AnthropicProvider:
                     elif kind == "error":
                         err = event.get("error") or {}
                         raise ProviderError(f"anthropic stream error: {err.get('message', err)}")
+                report_usage(tokens_in=tokens_in, tokens_out=tokens_out)
         except httpx.HTTPError as exc:
             raise ProviderError(f"anthropic request failed: {exc}") from exc
 
@@ -135,6 +143,9 @@ class AnthropicProvider:
             raise ProviderError(f"anthropic request failed: {exc}") from exc
         except (ValueError, TypeError) as exc:  # a 200 with a non-JSON body
             raise ProviderError(f"anthropic returned an unparseable body: {exc}") from exc
+        usage = data.get("usage") if isinstance(data, dict) else None
+        if isinstance(usage, dict):  # D-66
+            report_usage(tokens_in=usage.get("input_tokens"), tokens_out=usage.get("output_tokens"))
         if data.get("stop_reason") == "max_tokens":
             # truncated output → likely invalid JSON; fail loudly so the caller degrades.
             raise ProviderError("anthropic response hit max_tokens (output truncated)")

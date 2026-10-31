@@ -598,28 +598,48 @@ def create_app(
 
         return {"uro-server": uro_server.__version__, "uro-core": uro_core.__version__}
 
+    async def _call_scope(request: Request) -> tuple[str | None, str | None, list[str] | None]:
+        """`?stage=`, `?world=`, `?campaign=` → (stage, world_id, branch_ids). A campaign's calls
+        are those on its branch (D-66). An unknown world or campaign is a 404."""
+        store = _mgmt()
+        stage = request.query_params.get("stage") or None
+        world_id = request.query_params.get("world") or None
+        if world_id is not None and await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch_ids: list[str] | None = None
+        campaign_id = request.query_params.get("campaign")
+        if campaign_id:
+            campaign = await store.get_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="no such campaign")
+            branch_ids = [campaign.branch_id]
+        return stage, world_id, branch_ids
+
     @app.get("/usage")
     async def usage(request: Request) -> dict[str, Any]:
         """LLM-call telemetry aggregated by stage (BE-10, docs/07). OPERATOR-only (D-44): it reveals
         model/token/latency cost. The engine EXPOSES metering (docs/00) — it never bills/caps.
-        `?stage=` scopes to one engine role. `?world=`/`?campaign=` are **not supported yet** (the
-        `llm_calls` rows carry no world/campaign column — see docs/08) → 400, never silently
-        ignored, so a consumer never mistakes a global total for a per-world one."""
+        `?stage=` scopes to one engine role; `?world=` / `?campaign=` to the calls that served it
+        (D-66; calls metered before 0.7 carry no world and appear only in the unfiltered total)."""
         _require_operator(request)
-        store = _mgmt()
-        for unsupported in ("world", "campaign"):
-            if request.query_params.get(unsupported):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"filtering usage by {unsupported!r} is not supported yet — the metering "
-                        "rows are not keyed by world/campaign (docs/08 deferral)"
-                    ),
-                )
-        stage = request.query_params.get("stage") or None
-        rows = await store.usage_by_stage(stage)
+        stage, world_id, branch_ids = await _call_scope(request)
+        rows = await _mgmt().usage_by_stage(stage, world_id=world_id, branch_ids=branch_ids)
         total_calls = sum(int(r["calls"]) for r in rows)
         return {"stage": stage, "total_calls": total_calls, "by_stage": rows}
+
+    @app.get("/llm-calls")
+    async def llm_calls(request: Request) -> dict[str, Any]:
+        """The most recent metered calls, newest first (`?stage=&world=&campaign=&limit=`, default
+        20), each structured call with its full stored response (D-66) — what the extractor or
+        planner actually returned. OPERATOR-only (D-45): a response holds omniscient state
+        (claim truth values, hidden beliefs) and the cost data /usage guards."""
+        _require_operator(request)
+        stage, world_id, branch_ids = await _call_scope(request)
+        limit = _parse_limit(request, 20)
+        calls = await _mgmt().recent_llm_calls(
+            stage=stage, world_id=world_id, branch_ids=branch_ids, limit=min(limit, 200)
+        )
+        return {"calls": [{**c, "created_at": c["created_at"].isoformat()} for c in calls]}
 
     @app.get("/rulesets")
     async def rulesets(request: Request) -> dict[str, Any]:

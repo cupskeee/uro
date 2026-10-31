@@ -197,4 +197,4 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
   - plugin contract gaps;
   - `per_event` was missing from the heat-meter example.
 
-Known open items: token counts aren't metered; raw extractor output is only logged, not stored; nothing consumes the outbox yet.
+Known open items: nothing consumes the outbox yet (in progress: `uro serve` as a live consumer). Token metering and raw-output storage landed in D-66.

@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
 from uro_core.errors import ProviderError
-from uro_core.providers.base import CompletionRequest
+from uro_core.providers.base import CompletionRequest, report_usage
 
 # OpenAI o-series reasoning models (o1 / o3 / o3-mini / o4-mini / …) speak a slightly different
 # Chat Completions dialect: they REJECT `max_tokens` (require `max_completion_tokens` instead) and
@@ -33,6 +34,14 @@ def _is_reasoning_model(model: str) -> bool:
     # `foo/o3-mini`, …) is still recognised — the anchored regex would otherwise miss exactly the
     # "compatible proxy" surface this adapter targets, sending the legacy fields → the same 400.
     return bool(_REASONING_MODEL_RE.match(model.lower().rsplit("/", 1)[-1]))
+
+
+def _report_openai_usage(usage: object) -> None:
+    """Report an OpenAI-shaped `usage` object, if the response carried one (D-66)."""
+    if isinstance(usage, dict):
+        report_usage(
+            tokens_in=usage.get("prompt_tokens"), tokens_out=usage.get("completion_tokens")
+        )
 
 
 class OpenAICompatProvider:
@@ -78,6 +87,11 @@ class OpenAICompatProvider:
             "messages": [m.model_dump() for m in req.messages],
             "stream": True,
         }
+        if urlparse(self._base_url).hostname == "api.openai.com":
+            # token usage arrives as a final chunk only when asked for (D-66); not every
+            # OpenAI-compatible server accepts the option, so it's sent to OpenAI only — usage any
+            # server sends unasked is still read below
+            body["stream_options"] = {"include_usage": True}
         self._apply_sampling(body, req)
 
         try:
@@ -104,6 +118,7 @@ class OpenAICompatProvider:
                     if err is not None:
                         msg = err.get("message") if isinstance(err, dict) else str(err)
                         raise ProviderError(f"provider returned an in-band error: {msg}")
+                    _report_openai_usage(chunk.get("usage"))
                     choices = chunk.get("choices") or []
                     if not choices:
                         continue
@@ -140,6 +155,7 @@ class OpenAICompatProvider:
             raise ProviderError(f"provider request failed: {exc}") from exc
         except (ValueError, TypeError) as exc:  # a 200 with a non-JSON body
             raise ProviderError(f"provider returned an unparseable body: {exc}") from exc
+        _report_openai_usage(data.get("usage") if isinstance(data, dict) else None)
         try:
             choices = data.get("choices") or []
             if not choices:
@@ -162,5 +178,6 @@ class OpenAICompatProvider:
                 data = resp.json()
         except httpx.HTTPError as exc:
             raise ProviderError(f"embedding request failed: {exc}") from exc
+        _report_openai_usage(data.get("usage"))
         rows = data.get("data") or []
         return [row["embedding"] for row in rows]

@@ -134,12 +134,29 @@ class EventStore(Protocol):
         """Record one stage-tagged LLM call for usage metering (docs/07, D-14)."""
         ...
 
-    async def usage_by_stage(self, stage: str | None = None) -> list[dict[str, Any]]:
+    async def usage_by_stage(
+        self,
+        stage: str | None = None,
+        *,
+        world_id: str | None = None,
+        branch_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Aggregated LLM-call metering, grouped by (stage_tag, model): call count, token sums,
-        avg latency (docs/07, D-14). Optionally scoped to one `stage`. The engine EXPOSES metering
-        (docs/00) — it never bills/caps. NOT keyed by world/campaign: the `llm_calls` rows carry no
-        such column yet, so that filter is deferred (a forward-only migration + threading campaign
-        context through the metering seam). Empty table → []."""
+        avg latency (docs/07, D-14). Optionally scoped to one `stage`, one world, and/or some
+        branches (D-66 — a campaign's usage is its branch's). The engine EXPOSES metering
+        (docs/00) — it never bills/caps. Empty table → []."""
+        ...
+
+    async def recent_llm_calls(
+        self,
+        *,
+        stage: str | None = None,
+        world_id: str | None = None,
+        branch_ids: list[str] | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """The most recent metered calls, newest first, with each structured call's stored
+        response (D-66)."""
         ...
 
     # --- branching (docs/03): markers, fork-from-any-commit, lineage ---

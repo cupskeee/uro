@@ -227,8 +227,9 @@ def test_any_factory_error_is_a_clean_error_naming_the_ruleset(plugins) -> None:
             super().__init__({})
 
     plugins(_EP("picky", lambda: _Picky))
-    with pytest.raises(ValueError, match=r"'picky' failed to build: TypeError"):
+    with pytest.raises(ValueError, match=r"'picky' failed to build \(TypeError") as excinfo:
         registry.resolve("picky")
+    assert "int()" not in str(excinfo.value)  # the exception's own text stays in the server log
     pack = parse_pack(Path(__file__).resolve().parents[3] / "worlds" / "brinehold")
     pack.manifest.ruleset.id = "picky"
     assert "TypeError" in (ruleset_problem(pack) or "")  # reported by validate, not a crash
@@ -246,7 +247,7 @@ def test_an_old_embedder_ruleset_fails_up_front(plugins) -> None:  # type: ignor
 
     registry.register("mine", lambda: _Mine())  # type: ignore[arg-type,misc]
     try:
-        with pytest.raises(ValueError, match="'mine' failed to build: TypeError"):
+        with pytest.raises(ValueError, match=r"'mine' failed to build \(TypeError"):
             registry.resolve("mine")
     finally:
         registry._FACTORIES.pop("mine", None)

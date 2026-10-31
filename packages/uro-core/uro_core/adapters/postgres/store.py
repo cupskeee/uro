@@ -2103,9 +2103,10 @@ class PostgresEventStore:
     async def record_llm_call(self, call: LLMCall) -> None:
         async with self.pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO llm_calls "
-                "(call_id, stage_tag, model, prompt_hash, tokens_in, tokens_out, latency_ms) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                "INSERT INTO llm_calls (call_id, stage_tag, model, prompt_hash, tokens_in, "
+                "tokens_out, latency_ms, branch_id, world_id, response) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, "
+                "(SELECT world_id FROM branches WHERE branch_id = $8), $9)",
                 call.call_id,
                 call.stage_tag,
                 call.model,
@@ -2113,14 +2114,37 @@ class PostgresEventStore:
                 call.tokens_in,
                 call.tokens_out,
                 call.latency_ms,
+                call.branch_id,
+                call.response,
             )
 
-    async def usage_by_stage(self, stage: str | None = None) -> list[dict[str, Any]]:
+    @staticmethod
+    def _call_filters(
+        stage: str | None, world_id: str | None, branch_ids: list[str] | None
+    ) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        args: list[Any] = []
+        for column, value in (("stage_tag", stage), ("world_id", world_id)):
+            if value:
+                args.append(value)
+                clauses.append(f"{column} = ${len(args)}")
+        if branch_ids is not None:
+            args.append(branch_ids)
+            clauses.append(f"branch_id = ANY(${len(args)}::text[])")
+        return ("WHERE " + " AND ".join(clauses)) if clauses else "", args
+
+    async def usage_by_stage(
+        self,
+        stage: str | None = None,
+        *,
+        world_id: str | None = None,
+        branch_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Aggregate `llm_calls` by (stage_tag, model): count, token sums, avg latency (docs/07,
-        D-14). `stage` scopes to one engine role (uses the `llm_calls_stage_idx`). `model` may be
-        NULL (the stub records none) — it groups as its own bucket. Read-only observability."""
-        where = "WHERE stage_tag = $1" if stage else ""
-        args: list[Any] = [stage] if stage else []
+        D-14). Scoped to one `stage`, one world, and/or some branches (D-66: calls record the
+        world and branch they served; older rows have neither). `model` may be NULL (the stub
+        records none) — it groups as its own bucket. Read-only observability."""
+        where, args = self._call_filters(stage, world_id, branch_ids)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT stage_tag, model, count(*) AS calls, "
@@ -2129,6 +2153,27 @@ class PostgresEventStore:
                 "  round(avg(latency_ms))::int AS avg_latency_ms "
                 f"FROM llm_calls {where} "
                 "GROUP BY stage_tag, model ORDER BY stage_tag, model NULLS FIRST",
+                *args,
+            )
+            return [dict(r) for r in rows]
+
+    async def recent_llm_calls(
+        self,
+        *,
+        stage: str | None = None,
+        world_id: str | None = None,
+        branch_ids: list[str] | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """The most recent metered calls, newest first, each with its stored response (D-66) — how
+        an operator reads what the extractor actually returned."""
+        where, args = self._call_filters(stage, world_id, branch_ids)
+        args.append(limit)
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT call_id, stage_tag, model, tokens_in, tokens_out, latency_ms, world_id, "
+                f"branch_id, created_at, response FROM llm_calls {where} "
+                f"ORDER BY created_at DESC, call_id DESC LIMIT ${len(args)}",
                 *args,
             )
             return [dict(r) for r in rows]
