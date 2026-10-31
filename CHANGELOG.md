@@ -9,6 +9,20 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-31
+
+Upgrading: no database migration this release. Worth knowing before you upgrade:
+- **Custom rulesets (breaking).** If you embed Uro with your own ruleset, the ruleset interface
+  changed; see Changed. An old ruleset is refused with the missing pieces named.
+- **d20 worlds.** A player character who wins a fight now gains a level, which restores hit points.
+  Set `[ruleset.config] levels_per_win = 0` to keep the old behaviour.
+- **Free-roam checks.** They now commit their outcome (`CheckResolved`) and any change to the
+  acting character's sheet.
+- **Commit ids.** The CLI prints them in full.
+
+This release closes the gaps between the CLI and the server (D-60) and makes rulesets customizable
+per game: settings, fight and downtime rules, check events, and plugin rulesets (D-61 to D-65).
+
 ### Added
 - **Ruleset plugins (D-65).** A game can install its own ruleset as a Python package that declares
   an entry point in the `uro.rulesets` group; the CLI and `uro serve` then play worlds that declare
@@ -770,7 +784,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/cupskeee/uro/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cupskeee/uro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cupskeee/uro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cupskeee/uro/compare/v0.2.0...v0.3.0
