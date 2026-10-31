@@ -195,7 +195,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 | `participant_joined` / `participant_left` | `participant_id` |
 | `beat_started` | `participant_id`, `intent` |
 | `narration_chunk` | `participant_id`, `text` |
-| `beat_committed` | `participant_id`, `intent`, `narration` |
+| `beat_committed` | `participant_id`, `intent`, `narration`, `commit_id` *(D-67)* |
 | `beat_failed` | `participant_id`, `intent`, `error` |
 | `not_your_turn` | `participant_id`, `text` *(round-robin, D-31)* |
 | `proposal_opened` | `participant_id`, `text` *(a QUEUED non-holder intent, D-38)* |
@@ -205,6 +205,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 | `vote_decided` | `choice` |
 | `vote_unsupported` | `participant_id` *(the server's arbiter has no vote shape)* |
 | `outcome_recorded` | `encounter_id`, + the distilled receipt (`committed_events`, `commit_id`, …) *(Chronicler mode, D-25 — broadcast when an external outcome is posted)* |
+| `commit` | `commit_id`, `branch_id`, `depth`, `beats[]` (`participant_id`, `intent`, `narration`) *(D-67, with `uro serve --nats`: a commit on this campaign's branch made ELSEWHERE, by another server, the CLI or an embedder. Never this server's own beat, which already arrived as `beat_committed`. Only narration, never raw events (D-45). Empty `beats` means the branch moved without a beat, such as a time-skip, so refetch state.)* |
 
 **Deliberately NOT emitted yet (a future GROW, not drift).** `scene_update` / `mode_change` (the highest-value add — Loom's Play surface can't show scene/mode) need the pipeline to surface within-beat mode state (encounters auto-resolve inside one beat under D-29, so between beats the mode is always free-roam — there is no persistent mode frame to send without new engine state). `mechanics_result` needs the same. `suggestions` (the planner's D-23 next-action hints) and a `beat_committed` `beat_id` (for deep-linking a committed beat) both need the `run_beat` streaming contract to yield structured frames, not only narration strings. `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
 
@@ -246,6 +247,7 @@ uro log <world> [--branch B]              # chronicle view — commit lineage (d
 uro world export ashfall -o ashfall.uwp   # hash-chain-stamped bundle;  uro world import ashfall.uwp verifies + instantiates
 uro serve --token alice --token bob       # run the server;  uro connect <campaign> --server URL --token alice  (WS client)
 uro serve --token dev --cors-origin http://localhost:5173   # allow a browser SPA (uro-loom) — see "Browser access" below
+uro serve --nats nats://localhost:4222    # push commits made by ANY process to clients live (D-67; run `uro outbox relay` too)
 uro world list | uro campaign list [--world W] | uro campaign show <campaign>   # what exists, who sits where
 uro state <campaign> | uro state --world W [--branch B | --at REF] [--sections …]   # projections now, or at any past commit
 uro chronicle <campaign> | uro chronicle --world W --branch B   # recent beats, oldest first

@@ -197,4 +197,4 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
   - plugin contract gaps;
   - `per_event` was missing from the heat-meter example.
 
-Known open items: nothing consumes the outbox yet (in progress: `uro serve` as a live consumer). Token metering and raw-output storage landed in D-66.
+Known open items: none of the earlier list remains. Token metering and raw-output storage landed in D-66, and `uro serve --nats` consumes the outbox (D-67).

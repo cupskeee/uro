@@ -847,7 +847,7 @@ async def test_a_rest_worlds_settings_reach_the_engine_that_plays_it(
 
     played: list[tuple[str, dict[str, Any], int]] = []
 
-    async def fake_stream(self: Engine, campaign: Any, participant: str, text: str):  # type: ignore[no-untyped-def]
+    async def fake_stream(self: Engine, campaign: Any, participant: str, text: str, **kw: Any):  # type: ignore[no-untyped-def]
         cfg = self._ruleset.config.model_dump() if self._ruleset is not None else {}
         played.append((self.ruleset_id, cfg, id(self)))
         yield "ok"
@@ -978,3 +978,17 @@ async def test_usage_by_world_and_the_raw_calls_endpoint(store: PostgresEventSto
         assert (await client.get("/llm-calls?token=tok-player")).status_code == 403
         assert (await client.get(_q("/usage?world=nope"))).status_code == 404
         assert (await client.get(_q("/llm-calls?campaign=nope"))).status_code == 404
+
+
+async def test_a_streamed_beat_s_commit_is_remembered_for_its_campaign(
+    store: PostgresEventStore,
+) -> None:
+    # D-67: `beat_committed` carries the commit, so the live feed can skip this server's own beats.
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    deps = engine_deps(store, engine, {_TOK: "alice"}, admin_tokens={_TOK})
+    world = await store.create_world(f"Streamed-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    assert deps.last_commit is not None and deps.last_commit(campaign.campaign_id) is None
+    _ = [chunk async for chunk in deps.run_beat(campaign.campaign_id, "alice", "I knock")]
+    head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+    assert deps.last_commit(campaign.campaign_id) == head

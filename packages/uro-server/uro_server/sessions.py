@@ -131,3 +131,7 @@ class SessionHub:
 
     def connections(self, campaign_id: str) -> int:
         return len(self._subs.get(campaign_id, ()))
+
+    def campaigns(self) -> list[str]:
+        """The campaigns with at least one live connection."""
+        return list(self._subs)

@@ -12,6 +12,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 Upgrading: run `uro db migrate` (migration 024 adds three columns to `llm_calls`).
 
 ### Added
+- **Live commits from anywhere (D-67).** `uro serve --nats URL` subscribes to what `uro outbox relay`
+  publishes. It pushes every commit on a campaign's branch to that campaign's WebSocket clients, so
+  a beat played through the CLI, another server or an embedder appears live, and so does a
+  time-skip.
+  - The new `commit` frame carries only the commit and its beats' narration, never raw events.
+  - A server never echoes its own beats; `beat_committed` now includes `commit_id`.
+  - `uro connect` prints these commits.
 - **Token counts, per-world usage, and the raw output of every structured call (D-66).**
   - **Tokens:** every LLM call is now recorded with the tokens its provider reported. The OpenAI,
     Anthropic and Codex adapters report them, and a custom provider that doesn't still works,

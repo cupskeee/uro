@@ -173,7 +173,7 @@ The games proved several horizon items are **not** needed, killing speculative w
   sub-N) replay for a *long-lived* fork rooted at a non-round deep depth — a case no game has hit.
   *If ever needed*, the real lever is a per-branch-commit-count anchor or a `snapshot(commit_id)`
   pin at fork time, not the depth-modulo tweak. Deferred until evidence.
-- **NATS distribution** — no consumer is remotely near multi-process scale; built anyway at the owner's request (2026-10-30, D-57: transactional outbox + JetStream relay), so this deferral no longer applies — but the evidence point stands: nothing yet consumes it.
+- **NATS distribution** — no consumer is remotely near multi-process scale; built anyway at the owner's request (2026-10-30, D-57: transactional outbox + JetStream relay), so this deferral no longer applies. Its first consumer is `uro serve --nats` (D-67), which pushes commits made by any process to a campaign's WebSocket clients.
 
 ## The headline decision: Stage B's evidence gate has fired
 

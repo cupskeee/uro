@@ -192,3 +192,39 @@ async def test_a_stream_that_misses_our_prefix_is_refused_at_connect() -> None:
     finally:
         await js.delete_stream(stream)
         await nc.close()
+
+
+async def test_a_server_feed_receives_what_the_relay_publishes(outbox: PostgresEventStore) -> None:
+    # D-67 end to end: relay → NATS → NatsCommitFeed, the subscription `uro serve --nats` runs.
+    from uro_core.adapters.nats import NatsCommitFeed, NatsJetStreamPublisher
+
+    nc = await _nats_or_skip()
+    await nc.close()
+    stream = f"UROFEED{new_id()}"
+    prefix = stream.lower()
+    feed = NatsCommitFeed(NATS_URL, subject_prefix=prefix)
+    await feed.connect()
+    publisher = NatsJetStreamPublisher(NATS_URL, stream=stream, subject_prefix=prefix)
+    await publisher.connect()
+    try:
+        world = await outbox.create_world(f"outbox-{new_id()}")
+        commit = await outbox.append_beat(
+            world.main_branch_id, [actor_created(actor_id="a:f", name="F")]
+        )
+        await relay_outbox(outbox, publisher)
+        received = []
+        async with asyncio.timeout(10):
+            async for message in feed:
+                received.append(message)
+                if message.commit_id == commit.commit_id:
+                    break
+        assert received[-1].branch_id == world.main_branch_id
+        assert [e["event_type"] for e in received[-1].events] == ["ActorCreated"]
+    finally:
+        await feed.close()
+        await publisher.close()
+        import nats as _nats
+
+        cleanup = await _nats.connect(NATS_URL)
+        await cleanup.jetstream().delete_stream(stream)
+        await cleanup.close()
