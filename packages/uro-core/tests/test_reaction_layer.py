@@ -154,9 +154,9 @@ async def test_no_rule_pack_short_circuits(store: PostgresEventStore) -> None:
 def test_ashfall_rule_pack_parses() -> None:
     pack = parse_pack(WORLDS / "ashfall")
     assert pack.rule_pack is not None
-    assert pack.rule_pack.rules_api_version == 1
+    assert pack.rule_pack.rules_api_version == 7
     ids = [r.id for r in pack.rule_pack.rules]
-    assert "ritual-reckons-on-death" in ids
+    assert ids == ["ritual-reckons-on-death", "failures-get-talked-about"]
 
 
 def test_rule_pack_bad_version_fails_loud(tmp_path: Path) -> None:
@@ -201,7 +201,7 @@ async def test_worldgenesis_carries_the_rule_pack_inline(store: PostgresEventSto
             world.main_branch_id,
         )
     payload = payload if isinstance(payload, dict) else json.loads(payload)
-    assert payload["rule_pack"]["rules_api_version"] == 1
+    assert payload["rule_pack"]["rules_api_version"] == 7
     assert payload["rule_pack"]["rules"][0]["id"] == "ritual-reckons-on-death"
 
 

@@ -104,3 +104,37 @@ async def test_a_heat_meter_rises_on_every_failed_check(store: PostgresEventStor
     lucky = Engine(store, ProviderRouter(bindings={}, default=_Stub()), ruleset=_AlwaysSucceeds())
     await lucky.run_beat(campaign, "p1", "I slip past the guards", plan=plan)
     assert await store.get_counter(campaign.branch_id, "f:vault", "heat") == 6  # a success: no heat
+
+
+async def test_ashfall_talks_about_a_failed_check(store: PostgresEventStore) -> None:
+    # The example pack's rule for the live pass (docs/live-run.md section 9): a failed check commits
+    # a rumor about the Brinehouse, and a later scene there recalls it for the narrator.
+    from pathlib import Path
+
+    from uro_core.pipeline.recall import assemble_recall
+    from uro_core.worldpack.create import import_pack
+    from uro_core.worldpack.parse import parse_pack
+
+    pack = parse_pack(Path(__file__).resolve().parents[3] / "worlds" / "ashfall")
+    pack.manifest.name = f"Ashfall-{new_id()}"
+    world = (await import_pack(store, pack)).world
+    sheet = registry.resolve("uro-basic").new_character(CharSpec(), Rng(0))
+    campaign = await store.start_campaign(
+        world.world_id,
+        world.main_branch_id,
+        participant_id="p1",
+        new_pc_name="Ash",
+        new_pc_id=f"a:ash-{new_id()}",
+        pc_sheet=sheet,
+        ruleset_id="uro-basic",
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()), ruleset=_AlwaysFails())
+    plan = BeatPlan(mechanics=[PlanMechanic(affordance="sneak")])
+    await engine.run_beat(campaign, "p1", "I slip into the warehouse", plan=plan)
+
+    rumors = await store.claims_about(campaign.branch_id, "p:brinehouse")
+    assert [(c.origin, c.truth) for c in rumors] == [("module", "unknown")]  # testimony, not canon
+    recall = await assemble_recall(
+        store, campaign.branch_id, "I go back to the Brinehouse and listen", 8
+    )
+    assert rumors[0].claim_id in {c.claim_id for c in recall.claims}  # the narrator is shown it

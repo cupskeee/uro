@@ -1,5 +1,5 @@
 # Reaction Layer (docs/17) — declarative rules the engine evaluates during play. Data, not code.
-rules_api_version: 1
+rules_api_version: 7
 rules:
   # When someone dies, the Saltborn's ritual thread resolves toward its reckoning.
   - id: ritual-reckons-on-death
@@ -15,3 +15,17 @@ rules:
         to: resolved
     scope:
       thread: "t:saltborn-ritual"
+
+  # A failed check gets talked about at the Brinehouse: a rumor (testimony, never canon) the next
+  # scene there can bring up. Exercises a reaction during live play (docs/live-run.md section 9).
+  - id: failures-get-talked-about
+    trigger:
+      event: CheckResolved
+      where:
+        outcome: failure
+    then:
+      - do: record_rumor
+        text: "Word at the Brinehouse: someone tried their luck where they shouldn't have, and failed."
+        subjects: ["p:brinehouse"]
+    scope:
+      place: "p:brinehouse"
