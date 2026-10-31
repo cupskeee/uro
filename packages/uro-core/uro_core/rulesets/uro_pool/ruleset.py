@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.base import (
     Action,
@@ -45,14 +45,23 @@ from uro_core.rulesets.rng import Rng
 
 TRAITS: tuple[str, ...] = ("might", "wits", "nerve")
 _DEFAULT_TRAITS: dict[str, int] = {"might": 2, "wits": 2, "nerve": 2}
-_TRAIT_CAP = 5
 _WOUNDS_DOWN = 3  # at 3 wounds you are out of the fight
-_STRAIN_LIMIT = 5  # at this much strain you can no longer push
-_MILESTONES_PER_ADVANCE = 3
-_TRIUMPH_MARKS = 3
 _TARGETS: dict[str, int] = {"easy": 3, "": 4, "normal": 4, "hard": 5, "dire": 6}
 _STRIKE_TARGET = 4  # attack and defence dice both mark on 4+
 _MAX_WOUNDS_PER_STRIKE = 2
+
+
+class PoolConfig(BaseModel):
+    """Uro Pool's settings — a world's `[ruleset.config]` (D-62). The defaults are the rules as
+    written; an unknown key is refused, never silently ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    push_strain: int = Field(1, ge=0, description="strain a push costs")
+    strain_limit: int = Field(5, ge=0, description="at this much strain you can no longer push")
+    triumph_marks: int = Field(3, ge=1, description="marks for a triumph")
+    milestones_per_advance: int = Field(3, ge=1, description="milestones per added trait die")
+    trait_cap: int = Field(5, ge=1, description="the most dice a trait can reach")
 
 
 class Sheet(BaseModel):
@@ -71,10 +80,6 @@ class Sheet(BaseModel):
     @property
     def in_fight(self) -> bool:
         return self.wounds < _WOUNDS_DOWN
-
-    @property
-    def can_push(self) -> bool:
-        return self.strain < _STRAIN_LIMIT
 
 
 class _Fighter(BaseModel):
@@ -98,11 +103,13 @@ def _marks(dice: list[int], target: int) -> int:
     return sum(1 for d in dice if d >= target)
 
 
-def _roll_pool(sheet: Sheet, trait: str, target: int, rng: Rng) -> tuple[list[int], bool]:
+def _roll_pool(
+    sheet: Sheet, trait: str, target: int, rng: Rng, cfg: PoolConfig
+) -> tuple[list[int], bool]:
     """Roll `trait`'s pool; on zero marks, PUSH once (reroll it all) if strain allows. Returns the
     dice that count and whether a push happened (the caller charges the strain)."""
     dice = [rng.die(6) for _ in range(sheet.pool(trait))]
-    if _marks(dice, target) == 0 and sheet.can_push:
+    if _marks(dice, target) == 0 and sheet.strain < cfg.strain_limit:
         return [rng.die(6) for _ in range(sheet.pool(trait))], True
     return dice, False
 
@@ -111,8 +118,14 @@ class UroPool:
     id = "uro-pool"
     version = "0"
 
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = PoolConfig.model_validate(config or {})
+
     def sheet_schema(self) -> dict[str, Any]:
         return Sheet.model_json_schema()
+
+    def config_schema(self) -> dict[str, Any]:
+        return PoolConfig.model_json_schema()
 
     # --- character model ---
 
@@ -129,12 +142,13 @@ class UroPool:
         s = Sheet.model_validate(sheet)
         milestones = s.milestones + int(award.data.get("milestone", 0))
         traits = dict(s.traits)
-        # Every _MILESTONES_PER_ADVANCE survived encounters adds a die to the weakest trait
-        # (deterministic: lowest rating, then name), capped at _TRAIT_CAP.
-        while milestones >= _MILESTONES_PER_ADVANCE:
-            milestones -= _MILESTONES_PER_ADVANCE
+        # Every `milestones_per_advance` survived encounters adds a die to the weakest trait
+        # (deterministic: lowest rating, then name), capped at `trait_cap`.
+        cfg = self.config
+        while milestones >= cfg.milestones_per_advance:
+            milestones -= cfg.milestones_per_advance
             low = min(traits, key=lambda k: (traits[k], k))
-            traits[low] = min(_TRAIT_CAP, traits[low] + 1)
+            traits[low] = min(cfg.trait_cap, traits[low] + 1)
         strain = 0 if award.data.get("rest") else s.strain  # rest clears the toll of pushing
         return s.model_copy(
             update={"milestones": milestones, "traits": traits, "strain": strain}
@@ -178,14 +192,16 @@ class UroPool:
         sheet = Sheet.model_validate(req.sheet)
         trait = req.stat or "nerve"
         target = _TARGETS.get(req.difficulty, _TARGETS[""])
-        dice, pushed = _roll_pool(sheet, trait, target, rng)
+        cfg = self.config
+        dice, pushed = _roll_pool(sheet, trait, target, rng, cfg)
         marks = _marks(dice, target)
-        outcome = "fail" if marks == 0 else "triumph" if marks >= _TRIUMPH_MARKS else "success"
-        push_note = " (pushed: +1 strain)" if pushed else ""
+        outcome = "fail" if marks == 0 else "triumph" if marks >= cfg.triumph_marks else "success"
+        push_note = f" (pushed: +{cfg.push_strain} strain)" if pushed else ""
         trace = f"{trait} pool {sorted(dice)} vs {target}+ → {marks} mark(s): {outcome}{push_note}"
         # The push's toll is real: the strain lands on the sheet (and so limits the next push)
+        strained = {"strain": sheet.strain + cfg.push_strain}
         after = (
-            sheet.model_copy(update={"strain": sheet.strain + 1}).model_dump() if pushed else None
+            sheet.model_copy(update=strained).model_dump() if pushed and cfg.push_strain else None
         )
         return CheckResult(
             outcome=outcome,
@@ -258,9 +274,9 @@ class UroPool:
             if act is None or act.kind != "strike" or act.target_id not in st.fighters:
                 continue
             attacker, target = st.fighters[attacker_id].sheet, st.fighters[act.target_id].sheet
-            att, pushed = _roll_pool(attacker, "might", _STRIKE_TARGET, rng)
+            att, pushed = _roll_pool(attacker, "might", _STRIKE_TARGET, rng, self.config)
             if pushed:
-                fighters[attacker_id].sheet.strain += 1
+                fighters[attacker_id].sheet.strain += self.config.push_strain
             defence = target.pool("nerve") + (1 if act.target_id in braced else 0)
             dfn = [rng.die(6) for _ in range(defence)]
             net = _marks(att, _STRIKE_TARGET) - _marks(dfn, _STRIKE_TARGET)

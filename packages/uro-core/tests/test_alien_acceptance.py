@@ -240,7 +240,8 @@ async def test_pbta_world_survives_export_import(store: PostgresEventStore) -> N
     assert dst.world_id != src.world_id  # a fresh instance
 
     # the ruleset binding survived (WorldGenesis carried it) and rebinds on the imported world
-    assert await store.world_ruleset(dst.main_branch_id) == ("uro-pbta", ">=0")
+    pin = await store.world_ruleset(dst.main_branch_id)
+    assert (pin.id, pin.version) == ("uro-pbta", ">=0")
     # the opaque PbtA sheet replayed verbatim — harm clock + condition intact, still no hp
     river = await store.get_sheet(dst.main_branch_id, "a:river")
     assert river is not None and river["harm"] == 3 and river["conditions"] == ["Exposed"]

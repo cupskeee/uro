@@ -10,6 +10,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Per-game ruleset settings (D-62).** A world pack's `[ruleset.config]` used to be parsed and then
+  silently dropped. Now it is stored with the world and reaches every ruleset built for its
+  campaigns, on the CLI and the server. Each built-in's numbers are settings that default to the
+  rules as written: Uro Pool's push strain, strain limit, triumph marks, milestones per advance and
+  trait cap; PbtA's XP on a miss, XP per advance and stat cap; Uro Basic's level cap. An unknown or
+  invalid key fails `uro world validate`, import and world creation, naming the ruleset.
+  `uro ruleset list` and `GET /rulesets` show every setting and its default, and `POST /worlds`
+  takes `ruleset_config`.
 - **Free-roam checks change character sheets (D-61).** A check that changes its actor's sheet now
   commits the change as `SheetUpdated` in the beat. A pushed Uro Pool check costs +1 strain, which
   the trace had always claimed while the sheet never moved. A PbtA miss marks XP (advance by

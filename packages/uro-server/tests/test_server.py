@@ -232,7 +232,7 @@ async def test_engine_deps_plays_a_campaign_under_its_own_ruleset(
     from uro_core.providers.adapters.stub import StubProvider
     from uro_core.providers.router import ProviderRouter
     from uro_core.rulesets.uro_basic import UroBasic
-    from uro_core.timeline.models import Campaign
+    from uro_core.timeline.models import Campaign, RulesetPin
     from uro_server.app import engine_deps
 
     pins = {"camp-1": "uro-pbta", "camp-2": "", "camp-3": "srd51"}
@@ -242,6 +242,9 @@ async def test_engine_deps_plays_a_campaign_under_its_own_ruleset(
             return Campaign(
                 campaign_id=campaign_id, world_id="w", branch_id="b", ruleset_id=pins[campaign_id]
             )
+
+        async def world_ruleset(self, branch_id: str) -> RulesetPin:
+            return RulesetPin()  # a world declaring no ruleset or settings
 
     played: list[tuple[str, int]] = []
 

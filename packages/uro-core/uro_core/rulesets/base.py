@@ -14,6 +14,9 @@ the store/projector already persist it, docs/07); a check yields a ruleset-decla
 runner never introspects. Two structurally-different built-ins prove it: `uro_basic` (d20:
 ability scores, hp/ac, initiative attrition) and `uro_pbta` (PbtA: 4 stats, a harm clock,
 move exchanges). Any d20 word appearing here again is a regression — it belongs in a ruleset.
+
+A ruleset is constructed with its world's settings (`[ruleset.config]`, D-62) and validates them
+itself; `config_schema()` publishes what it accepts. The port never reads them.
 """
 
 from __future__ import annotations
@@ -173,6 +176,11 @@ class Ruleset(Protocol):
     version: str
 
     def sheet_schema(self) -> dict[str, Any]: ...
+
+    def config_schema(self) -> dict[str, Any]:
+        """JSON schema of the settings a world may give this ruleset (`[ruleset.config]`, D-62).
+        The ruleset is constructed with them and must refuse an unknown or invalid key."""
+        ...
 
     def new_character(self, spec: CharSpec, rng: Rng) -> Sheet: ...
 

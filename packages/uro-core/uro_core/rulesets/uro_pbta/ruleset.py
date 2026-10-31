@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.base import (
     Action,
@@ -40,9 +40,18 @@ from uro_core.rulesets.rng import Rng
 STATS: tuple[str, ...] = ("forceful", "clever", "quick", "steady")
 _DEFAULT_STATS: dict[str, int] = {"forceful": 1, "clever": 1, "quick": 0, "steady": 0}
 _HARM_MAX = 4  # the harm clock: at 4 you are out of the fight (not necessarily dead)
-_XP_PER_ADVANCE = 5
-_STAT_CAP = 3
 _EXPOSED = "Exposed"  # the standing cost a 7-9 in a conflict leaves on the mover
+
+
+class PbtAConfig(BaseModel):
+    """Uro PbtA's settings — a world's `[ruleset.config]` (D-62). The defaults are the rules as
+    written; an unknown key is refused, never silently ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    xp_on_miss: int = Field(1, ge=0, description="XP a missed free-roam move marks")
+    xp_per_advance: int = Field(5, ge=1, description="XP that raises the weakest stat")
+    stat_cap: int = Field(3, ge=-1, description="the highest a stat can go")
 
 
 class Sheet(BaseModel):
@@ -80,8 +89,14 @@ class UroPbtA:
     id = "uro-pbta"
     version = "0"
 
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = PbtAConfig.model_validate(config or {})
+
     def sheet_schema(self) -> dict[str, Any]:
         return Sheet.model_json_schema()
+
+    def config_schema(self) -> dict[str, Any]:
+        return PbtAConfig.model_json_schema()
 
     # --- character model ---
 
@@ -101,10 +116,11 @@ class UroPbtA:
         stats = dict(s.stats)
         # Advance by FAILING: every _XP_PER_ADVANCE marks, bump the lowest stat (deterministic:
         # lowest value, then name), capped at _STAT_CAP. This is the anti-d20 progression axis.
-        while xp >= _XP_PER_ADVANCE:
-            xp -= _XP_PER_ADVANCE
+        cfg = self.config
+        while xp >= cfg.xp_per_advance:
+            xp -= cfg.xp_per_advance
             low = min(stats, key=lambda k: (stats[k], k))
-            stats[low] = min(_STAT_CAP, stats[low] + 1)
+            stats[low] = min(cfg.stat_cap, stats[low] + 1)
         return s.model_copy(update={"xp": xp, "stats": stats}).model_dump()
 
     # --- moves (free-roam checks) ---
@@ -151,7 +167,8 @@ class UroPbtA:
         trace = f"{stat} move: 2d6 ({dice}) {mod:+d} = {total} → {label}"
         # Advance by FAILING (docs/06): a miss marks XP, through this ruleset's own progression
         # (which also spends a full track on the weakest stat).
-        after = self.progression(req.sheet, Award(data={"xp": 1})) if outcome == "miss" else None
+        xp = self.config.xp_on_miss if outcome == "miss" else 0
+        after = self.progression(req.sheet, Award(data={"xp": xp})) if xp else None
         if after is not None:
             trace += " (marks XP)"
         return CheckResult(

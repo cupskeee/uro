@@ -5,7 +5,9 @@ Plain data records the store returns. Projections and snapshots arrive in Phase 
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class World(BaseModel):
@@ -59,6 +61,15 @@ class LineageEntry(BaseModel):
 # surface that seats a FRESH PC passes this (CLI `world new`/`campaign new|join`, the server's
 # campaign create/join), so the surfaces can't drift; an adopted actor keeps what it owns.
 STARTING_GEAR: tuple[str, ...] = ("a traveler's knife",)
+
+
+class RulesetPin(BaseModel):
+    """The ruleset a world declares, from its WorldGenesis: id, version, and the game's settings
+    (`[ruleset.config]`, D-62). An empty id → the registry default."""
+
+    id: str = ""
+    version: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class Campaign(BaseModel):

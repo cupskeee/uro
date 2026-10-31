@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.base import (
     Action,
@@ -45,7 +45,15 @@ _DEFAULT_ABILITIES: dict[str, int] = {
     "CHA": 10,
 }
 _WEAPON_DIE: dict[int, int] = {1: 6, 2: 8, 3: 10}  # weapon_tier → damage die faces
-_MAX_LEVEL = 5
+
+
+class BasicConfig(BaseModel):
+    """Uro Basic's settings — a world's `[ruleset.config]` (D-62). The defaults are the rules as
+    written; an unknown key is refused, never silently ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_level: int = Field(5, ge=1, le=20, description="the level ceiling")
 
 
 class Sheet(BaseModel):
@@ -100,16 +108,22 @@ class UroBasic:
     id = "uro-basic"
     version = "0"
 
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = BasicConfig.model_validate(config or {})
+
     def sheet_schema(self) -> dict[str, Any]:
         return Sheet.model_json_schema()
+
+    def config_schema(self) -> dict[str, Any]:
+        return BasicConfig.model_json_schema()
 
     # --- character model ---
 
     def new_character(self, spec: CharSpec, rng: Rng) -> SheetDict:
-        # Uro Basic is a level 1-5 system (docs/06); clamp here so a high-level spec can't mint an
-        # off-spec sheet — the level ceiling is Uro Basic's rule, NOT in the generic port (OQ-13).
+        # Uro Basic is a level 1-5 system by default (docs/06); clamp here so a high-level spec
+        # can't mint an off-spec sheet — the ceiling is Uro Basic's rule, NOT the port's (OQ-13).
         d = spec.data
-        level = min(_MAX_LEVEL, int(d.get("level", 1)))
+        level = min(self.config.max_level, int(d.get("level", 1)))
         spec_abilities = d.get("abilities")
         abilities = (
             {**_DEFAULT_ABILITIES, **spec_abilities} if spec_abilities else dict(_DEFAULT_ABILITIES)
@@ -129,7 +143,7 @@ class UroBasic:
 
     def progression(self, sheet: SheetDict, award: Award) -> SheetDict:
         s = Sheet.model_validate(sheet)
-        new_level = min(_MAX_LEVEL, s.level + int(award.data.get("levels", 0)))
+        new_level = min(self.config.max_level, s.level + int(award.data.get("levels", 0)))
         max_hp = _hp_for_level(s.modifier("CON"), new_level)
         # Only an ACTUAL level-up restores to full HP; a no-op or capped award must not heal
         # (just re-clamp current HP under the possibly-changed max).

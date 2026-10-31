@@ -32,18 +32,30 @@ class SeedResult(BaseModel):
     wars: int
 
 
+def ruleset_problem(pack: WorldPack) -> str | None:
+    """Why this build can't play the pack's `[ruleset]` — an unknown id, or settings the ruleset
+    refuses (D-62) — or None. Shared by validate and import, so both judge a pack the same way."""
+    decl = pack.manifest.ruleset
+    try:
+        registry.resolve(decl.id, decl.version, decl.config)
+    except KeyError as exc:
+        return str(exc.args[0])
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 async def import_pack(
     store: EngineStore, pack: WorldPack, *, backfill_router: ProviderRouter | None = None
 ) -> PackImport:
     """Commit a parsed pack as a new world. Refuses (PackError) a pack whose ruleset this build
-    doesn't have — else the world commits fine and only fails at the first campaign — or one
-    graded insufficient. With `backfill_router`, a thin pack's gaps are AI-filled first and the
-    fills are committed, tagged `provenance=ai_backfill` (a live LLM call)."""
-    if pack.manifest.ruleset.id not in registry.available():
-        raise PackError(
-            f"pack declares unknown ruleset {pack.manifest.ruleset.id!r} "
-            f"(installed: {registry.available()})"
-        )
+    can't play (an unknown id, or bad `[ruleset.config]` settings) — else the world commits fine
+    and only fails at the first campaign — or one graded insufficient. With `backfill_router`, a
+    thin pack's gaps are AI-filled first and the fills are committed, tagged
+    `provenance=ai_backfill` (a live LLM call)."""
+    problem = ruleset_problem(pack)
+    if problem is not None:
+        raise PackError(f"pack declares a ruleset this build can't play: {problem}")
     report = check_sufficiency(pack)
     added: list[str] = []
     if backfill_router is not None and report.grade != "runnable":
@@ -57,6 +69,7 @@ async def import_pack(
         prompt_overrides=pack.prompts,
         ruleset_id=pack.manifest.ruleset.id,
         ruleset_version=pack.manifest.ruleset.version,
+        ruleset_config=pack.manifest.ruleset.config,
         rule_pack=pack.rule_pack.model_dump() if pack.rule_pack else {},
         extra_events=pack_to_events(pack),
     )

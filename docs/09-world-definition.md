@@ -53,6 +53,11 @@ version = ">=0.1"            #   alien PbtA build. A campaign started on the wor
 [ruleset.config]             #   play/fork rebinds the same ruleset. Example: worlds/emberfell
                              #   (id="uro-pbta") plays under the 2d6 system, worlds/ashfall d20,
                              #   worlds/brinehold (id="uro-pool") the d6 dice pool (D-55).
+                             # The game's settings for its ruleset (D-62), e.g. `push_strain = 2`.
+                             #   `uro ruleset list` / GET /rulesets show each ruleset's settings
+                             #   and defaults; an unknown or invalid key fails validate and import.
+                             #   Stored on the world's WorldGenesis, so every campaign and fork of
+                             #   it plays the same rules.
 
 [history]
 seed_era = "aftermath-of-empire"   # hint to the History service

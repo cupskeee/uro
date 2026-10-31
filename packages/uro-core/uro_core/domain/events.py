@@ -66,6 +66,9 @@ class WorldGenesisPayload(BaseModel):
     prompt_overrides: dict[str, str] = Field(default_factory=dict)  # pack prompts/ (filename→j2)
     ruleset_id: str = ""  # the pack's declared ruleset (docs/06); "" → the default (uro-basic)
     ruleset_version: str = ""
+    # The pack's `[ruleset.config]` (D-62): the game's settings for its ruleset, inline like the
+    # rule pack — immutable, so every campaign and fork of the world plays the same rules.
+    ruleset_config: dict[str, Any] = Field(default_factory=dict)
     # The Reaction-Layer rule pack, carried INLINE (docs/17) — like prompt_overrides — so an
     # exported world stays self-contained: reactions still fire after import on a host lacking the
     # pack files. {} = no rule pack. Serialized RulePack (rules_api_version + rules + agendas).
@@ -92,6 +95,7 @@ def world_genesis(
     prompt_overrides: dict[str, str] | None = None,
     ruleset_id: str = "",
     ruleset_version: str = "",
+    ruleset_config: dict[str, Any] | None = None,
     rule_pack: dict[str, Any] | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -103,6 +107,7 @@ def world_genesis(
             prompt_overrides=prompt_overrides or {},
             ruleset_id=ruleset_id,
             ruleset_version=ruleset_version,
+            ruleset_config=ruleset_config or {},
             rule_pack=rule_pack or {},
         ).model_dump(),
     )

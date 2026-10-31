@@ -38,6 +38,7 @@ class EventStore(Protocol):
         ruleset_version: str = "",
         rule_pack: dict[str, Any] | None = None,
         extra_events: list[DomainEvent] | None = None,
+        ruleset_config: dict[str, Any] | None = None,
     ) -> World:
         """Create a world: its `main` branch and a `WorldGenesis` genesis commit (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, plus any `extra_events` —
