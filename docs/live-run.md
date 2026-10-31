@@ -204,3 +204,49 @@ heard of a wizard on the road, and whether she believes it.
 Read back: `uro usage --world <W>`, `uro calls --stage extractor --campaign <C>` (a failed call
 shows `FAILED:` and why), the claims and beliefs each beat committed, and Mera's belief in the
 feat (`proj_beliefs`) — it should stay low and keep its `learned_from` after she retells it.
+
+## 9. Second pass: a party, Uro Pool, world rules, a cheaper extractor (v0.8)
+
+What the first pass (§8) didn't cover. Postgres must be up; NATS isn't needed.
+
+**Leg A — a two-player party on Ashfall, with a world rule.** Ashfall's `failures-get-talked-about`
+rule turns a failed check into a rumor at the Brinehouse.
+
+```sh
+uv run uro world create worlds/ashfall                        # → <W>
+uv run uro campaign new <W> --pc Ash                          # → <C> (player-1)
+uv run uro campaign join <C> --participant player-2 --pc Bane
+uv run uro serve --token tok-a --token tok-b                  # terminal 1: two tokens → round-robin
+uv run uro connect <C> --token tok-a                          # terminal 2 (player-1)
+uv run uro connect <C> --token tok-b                          # terminal 3 (player-2)
+```
+
+Take turns. While one player's beat is streaming, type the SAME intent in the other window: both
+should print "not your turn", and the first player's prompt must wait for its own ✓. Make two or
+three risky attempts (a lock, a guarded door) so a check fails, then ask Mera at the Brinehouse
+what people are saying. `/say` sends table talk that never commits.
+
+**Leg B — Uro Pool on Brinehold** (the same server hosts every ruleset):
+
+```sh
+uv run uro world create worlds/brinehold                      # → <W2>
+uv run uro campaign new <W2> --pc Wren                        # → <C2>
+uv run uro connect <C2> --token tok-a
+```
+
+Talk to Maren Coil (harbour warden), Tobin Reave (salvage captain) and Ilse (net-mender); try
+something risky and push it; pick a fight over the Drowned Barque's cargo.
+
+**Leg C — the extractor on `gpt-4o-mini`.** Replay two recorded sessions with the extractor bound
+to the cheaper model, then restore the binding:
+
+```sh
+uv run uro provider bind extractor <openai-connection-id> gpt-4o-mini
+uv run python scripts/extraction_replay.py <war-story world id>
+uv run python scripts/extraction_replay.py <Leg 1 world id>
+uv run uro provider bind extractor <previous connection id> <previous model>
+```
+
+Read back: the party's two PCs and whose beat each was (`uro events`), the module claim the rule
+committed and whether the narrator voiced it, Brinehold's `CheckResolved` outcomes and sheet
+changes (strain, wounds), and each replay's claims beside the original.
