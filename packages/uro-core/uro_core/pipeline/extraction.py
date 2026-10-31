@@ -251,8 +251,9 @@ def build_extractor_messages(
     )
     # What the characters on stage already BELIEVE is known too: the narrator is shown it (the war
     # story's rumor channel), so a retelling must read as old news here, or it becomes a fresh claim
-    # its teller "believes" outright (live run, 2026-10-31).
-    shown = {c.claim_id: c for c in [*recall.claims, *recall.belief_claims]}
+    # its teller "believes" outright. So are the latest claims, whatever their subject, so a
+    # reworded repeat of something said a beat ago reads as old news (live run, 2026-10-31).
+    shown = {c.claim_id: c for c in [*recall.claims, *recall.belief_claims, *recall.recent_claims]}
     known_claims = (
         "\n".join(f"- [{c.claim_id}] ({c.truth}) {c.statement}" for c in shown.values()) or "(none)"
     )

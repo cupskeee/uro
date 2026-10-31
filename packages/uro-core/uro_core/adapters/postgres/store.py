@@ -191,6 +191,11 @@ async def _outbox_row(
     )
 
 
+# how far back `recent_claims` looks: a few beats' worth of commits (a beat can be followed by a
+# reaction or a time-skip commit of its own)
+_RECENT_COMMITS = 40
+
+
 class PostgresEventStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
@@ -2247,6 +2252,27 @@ class PostgresEventStore:
                 "FROM proj_claims "
                 "WHERE branch_id = $1 ORDER BY claim_id",
                 branch_id,
+            )
+        return [ClaimView(**dict(r)) for r in rows]
+
+    async def recent_claims(self, branch_id: str, limit: int) -> list[ClaimView]:
+        # Walk back from the head through at most `_RECENT_COMMITS` commits — the branch's own
+        # history, so a fork never sees a sibling's later claims — newest ClaimRecorded first.
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "WITH RECURSIVE chain AS ("
+                "  SELECT c.commit_id, c.parent_id, c.depth, 1 AS n FROM commits c "
+                "  JOIN branches b ON b.head_commit = c.commit_id WHERE b.branch_id = $1 "
+                "  UNION ALL SELECT p.commit_id, p.parent_id, p.depth, ch.n + 1 FROM commits p "
+                "  JOIN chain ch ON p.commit_id = ch.parent_id WHERE ch.n < $3) "
+                "SELECT pc.claim_id, pc.statement, pc.subject_refs, pc.truth, pc.origin, "
+                "  pc.created_day FROM chain ch "
+                "JOIN events e ON e.commit_id = ch.commit_id AND e.event_type = 'ClaimRecorded' "
+                "JOIN proj_claims pc ON pc.branch_id = $1 AND pc.claim_id = e.payload->>'claim_id' "
+                "ORDER BY ch.depth DESC, e.seq DESC LIMIT $2",
+                branch_id,
+                limit,
+                _RECENT_COMMITS,
             )
         return [ClaimView(**dict(r)) for r in rows]
 

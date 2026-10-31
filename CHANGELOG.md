@@ -26,6 +26,10 @@ Found in the first live run of v0.7.0 (docs/16, "the v0.7 live run").
   - Sayings and advice ("there's a kernel of truth in every rumor") are no longer recorded as
     claims, and a place needs a name ("the tavern" is not one).
   - `confidence` now means how sure the speaker sounds, so a hedged rumor is recorded as one.
+  - News that raises a plot is also recorded as a plot thread, not only as a claim.
+  - A claim names who or what it is about by the name the world already uses.
+- **The extractor sees the latest claims** (the last 15 on the branch) as known, whatever they're
+  about, so a fact said in new words a beat later isn't recorded again.
 - **Backfill** writes a conflict in the world's own voice; it used to address "the players".
 
 ### Fixed
