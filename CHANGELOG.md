@@ -9,6 +9,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+Found in the third live pass (docs/16, "the third live pass").
+
+### Fixed
+- **The world can change state** (D-70). When narration changes something already established
+  ("the seal snaps open"), the extractor marks the old claim as superseded: a fact the narrator
+  itself established is retired to false and the new state recorded true. Before, the new fact
+  was downgraded as a contradiction and the old one kept, so the next beats narrated a broken seal
+  as intact. Authored, mechanical, external and rule-made facts can't be overturned this way.
+- **Retracted claims are no longer narrated.** A claim marked false, including a rumor a world
+  rule's `expire_claims` retired, used to reach the narrator as an "unverified rumor".
+
 ## [0.9.0] - 2026-10-31
 
 Upgrading: no database migration. Built-in rulesets gain a `danger` affordance each, and the

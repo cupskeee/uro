@@ -70,7 +70,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | event_type | payload | emit | notes |
 |---|---|---|---|
 | `ClaimRecorded` | claim_id, statement, subject_refs, truth, origin, created_day | X H P S E M | narration-asserted → `truth=true`; character-asserted → `truth=unknown` (see `05`); `S` covers authored pack claims at import (`09`); `E` covers a Chronicler feat, committed as `truth=unknown` **testimony** (never protected canon), `origin=external` (`chronicler.py`, D-25); `M` covers module rumors (`origin=module`); `created_day` is the in-fiction birth day for `expire_claims` (C5, D-34) |
-| `ClaimTruthChanged` | claim_id, truth, cause | P H M | investigation resolves `unknown`; contradiction repair; `M` covers `expire_claims` retracting a stale MODULE rumor to `truth=false` (C5, D-34 — structurally never a `truth=true`/canon claim) |
+| `ClaimTruthChanged` | claim_id, truth, cause | P H M X | investigation resolves `unknown`; contradiction repair; `X` covers a narrated CHANGE of state retiring the narrator fact it supersedes to `truth=false`, `cause=superseded` (D-70 — never an authored, mechanical, external or module fact); `M` covers `expire_claims` retracting a stale MODULE rumor to `truth=false` (C5, D-34 — structurally never a `truth=true`/canon claim) |
 | `BeliefChanged` | actor_id, claim_id, confidence, learned_from | X A P | rumor spread = BeliefChanged fan-out |
 
 ### Items
