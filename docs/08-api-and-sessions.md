@@ -72,7 +72,7 @@ POST /campaigns/{c}/codex        {text, participant?, key?, pinned?, refs?}   ad
 GET  /campaigns/{c}/tokens                                         runtime tokens, metadata only (self/admin, D-39)
 POST /campaigns/{c}/tokens/revoke {token} | {participant}           revoke one token, or all of a participant's (self/admin, D-39)
 GET  /usage                      [?stage=]                        LLM-call telemetry by stage (OPERATOR-only, D-44) (BE-10)
-GET  /rulesets                                                    registry: id@version + sheet shape + settings schema (any-authed) (BE-10, D-62)
+GET  /rulesets                                                    registry: id@version + sheet shape + settings schema, plus installed plugins that can't be used (`unusable`, with the reason) (any-authed) (BE-10, D-62, D-65)
 GET  /version                                                     the server's uro-server/uro-core versions (any-authed; /healthz stays a bare probe)
 GET  /providers                                                   model-connection registry snapshot: connections+roles+credential-metadata (OPERATOR-only, D-47)
 POST /providers                  {name, provider, base_url?, auth_id?}   register a connection (OPERATOR-only, D-47)

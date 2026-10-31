@@ -28,6 +28,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.base import (
+    RULESET_API_VERSION,
     Action,
     ActionSpec,
     Affordance,
@@ -121,6 +122,7 @@ def _roll_pool(
 class UroPool:
     id = "uro-pool"
     version = "0"
+    api_version = RULESET_API_VERSION
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = PoolConfig.model_validate(config or {})
