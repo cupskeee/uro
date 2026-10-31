@@ -388,8 +388,8 @@ v0.7.0 (runbook: `docs/live-run.md` §8) and read back from Postgres. Models: th
 | Flavor recorded as fact | **much improved, live** | Ashfall (12 beats, `gpt-5.6-luna`): one narrator fact recorded true ("Old Weck has milky eyes", a lasting trait); 14 dialogue claims as testimony. In July: 21 of 27 claims true, many passing moments. |
 | Reported news dropped as "not durable" | **found live → prompt fixed, replay pending** | 2 of 16 proposed claims dropped, both plot news a character reported ("a woman came asking after you", "the Duke means to seal the waterfront"). The prompt now keeps reported news and stated plans as durable testimony. |
 | AI backfill · capability probes | **live-validated once** | probe: structured output 3/3, violence and horror both engaged. Backfill filled Thornwood's conflict as an `ai_backfill` thread — written as game design ("players must decide…"); the worldsmith prompt now asks for the world's own voice. |
-| Belief/rumor retold by a live narrator | **live: hedged ✓ — laundering found → fixed (structural)** | Mera retold the third-hand rumor as hearsay ("there's talk of…"). But the retelling became a NEW claim she believed at 0.8 beside the 0.27 rumor: the extractor's KNOWN CLAIMS left out the on-stage characters' beliefs the narrator is shown, and `confidence` was undefined (the model gave its own certainty). Now the extractor sees those beliefs (`test_a_retold_rumor_stays_a_rumor`) and `confidence` means how sure the speaker sounds (prompt; replay pending). `gpt-4o-mini` also recorded sayings as claims and a place named "the tavern" — the prompt now excludes both. |
-| Why a model call failed | **fixed (proven)** | a planner call failed in 22 ms and left nothing to read; failed calls now record their exception types and HTTP status, never the exception text (`test_a_failure_is_described_by_type_never_by_its_text`, migration 025). |
+| Belief/rumor retold by a live narrator | **live: hedged ✓ — laundering found → fixed (the context is structural; skipping a reworded retelling is prompt-guarded)** | Mera retold the third-hand rumor as hearsay ("there's talk of…"). But the retelling became a NEW claim she believed at 0.8 beside the 0.27 rumor: the extractor's KNOWN CLAIMS left out the on-stage characters' beliefs the narrator is shown, and `confidence` was undefined (the model gave its own certainty). Now the extractor sees those beliefs (structural, `test_a_retold_rumor_stays_a_rumor`); whether it then skips a REWORDED retelling is up to the model — only an exact restatement is deduped structurally (D-58). `confidence` means how sure the speaker sounds (prompt). Replay confirmed both (below). `gpt-4o-mini` also recorded sayings as claims and a place named "the tavern" — the prompt now excludes both. |
+| Why a model call failed | **fixed (proven)** | a planner call failed in 22 ms and left nothing to read; failed calls now record their exception types and HTTP status, never the exception text (`test_a_failure_is_described_by_type_never_by_its_text`, migration 025) — for every call kind, a cancelled call, and the Codex adapter's own HTTP errors (`test_every_kind_of_call_records_its_failure`, `test_a_codex_http_error_records_its_status`, added by the phase-end review). |
 | `uro connect` prompt | **fixed (proven)** | the prompt came back at once, above the streaming narration, and was gone when the beat committed — the owner retyped an intent and played it twice. It now waits for each beat to settle (`test_the_prompt_waits_for_each_beat_to_settle`). |
 | Leg 4 baseline (`relational_live.py`, 15 beats) | **recorded** | 3 places, a faction with membership edges, 2 named actors, 1 thread; no claim dropped as "not durable"; 5 beats recorded nothing (beat 12 lost what the strangers said they want). The before-image for replaying the prompt changes. |
 
@@ -411,3 +411,13 @@ recorded narration replayed onto a fork taken just before its first beat:
 
 Cost: the latest-claims context adds about 10–13% extractor input tokens; mean extractor latency
 did not rise (4.5–5 s). One replay per world — thread creation in particular varies run to run.
+
+**Phase-end review (2026-10-31, targeted at #129–#135, 9 Opus agents).** 11 confirmed + 1 from the
+critic, all fixed: `uro connect` released its prompt on ANOTHER player's identical intent (intents
+now carry an id the server echoes as `intent_id`); a second replay picked the first replay's fork as
+its source; the recent-claims window was cut before dropping module rumors and re-recorded claim
+ids, so a reaction pass or a replayed bundle could empty it; a cancelled call was recorded as a
+success; Codex HTTP errors carried no status; the lifespan skipped `on_event` hooks an embedder
+attached and could skip `shutdown` (the store close) when the feed's close failed; an in-place
+time-skip's AdaptationApplied still said `fork-timeskip`; and this ledger had called the rumor fix
+"structural" (corrected above).

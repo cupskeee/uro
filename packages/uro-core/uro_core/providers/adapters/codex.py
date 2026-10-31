@@ -105,13 +105,18 @@ class CodexResponsesProvider:
                         # carries no token; the token is only in the request header), and it's the
                         # only way to diagnose a rejected request shape / model / missing header.
                         detail = (await resp.aread()).decode("utf-8", "replace").strip()[:500]
+                        # chained, so metering records the status (`… ← HTTPStatusError (HTTP
+                        # 429)`), as it does for the adapters that raise_for_status (review)
+                        status = httpx.HTTPStatusError(
+                            f"HTTP {resp.status_code}", request=resp.request, response=resp
+                        )
                         if resp.status_code == 401:
                             raise ProviderError(
                                 "codex request failed: 401 Unauthorized after refresh — reconnect"
-                            )
+                            ) from status
                         raise ProviderError(
                             f"codex request failed: HTTP {resp.status_code} — {detail}"
-                        )
+                        ) from status
                     async for piece in self._parse_sse(resp):
                         yield piece
                     return

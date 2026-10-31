@@ -2550,3 +2550,48 @@ def test_the_live_feed_survives_a_bad_commit_and_a_dropped_connection(
         feed.q.put(_commit("c-late", "b1"))
         assert _recv_until(ws, "commit")[-1]["commit_id"] == "c-late"
     assert feed.connects == 2  # once at startup, once after the drop
+
+
+def test_the_lifespan_runs_hooks_and_always_closes(recwarn: pytest.WarningsRecorder) -> None:
+    # Review: with a lifespan, FastAPI skips `on_event` hooks — an embedder copying v0.7's `uro
+    # serve` wiring would never open its store — and a feed that failed to close (NATS mid-
+    # reconnect) skipped `shutdown`, leaving the store open.
+    calls: list[str] = []
+
+    async def startup() -> None:
+        calls.append("startup")
+
+    async def shutdown() -> None:
+        calls.append("shutdown")
+
+    class _BadClose(_QueueFeed):
+        async def close(self) -> None:
+            calls.append("feed-close")
+            raise ConnectionError("nats is reconnecting")
+
+    app = create_app(_fake_deps(), commit_feed=_BadClose(), startup=startup, shutdown=shutdown)
+
+    @app.on_event("startup")
+    async def embedder_start() -> None:
+        calls.append("hook-start")
+
+    @app.on_event("shutdown")
+    def embedder_stop() -> None:  # a sync hook works too
+        calls.append("hook-stop")
+
+    with TestClient(app):
+        pass
+    assert calls == ["startup", "hook-start", "feed-close", "hook-stop", "shutdown"]
+
+    calls.clear()
+
+    async def broken_startup() -> None:
+        calls.append("startup")
+        raise RuntimeError("database is down")
+
+    with (
+        pytest.raises(RuntimeError),
+        TestClient(create_app(_fake_deps(), startup=broken_startup, shutdown=shutdown)),
+    ):
+        pass
+    assert calls == ["startup", "shutdown"]  # a half-done startup is still closed

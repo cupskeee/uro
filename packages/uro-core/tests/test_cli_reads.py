@@ -278,16 +278,18 @@ async def test_a_time_skip_records_why_it_happened(
     head = (await store.get_branch(w.main_branch_id)).head_commit  # type: ignore[union-attr]
 
     async def reasons(branch_id: str) -> list[str]:
+        # the skip's TimeAdvanced reason and its AdaptationApplied header's scope
         async with store.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT e.payload->>'reason' AS reason FROM events e "
+                "SELECT coalesce(e.payload->>'reason', e.payload->>'scope') AS why FROM events e "
                 "JOIN commits c ON c.commit_id = e.commit_id "
-                "WHERE c.world_id = $1 AND e.event_type = 'TimeAdvanced' "
-                "AND e.commit_id IN (SELECT head_commit FROM branches WHERE branch_id = $2) ",
+                "WHERE c.world_id = $1 AND e.event_type IN ('TimeAdvanced', 'AdaptationApplied') "
+                "AND e.commit_id IN (SELECT head_commit FROM branches WHERE branch_id = $2) "
+                "ORDER BY e.seq",
                 w.world_id,
                 branch_id,
             )
-        return [r["reason"] for r in rows]
+        return [r["why"] for r in rows]
 
     def uro(*args: str) -> str:
         result = CliRunner().invoke(app, list(args))
@@ -295,9 +297,33 @@ async def test_a_time_skip_records_why_it_happened(
         return result.output
 
     await asyncio.to_thread(uro, "campaign", "time-skip", campaign.campaign_id, "--days", "2")
-    assert await reasons(w.main_branch_id) == ["time-skip"]
+    assert await reasons(w.main_branch_id) == ["time-skip", "timeskip"]
     await asyncio.to_thread(
         uro, "branch", "fork", w.world_id, "--at", head, "--name", "later", "--time-skip-days", "3"
     )
     fork = next(b for b in await store.list_branches(w.world_id) if b.name == "later")
-    assert await reasons(fork.branch_id) == ["time-skip on fork"]
+    assert await reasons(fork.branch_id) == ["time-skip on fork", "fork-timeskip"]
+
+
+async def test_uro_calls_marks_a_failed_call(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uro_core.metering import LLMCall
+
+    monkeypatch.setenv("URO_DATABASE_URL", store.dsn)
+    w = await store.create_world(f"failed-{new_id()}")
+    campaign = await store.create_campaign(w.world_id, w.main_branch_id)
+    await store.record_llm_call(
+        LLMCall(
+            stage_tag="planner",
+            prompt_hash="h",
+            latency_ms=22,
+            branch_id=campaign.branch_id,
+            error="ProviderError ← ConnectError",
+        )
+    )
+    result = await asyncio.to_thread(
+        CliRunner().invoke, app, ["calls", "--campaign", campaign.campaign_id]
+    )
+    assert result.exit_code == 0, result.output
+    assert "FAILED: ProviderError ← ConnectError" in result.output

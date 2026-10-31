@@ -24,7 +24,7 @@ from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
 from uro_core.rulesets.base import CharSpec, Ruleset
 from uro_core.rulesets.rng import Rng
-from uro_core.timeline.models import STARTING_GEAR, World
+from uro_core.timeline.models import FORK_TIME_SKIP, STARTING_GEAR, World
 
 from uro_cli.wiring import (
     build_router,
@@ -701,6 +701,7 @@ def connect(
     the campaign stream in live."""
     import asyncio
     import json
+    import uuid
 
     import websockets
 
@@ -722,16 +723,33 @@ def connect(
                     "proposal_opened",
                     "intent_rejected",
                 }
-                pending: dict[str, asyncio.Event] = {}  # intent text → set when it settles
+                # intent id → (its text, set when it settles). The server echoes the id as
+                # `intent_id`, so another player's identical text never settles ours. Only a server
+                # that has never echoed one (an older one) is matched by text; once one has, a frame
+                # without an id is another client's.
+                pending: dict[str, tuple[str, asyncio.Event]] = {}
+                echoes = False
+
+                def settle(msg: dict[str, Any]) -> None:
+                    if "intent_id" in msg:
+                        hit = pending.pop(str(msg["intent_id"]), None)
+                    elif not echoes:
+                        text = str(msg.get("intent", msg.get("text", "")))
+                        rid = next((k for k, (t, _) in pending.items() if t == text), None)
+                        hit = pending.pop(rid) if rid is not None else None
+                    else:
+                        hit = None
+                    if hit is not None:
+                        hit[1].set()
 
                 async def receive() -> None:
+                    nonlocal echoes
                     async for raw in ws:
                         msg = json.loads(raw)
                         kind = msg.get("type")
+                        echoes = echoes or "intent_id" in msg
                         if kind in settles:
-                            text = str(msg.get("intent", msg.get("text", "")))
-                            if text in pending:
-                                pending.pop(text).set()
+                            settle(msg)
                         if kind == "narration_chunk":
                             typer.echo(msg["text"], nl=False)
                         elif kind == "beat_committed":
@@ -783,8 +801,10 @@ def connect(
                     elif intent.startswith("/vote "):  # non-canon consensus vote (D-38)
                         await ws.send(json.dumps({"type": "vote", "choice": intent[6:]}))
                     elif intent:
-                        settled = pending[intent] = asyncio.Event()
-                        await ws.send(json.dumps({"type": "intent", "text": intent}))
+                        rid = uuid.uuid4().hex
+                        settled = asyncio.Event()
+                        pending[rid] = (intent, settled)
+                        await ws.send(json.dumps({"type": "intent", "text": intent, "id": rid}))
                         waiting = asyncio.ensure_future(settled.wait())
                         # a slow beat (a reasoning model's extraction) still settles well inside
                         # this; past it — or if the server goes away — the prompt comes back anyway
@@ -792,7 +812,7 @@ def connect(
                             {waiting, receiver}, timeout=600, return_when=asyncio.FIRST_COMPLETED
                         )
                         waiting.cancel()
-                        pending.pop(intent, None)
+                        pending.pop(rid, None)
                         if receiver.done():  # the server closed the connection
                             break
                 receiver.cancel()
@@ -999,9 +1019,7 @@ def branch_fork(
                 pick = registry.resolve_for_branch(store, branch.branch_id)
                 ruleset = await _time_skip_ruleset(pick)
                 engine = Engine(store, build_router("stub", None), ruleset=ruleset)
-                await engine.agenda_tick(
-                    branch.branch_id, time_skip_days, reason="time-skip on fork"
-                )
+                await engine.agenda_tick(branch.branch_id, time_skip_days, reason=FORK_TIME_SKIP)
         finally:
             await store.close()
         forked = branch.forked_from if branch.forked_from else "-"

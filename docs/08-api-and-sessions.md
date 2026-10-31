@@ -185,7 +185,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 
 | frame | fields | effect |
 |---|---|---|
-| `intent` | `text` | run a beat as this participant's PC (canonical — commits) |
+| `intent` | `text`, optional `id` | run a beat as this participant's PC (canonical — commits). The frames that settle it echo `id` as `intent_id`. |
 | `table_talk` | `text` | the non-canon coordination lane (D-38) — broadcast only, never a beat |
 | `vote` | `choice` | cast a vote on a `--arbiter vote` server (D-38) |
 
@@ -194,19 +194,21 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 | frame | fields |
 |---|---|
 | `participant_joined` / `participant_left` | `participant_id` |
-| `beat_started` | `participant_id`, `intent` |
+| `beat_started` | `participant_id`, `intent`, `intent_id`† |
 | `narration_chunk` | `participant_id`, `text` |
-| `beat_committed` | `participant_id`, `intent`, `narration`, `commit_id` *(D-67)* |
-| `beat_failed` | `participant_id`, `intent`, `error` |
-| `not_your_turn` | `participant_id`, `text` *(round-robin, D-31)* |
-| `proposal_opened` | `participant_id`, `text` *(a QUEUED non-holder intent, D-38)* |
-| `intent_rejected` | `participant_id`, `text` |
+| `beat_committed` | `participant_id`, `intent`, `narration`, `commit_id` *(D-67)*, `intent_id`† |
+| `beat_failed` | `participant_id`, `intent`, `error`, `intent_id`† |
+| `not_your_turn` | `participant_id`, `text` *(round-robin, D-31)*, `intent_id`† |
+| `proposal_opened` | `participant_id`, `text` *(a QUEUED non-holder intent, D-38)*, `intent_id`† |
+| `intent_rejected` | `participant_id`, `text`, `intent_id`† |
 | `table_talk` | `participant_id`, `text` |
 | `vote_tally` | `participant_id`, `choice`, `tally` *(D-38)* |
 | `vote_decided` | `choice` |
 | `vote_unsupported` | `participant_id` *(the server's arbiter has no vote shape)* |
 | `outcome_recorded` | `encounter_id`, + the distilled receipt (`committed_events`, `commit_id`, …) *(Chronicler mode, D-25 — broadcast when an external outcome is posted)* |
 | `commit` | `commit_id`, `branch_id`, `depth`, `beats[]` (`participant_id`, `intent`, `narration`) *(D-67, with `uro serve --nats`: a commit on this campaign's branch made ELSEWHERE, by another server, the CLI or an embedder. Never the beat this campaign just played, which already arrived as `beat_committed`; its reactions do arrive here. The server pushes only commits its own database made, read from that database, never from the NATS message. Only narration, never raw events (D-45). Empty `beats` means the branch moved without a beat, such as a time-skip, so refetch state.)* |
+
+† `intent_id` echoes the `id` the client sent with that intent (absent if it sent none), so a client can tell its own outcome from another player's identical text.
 
 **Deliberately NOT emitted yet (a future GROW, not drift).** `scene_update` / `mode_change` (the highest-value add — Loom's Play surface can't show scene/mode) need the pipeline to surface within-beat mode state (encounters auto-resolve inside one beat under D-29, so between beats the mode is always free-roam — there is no persistent mode frame to send without new engine state). `mechanics_result` needs the same. `suggestions` (the planner's D-23 next-action hints) and a `beat_committed` `beat_id` (for deep-linking a committed beat) both need the `run_beat` streaming contract to yield structured frames, not only narration strings. `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
 

@@ -142,9 +142,12 @@ class ProjectionQueries(Protocol):
 
     async def list_claims(self, branch_id: str) -> list[ClaimView]: ...
 
-    async def recent_claims(self, branch_id: str, limit: int) -> list[ClaimView]:
+    async def recent_claims(
+        self, branch_id: str, limit: int, *, exclude_origins: tuple[str, ...] = ()
+    ) -> list[ClaimView]:
         """The claims recorded in the branch's latest commits (along its own history), newest
-        first, at most `limit` — each as it stands now."""
+        first, each once and as it stands now — at most `limit`, counted after leaving out
+        `exclude_origins`."""
         ...
 
     async def claims_about(self, branch_id: str, entity_ref: str) -> list[ClaimView]:

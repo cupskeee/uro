@@ -57,6 +57,7 @@ from uro_core.ports.model_registry import ModelConnection, ProviderCredential, R
 from uro_core.ports.outbox import OutboxMessage
 from uro_core.ports.tokens import TokenInfo
 from uro_core.timeline.models import (
+    FORK_TIME_SKIP,
     ActorView,
     BeliefView,
     Branch,
@@ -775,7 +776,7 @@ class PostgresEventStore:
                     caused_by=history_cause("timeskip"),
                 ),
                 adaptation_applied(
-                    scope="fork-timeskip",
+                    scope="fork-timeskip" if reason == FORK_TIME_SKIP else "timeskip",
                     summary=f"deterministic {days}-day skip; no LLM ripple in the PoC",
                     to_day=to_day,
                     caused_by=history_cause("adaptation"),
@@ -2255,24 +2256,34 @@ class PostgresEventStore:
             )
         return [ClaimView(**dict(r)) for r in rows]
 
-    async def recent_claims(self, branch_id: str, limit: int) -> list[ClaimView]:
+    async def recent_claims(
+        self, branch_id: str, limit: int, *, exclude_origins: tuple[str, ...] = ()
+    ) -> list[ClaimView]:
         # Walk back from the head through at most `_RECENT_COMMITS` commits — the branch's own
-        # history, so a fork never sees a sibling's later claims — newest ClaimRecorded first.
+        # history, so a fork never sees a sibling's later claims. Excluded origins and repeat
+        # recordings of one claim id (a replayed Chronicler bundle re-records its claims) are
+        # dropped BEFORE the limit, so neither can crowd the window out (review).
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "WITH RECURSIVE chain AS ("
                 "  SELECT c.commit_id, c.parent_id, c.depth, 1 AS n FROM commits c "
                 "  JOIN branches b ON b.head_commit = c.commit_id WHERE b.branch_id = $1 "
                 "  UNION ALL SELECT p.commit_id, p.parent_id, p.depth, ch.n + 1 FROM commits p "
-                "  JOIN chain ch ON p.commit_id = ch.parent_id WHERE ch.n < $3) "
-                "SELECT pc.claim_id, pc.statement, pc.subject_refs, pc.truth, pc.origin, "
-                "  pc.created_day FROM chain ch "
-                "JOIN events e ON e.commit_id = ch.commit_id AND e.event_type = 'ClaimRecorded' "
-                "JOIN proj_claims pc ON pc.branch_id = $1 AND pc.claim_id = e.payload->>'claim_id' "
-                "ORDER BY ch.depth DESC, e.seq DESC LIMIT $2",
+                "  JOIN chain ch ON p.commit_id = ch.parent_id WHERE ch.n < $3), "
+                "latest AS (SELECT DISTINCT ON (pc.claim_id) pc.claim_id, pc.statement, "
+                "  pc.subject_refs, pc.truth, pc.origin, pc.created_day, ch.depth, e.seq "
+                "  FROM chain ch "
+                "  JOIN events e ON e.commit_id = ch.commit_id AND e.event_type = 'ClaimRecorded' "
+                "  JOIN proj_claims pc ON pc.branch_id = $1 "
+                "    AND pc.claim_id = e.payload->>'claim_id' "
+                "  WHERE NOT (pc.origin = ANY($4::text[])) "
+                "  ORDER BY pc.claim_id, ch.depth DESC, e.seq DESC) "
+                "SELECT claim_id, statement, subject_refs, truth, origin, created_day FROM latest "
+                "ORDER BY depth DESC, seq DESC LIMIT $2",
                 branch_id,
                 limit,
                 _RECENT_COMMITS,
+                list(exclude_origins),
             )
         return [ClaimView(**dict(r)) for r in rows]
 
