@@ -125,11 +125,20 @@ async def _summary(store: PostgresEventStore, branch_id: str) -> dict[str, int]:
     }
 
 
-async def _extract(router: ProviderRouter, messages: list[Message]) -> tuple[Any, int]:
-    """1 attempt + 2 re-asks, as Engine._extract does. Returns (Extraction | None, calls)."""
+async def _extract(
+    router: ProviderRouter, messages: list[Message], store: PostgresEventStore, branch_id: str
+) -> tuple[Any, int]:
+    """1 attempt + 2 re-asks, as Engine._extract does. Returns (Extraction | None, calls). Each call
+    is metered onto the replay branch (D-66), so its full response can be read afterwards."""
     for attempt in range(1, 4):
         raw = await router.complete(
-            "extractor", messages, json_mode=True, temperature=0.1, max_tokens=4096
+            "extractor",
+            messages,
+            json_mode=True,
+            temperature=0.1,
+            max_tokens=4096,
+            branch_id=branch_id,
+            recorder=store.record_llm_call,
         )
         extraction = parse_extraction(raw)
         if extraction is not None:
@@ -177,7 +186,8 @@ async def _main(source: str, provider: str) -> None:
         calls = 0
         for i, b in enumerate(beats, 1):
             recall = await assemble_recall(store, branch, b.intent_text, RECENCY)
-            extraction, used = await _extract(router, build_extractor_messages(recall, b.narration))
+            messages = build_extractor_messages(recall, b.narration)
+            extraction, used = await _extract(router, messages, store, branch)
             calls += used
             events = (
                 await run_gauntlet(store, branch, extraction, policy=policy) if extraction else []
