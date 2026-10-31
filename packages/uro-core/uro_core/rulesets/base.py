@@ -33,6 +33,48 @@ from uro_core.rulesets.rng import Rng
 # v1 = the D-63 port: settings (`config_schema`), `conclude_encounter`, `downtime`.
 RULESET_API_VERSION = 1
 
+# Every method a ruleset must provide (the Protocol below), checked by `ruleset_contract_problem`.
+_PORT_METHODS = (
+    "sheet_schema",
+    "config_schema",
+    "new_character",
+    "progression",
+    "affordances",
+    "resolve_check",
+    "start_encounter",
+    "current_actor",
+    "legal_actions",
+    "npc_action",
+    "resolve_action",
+    "is_over",
+    "sheets",
+    "conclude_encounter",
+    "downtime",
+)
+
+
+def ruleset_contract_problem(ruleset: Any, expected_id: str | None = None) -> str | None:
+    """Why `ruleset` (an instance, or a ruleset class) can't serve on this port, or None: a str
+    `id` (equal to `expected_id`, when given) and `version`, `api_version == RULESET_API_VERSION`,
+    and every port method. Enforced by the registry on plugins and every built ruleset, and by the
+    Engine on the ruleset it's given (D-65 review) — an incompatible one fails up front, never
+    mid-beat."""
+    rid = getattr(ruleset, "id", None)
+    if not isinstance(rid, str) or not rid:
+        return f"its id is {rid!r}, not a non-empty string"
+    if expected_id is not None and rid != expected_id:
+        return f"its id is {rid!r}, not its entry-point name {expected_id!r}"
+    if not isinstance(getattr(ruleset, "version", None), str):
+        return f"its version is {getattr(ruleset, 'version', None)!r}, not a string"
+    declared = getattr(ruleset, "api_version", None)
+    if declared != RULESET_API_VERSION:
+        return f"built for ruleset port v{declared}; this engine implements v{RULESET_API_VERSION}"
+    missing = [m for m in _PORT_METHODS if not callable(getattr(ruleset, m, None))]
+    if missing:
+        return f"missing port methods: {', '.join(missing)}"
+    return None
+
+
 # A character sheet is OPAQUE to the core: an arbitrary JSON object whose shape the bound
 # ruleset defines and validates. The port neither reads nor writes its fields.
 Sheet = dict[str, Any]

@@ -259,17 +259,27 @@ def engine_deps(
 
     async def engine_for_branch(branch_id: str) -> Engine:
         """The engine for a branch's world ruleset — a time-skip with no campaign (a fork)."""
-        from uro_core.rulesets.registry import DEFAULT_RULESET_ID
+        return engine_for_pin(await store.world_ruleset(branch_id), f"branch {branch_id}")
 
-        pin = await store.world_ruleset(branch_id)
-        pin = pin.model_copy(update={"id": pin.id or DEFAULT_RULESET_ID})
-        return engine_for_pin(pin, f"branch {branch_id}")
+    async def time_engine(pick: Callable[[], Awaitable[Engine]], where: str) -> Engine:
+        """The engine a time-skip runs on. A world whose ruleset this server can't build still gets
+        its time-skip (and agendas): it runs on the process engine, whose downtime touches only its
+        own ruleset's sheets — so the missing ruleset's sheets simply don't rest (review)."""
+        try:
+            return await pick()
+        except (KeyError, ValueError) as exc:
+            logger.warning(
+                "time-skip on %s without its ruleset (%s): no downtime rules", where, exc
+            )
+            return engine
 
     def engine_for_pin(pin: RulesetPin, who: str) -> Engine:
         from uro_core.rulesets.registry import resolve
 
-        if pin.id == engine.ruleset_id and not pin.config:
-            return engine  # the process's own ruleset, with default settings
+        if (not pin.id or pin.id == engine.ruleset_id) and not pin.config:
+            # the process's own ruleset with default settings — or no ruleset named anywhere (a
+            # legacy campaign), which plays this server's default (`uro serve --ruleset`)
+            return engine
         key = (pin.id, pin.version, json.dumps(pin.config, sort_keys=True))
         if key not in siblings:
             try:
@@ -318,7 +328,8 @@ def engine_deps(
             raise HTTPException(status_code=404, detail="no such campaign")
         # time-skip, then the ruleset's downtime (D-63) and the world's agendas (D-33), under the
         # campaign's own ruleset and settings
-        await (await engine_for(campaign)).agenda_tick(campaign.branch_id, days)
+        playing = await time_engine(lambda: engine_for(campaign), f"campaign {campaign_id}")
+        await playing.agenda_tick(campaign.branch_id, days)
         world_day = await store.current_world_time(campaign.branch_id)
         return {"branch_id": campaign.branch_id, "world_day": world_day}
 
@@ -326,7 +337,8 @@ def engine_deps(
         # BE-2 fork `--time-skip-days`: the same helper the CLI `uro branch fork` uses — agenda_tick
         # advances in-fiction time AND fires the world's downtime agenda rules (D-33), no LLM. A
         # rule-less world → a plain time-skip. Returns the new in-fiction day.
-        await (await engine_for_branch(branch_id)).agenda_tick(branch_id, days)
+        playing = await time_engine(lambda: engine_for_branch(branch_id), f"branch {branch_id}")
+        await playing.agenda_tick(branch_id, days)
         return await store.current_world_time(branch_id)
 
     async def preview_beat(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
@@ -347,15 +359,17 @@ def engine_deps(
 
         out: list[dict[str, Any]] = []
         for rid in ruleset_registry.available():
-            rs = ruleset_registry.resolve(rid)
-            out.append(
-                {
+            try:  # one plugin's fault (e.g. a setting with no default) must not 500 the listing
+                rs = ruleset_registry.resolve(rid)
+                entry = {
                     "id": rs.id,
                     "version": rs.version,
                     "sheet_schema": rs.sheet_schema(),
                     "config_schema": rs.config_schema(),
                 }
-            )
+            except Exception as exc:
+                entry = {"id": rid, "error": f"can't list with default settings: {exc}"}
+            out.append(entry)
         return out
 
     # BE-7: the AI world-authoring stages bind the SAME process router the Engine holds (serve

@@ -58,14 +58,20 @@ class PoolConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    push_strain: int = Field(1, ge=0, description="strain a push costs")
-    strain_limit: int = Field(5, ge=0, description="at this much strain you can no longer push")
-    triumph_marks: int = Field(3, ge=1, description="marks for a triumph")
-    milestones_per_advance: int = Field(3, ge=1, description="milestones per added trait die")
-    trait_cap: int = Field(5, ge=1, description="the most dice a trait can reach")
-    milestones_per_fight: int = Field(1, ge=0, description="milestones a PC earns for surviving")
+    push_strain: int = Field(1, ge=0, le=100, description="strain a push costs")
+    strain_limit: int = Field(
+        5, ge=0, le=1000, description="at this much strain you can no longer push"
+    )
+    triumph_marks: int = Field(3, ge=1, le=100, description="marks for a triumph")
+    milestones_per_advance: int = Field(
+        3, ge=1, le=100, description="milestones per added trait die"
+    )
+    trait_cap: int = Field(5, ge=1, le=100, description="the most dice a trait can reach")
+    milestones_per_fight: int = Field(
+        1, ge=0, le=100, description="milestones a PC earns for surviving"
+    )
     rest_days: int = Field(
-        1, ge=0, description="days of downtime that clear strain (0: downtime never does)"
+        1, ge=0, le=36500, description="days of downtime that clear strain (0: downtime never does)"
     )
 
 
@@ -150,11 +156,15 @@ class UroPool:
         traits = dict(s.traits)
         # Every `milestones_per_advance` survived encounters adds a die to the weakest trait
         # (deterministic: lowest rating, then name), capped at `trait_cap`.
+        # Advances are counted arithmetically and stop once the weakest trait is at the cap — never
+        # a loop per milestone, and never LOWERING a trait that started above a low cap (review).
         cfg = self.config
-        while milestones >= cfg.milestones_per_advance:
-            milestones -= cfg.milestones_per_advance
+        advances, milestones = divmod(milestones, cfg.milestones_per_advance)
+        for _ in range(advances):
             low = min(traits, key=lambda k: (traits[k], k))
-            traits[low] = min(cfg.trait_cap, traits[low] + 1)
+            if traits[low] >= cfg.trait_cap:
+                break
+            traits[low] += 1
         strain = 0 if award.data.get("rest") else s.strain  # rest clears the toll of pushing
         return s.model_copy(
             update={"milestones": milestones, "traits": traits, "strain": strain}

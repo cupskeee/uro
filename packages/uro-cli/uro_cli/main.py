@@ -11,6 +11,7 @@ import json
 import sys
 import time
 import webbrowser
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
 
@@ -131,6 +132,18 @@ async def _world_or_exit(store: PostgresEventStore, ident: str) -> World:
         typer.echo(f"no such world: {ident}", err=True)
         raise typer.Exit(1)
     return named[0]
+
+
+async def _time_skip_ruleset(pick: Awaitable[Ruleset]) -> Ruleset | None:
+    """The ruleset a time-skip's downtime runs under. A world whose ruleset can't be built (a plugin
+    that's missing or broken) still gets its time-skip and agendas — just no downtime rules."""
+    try:
+        return await pick
+    except (KeyError, ValueError) as exc:
+        typer.echo(
+            f"warning: no downtime rules — the world's ruleset can't be built: {exc}", err=True
+        )
+        return None
 
 
 def _build_pc_sheet(ruleset: Ruleset) -> dict[str, Any]:
@@ -902,7 +915,8 @@ def branch_fork(
             if time_skip_days > 0:
                 # agenda_tick time-skips AND fires the world's downtime agenda rules (docs/17); it
                 # needs no LLM, so a stub router suffices. A rule-less world → a plain time-skip.
-                ruleset = await registry.resolve_for_branch(store, branch.branch_id)
+                pick = registry.resolve_for_branch(store, branch.branch_id)
+                ruleset = await _time_skip_ruleset(pick)
                 engine = Engine(store, build_router("stub", None), ruleset=ruleset)
                 await engine.agenda_tick(branch.branch_id, time_skip_days)
         finally:
@@ -1184,11 +1198,15 @@ def ruleset_list() -> None:
     plugins (D-65), each with the settings a game may give it under `[ruleset.config]` and their
     defaults (D-62). A plugin that can't be used is listed with the reason."""
     for rid in registry.available():
-        rs = registry.resolve(rid)
-        typer.echo(
-            f"{rs.id}@{rs.version}  sheet: {', '.join(rs.sheet_schema().get('properties', {}))}"
-        )
-        for key, spec in rs.config_schema().get("properties", {}).items():
+        try:  # one plugin's fault (e.g. a setting with no default) must not hide the rest
+            rs = registry.resolve(rid)
+            sheet = ", ".join(rs.sheet_schema().get("properties", {}))
+            settings = rs.config_schema().get("properties", {})
+        except Exception as exc:
+            typer.echo(f"{rid}  (can't list with default settings: {exc})")
+            continue
+        typer.echo(f"{rs.id}@{rs.version}  sheet: {sheet}")
+        for key, spec in settings.items():
             what = spec.get("description", "")
             typer.echo(f"    {key:<24} default {spec.get('default')!s:<5} {what}")
     for rid, why in sorted(registry.broken().items()):  # an installed plugin that can't be used
@@ -1365,7 +1383,7 @@ def campaign_time_skip(
             c = await _campaign_or_exit(store, campaign_id)
             # downtime + agendas need no LLM, so a stub router suffices; the campaign's own ruleset
             # and settings decide what the downtime means (D-63)
-            ruleset = await registry.resolve_for_campaign(store, c)
+            ruleset = await _time_skip_ruleset(registry.resolve_for_campaign(store, c))
             engine = Engine(store, build_router("stub", None), ruleset=ruleset)
             await engine.agenda_tick(c.branch_id, days)
             day = await store.current_world_time(c.branch_id)

@@ -25,7 +25,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from uro_core.ports.projections import EngineStore
-from uro_core.rulesets.base import RULESET_API_VERSION, Ruleset
+from uro_core.rulesets.base import Ruleset, ruleset_contract_problem
 from uro_core.rulesets.uro_basic import UroBasic
 from uro_core.rulesets.uro_pbta import UroPbtA
 from uro_core.rulesets.uro_pool import UroPool
@@ -48,39 +48,30 @@ _FACTORIES: dict[str, Factory] = dict(_BUILTINS)
 _BROKEN: dict[str, str] = {}  # plugin id → why it can't be used
 _discovered = False
 
-# What every ruleset must provide — checked on each plugin before it can play (D-65).
-_REQUIRED = (
-    "sheet_schema",
-    "config_schema",
-    "new_character",
-    "progression",
-    "affordances",
-    "resolve_check",
-    "start_encounter",
-    "current_actor",
-    "legal_actions",
-    "npc_action",
-    "resolve_action",
-    "is_over",
-    "sheets",
-    "conclude_encounter",
-    "downtime",
-)
-
 
 def _discover() -> None:
-    """Load the installed `uro.rulesets` plugins, once."""
+    """Load the installed `uro.rulesets` plugins, once. A plugin whose factory is a CLASS is checked
+    on the class (no instance built, so a plugin with a required setting is fine); any other
+    factory is built once with empty settings to check it."""
     global _discovered
     if _discovered:
         return
     _discovered = True
+    claims: dict[str, list[str]] = {}
     for ep in entry_points(group=ENTRY_POINT_GROUP):
+        claims.setdefault(ep.name, []).append(ep.value)
         if ep.name in _BUILTINS:
-            _BROKEN[ep.name] = f"{ep.value} can't replace the built-in {ep.name!r}"
+            # keyed apart from the id, so the (working) built-in isn't reported unusable
+            _BROKEN[f"{ep.name} [{ep.value}]"] = f"can't replace the built-in {ep.name!r}"
+            continue
+        if len(claims[ep.name]) > 1:  # two plugins claim one id: neither wins by install order
+            _FACTORIES.pop(ep.name, None)
+            _BROKEN[ep.name] = f"claimed by more than one plugin: {', '.join(claims[ep.name])}"
             continue
         try:
             factory = ep.load()
-            problem = _contract_problem(ep.name, factory({}))
+            subject = factory if isinstance(factory, type) else factory({})
+            problem = ruleset_contract_problem(subject, ep.name)
         except Exception as exc:  # a plugin's own fault: report it, don't take the engine down
             problem = f"{ep.value} failed to load: {type(exc).__name__}: {exc}"
         if problem is None:
@@ -88,21 +79,6 @@ def _discover() -> None:
         else:
             _BROKEN[ep.name] = problem
             logger.warning("ruleset plugin %r can't be used: %s", ep.name, problem)
-
-
-def _contract_problem(ruleset_id: str, ruleset: Any) -> str | None:
-    """Why `ruleset` can't serve as `ruleset_id`, or None."""
-    if getattr(ruleset, "id", None) != ruleset_id:
-        return (
-            f"its id is {getattr(ruleset, 'id', None)!r}, not its entry-point name {ruleset_id!r}"
-        )
-    declared = getattr(ruleset, "api_version", None)
-    if declared != RULESET_API_VERSION:
-        return f"built for ruleset port v{declared}; this engine implements v{RULESET_API_VERSION}"
-    missing = [m for m in _REQUIRED if not callable(getattr(ruleset, m, None))]
-    if missing:
-        return f"missing port methods: {', '.join(missing)}"
-    return None
 
 
 def register(ruleset_id: str, factory: Factory) -> None:
@@ -143,12 +119,18 @@ def resolve(
     if factory is None:
         raise KeyError(f"unknown ruleset {rid!r} (available: {available()})")
     try:
-        return factory(dict(config or {}))
+        ruleset = factory(dict(config or {}))
     except ValidationError as exc:
         problems = "; ".join(
             f"{'.'.join(str(p) for p in e['loc']) or 'config'}: {e['msg']}" for e in exc.errors()
         )
         raise ValueError(f"invalid [ruleset.config] for {rid}: {problems}") from exc
+    except Exception as exc:  # a plugin's or an embedder's own fault (e.g. a pre-D-62 factory)
+        raise ValueError(f"ruleset {rid!r} failed to build: {type(exc).__name__}: {exc}") from exc
+    problem = ruleset_contract_problem(ruleset, rid)  # every built ruleset, register()'s too
+    if problem is not None:
+        raise ValueError(f"ruleset {rid!r} can't be used: {problem}")
+    return ruleset
 
 
 async def resolve_for_branch(store: EngineStore, branch_id: str) -> Ruleset:
@@ -159,10 +141,12 @@ async def resolve_for_branch(store: EngineStore, branch_id: str) -> Ruleset:
 
 async def campaign_pin(store: EngineStore, campaign: Campaign) -> RulesetPin:
     """What a campaign plays: its pinned id + version, with its WORLD's settings. (A legacy campaign
-    pinned to a different ruleset than its world declares gets that ruleset's defaults.)"""
+    pinned to a different ruleset than its world declares gets that ruleset's defaults.) The id is
+    "" when neither the campaign nor its world names one — `resolve` then picks the default, and a
+    server can apply its own default (`uro serve --ruleset`)."""
     world = await store.world_ruleset(campaign.branch_id)
-    rid = campaign.ruleset_id or world.id or DEFAULT_RULESET_ID
-    same = rid == (world.id or DEFAULT_RULESET_ID)
+    rid = campaign.ruleset_id or world.id
+    same = (rid or DEFAULT_RULESET_ID) == (world.id or DEFAULT_RULESET_ID)
     return RulesetPin(
         id=rid,
         version=campaign.ruleset_version or world.version,

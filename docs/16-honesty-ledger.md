@@ -347,7 +347,9 @@ A caller-supplied `BeatPlan` drives the planner→mechanics gate deterministical
 | Same-fence guarantee (supplied plan ≡ LLM plan) | **proven (by construction)** | one `validate_plan` (affordance fence + D-21 trigger coverage) for both paths; an unknown affordance raises `PlannerError` (`test_invalid_supplied_plan_is_rejected`). No second validator. |
 | Trust posture — `plan=` is a TRUSTED in-process input | **by design (documented)** | the caller is inside the trust boundary (it can drive the store directly), so NO D-32 protection ceiling is applied. The ceiling fences the EXTERNAL Chronicler POST (`distill_outcome`); a future network-exposed `plan=` MUST route through it first — this is not that path (D-37). |
 | Not gated under no-ruleset / `--bare` | **by design (now loud)** | correctly runs no mechanics (nothing to gate / ablation integrity), but LOGS a warning rather than silently voiding a supplied plan (review fix). |
-| Wired to `serve`/CLI · rule-based fallback planner · `CheckResolved` event trace | deferred (reserved) | library API only for the MVP; the fallback planner + a per-check event are reserved behind #8 (D-37). |
+| Wired to `serve`/CLI · rule-based fallback planner | deferred (reserved) | library API only for the MVP; the fallback planner is reserved behind #8 (D-37). The per-check event shipped as `CheckResolved` (D-64, below). |
+| `CheckResolved`: a check outcome reaction rules can answer (D-64) | proven | `test_check_resolved.py`: each check commits its outcome in the ruleset's band, and a `per_event` heat meter counts two failures a beat. |
+| Ruleset plugins via the `uro.rulesets` entry point (D-65) | proven | `test_plugins.py`: discovery, every contract failure, duplicate ids, a required setting, a world playing the example plugin end to end; plus a real `pip install` of `examples/plugins/uro-coinflip` into a fresh venv. The contract is also enforced on `register()` and by the `Engine`. |
 
 ## Post-PoC — D-50 live tuning (2026-10-30, D-51)
 

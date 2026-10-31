@@ -266,6 +266,18 @@ async def test_engine_deps_plays_a_campaign_under_its_own_ruleset(
         async for _ in deps.run_beat("camp-3", "player-1", "x"):
             pass
 
+    # Review: a campaign naming no ruleset (and a world naming none) plays the SERVER's default —
+    # `uro serve --ruleset uro-pbta` — not uro-basic.
+    from uro_core.rulesets.uro_pbta import UroPbtA
+
+    played.clear()
+    pbta_server = Engine(
+        store, ProviderRouter(bindings={}, default=StubProvider()), ruleset=UroPbtA()
+    )  # type: ignore[arg-type]
+    pbta_deps = engine_deps(store, pbta_server, _TOKENS)  # type: ignore[arg-type]
+    assert [c async for c in pbta_deps.run_beat("camp-2", "player-1", "x")] == ["ok"]
+    assert played == [("uro-pbta", id(pbta_server))]
+
 
 # --- Phase 7 (OQ-7 → D-31): PartyArbiter round-robin over the WS play channel ---
 

@@ -80,8 +80,8 @@ def test_a_plugin_that_breaks_the_contract_is_reported_not_dropped(plugins) -> N
         _EP("missing", _boom),  # fails to import
     )
     unusable = registry.broken()
-    assert set(unusable) == {"uro-basic", "old", "named", "missing"}
-    assert "can't replace the built-in" in unusable["uro-basic"]
+    assert set(unusable) == {"uro-basic [test:uro-basic]", "old", "named", "missing"}
+    assert "can't replace the built-in" in unusable["uro-basic [test:uro-basic]"]
     assert "port v0" in unusable["old"] and "v1" in unusable["old"]
     assert "'something-else'" in unusable["named"]
     assert "ImportError" in unusable["missing"]
@@ -175,3 +175,84 @@ async def test_a_world_plays_a_plugin_ruleset_end_to_end(  # type: ignore[no-unt
     wins = (await store.get_sheet(branch, pc))["wins"]  # type: ignore[arg-type,index]
     mark = await store.get_sheet(branch, "a:mark")
     assert wins in (0, 1) and mark == {"wins": 0}  # the PC records a win only if it stood
+
+
+def test_two_plugins_claiming_one_id_are_both_refused(plugins) -> None:  # type: ignore[no-untyped-def]
+    # Review: the last one installed silently won.
+    plugins(COINFLIP, EntryPoint(name="coinflip", value="other_pkg:Coin", group="uro.rulesets"))
+    assert "coinflip" not in registry.available()
+    assert "more than one plugin" in registry.broken()["coinflip"]
+    with pytest.raises(ValueError, match="can't be used"):
+        registry.resolve("coinflip")
+
+
+def test_a_plugin_with_a_required_setting_is_usable(plugins) -> None:  # type: ignore[no-untyped-def]
+    # Review: discovery built every plugin with empty settings, so a required one made it unusable.
+    sys.path.insert(0, str(PLUGIN_DIR))
+    from pydantic import BaseModel, ConfigDict
+    from uro_coinflip import CoinFlip
+
+    class _Cfg(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        deck: str  # required: no default
+
+    class _Tarot(CoinFlip):
+        id = "tarot"
+
+        def __init__(self, config: dict | None = None) -> None:  # type: ignore[type-arg]
+            self.deck = _Cfg.model_validate(config or {}).deck
+            super().__init__({})
+
+    plugins(_EP("tarot", lambda: _Tarot))
+    assert "tarot" in registry.available() and registry.broken() == {}
+    assert registry.resolve("tarot", "", {"deck": "major"}).deck == "major"  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match="deck"):
+        registry.resolve("tarot")
+    out = CliRunner().invoke(__import__("uro_cli.main", fromlist=["app"]).app, ["ruleset", "list"])
+    assert "tarot  (can't list with default settings" in out.output  # listed, not a crash
+
+
+def test_any_factory_error_is_a_clean_error_naming_the_ruleset(plugins) -> None:  # type: ignore[no-untyped-def]
+    from uro_core.worldpack.create import ruleset_problem
+    from uro_core.worldpack.parse import parse_pack
+
+    sys.path.insert(0, str(PLUGIN_DIR))
+    from uro_coinflip import CoinFlip
+
+    class _Picky(CoinFlip):
+        id = "picky"
+
+        def __init__(self, config: dict | None = None) -> None:  # type: ignore[type-arg]
+            int((config or {}).get("n"))  # type: ignore[arg-type]  # TypeError on None
+            super().__init__({})
+
+    plugins(_EP("picky", lambda: _Picky))
+    with pytest.raises(ValueError, match=r"'picky' failed to build: TypeError"):
+        registry.resolve("picky")
+    pack = parse_pack(Path(__file__).resolve().parents[3] / "worlds" / "brinehold")
+    pack.manifest.ruleset.id = "picky"
+    assert "TypeError" in (ruleset_problem(pack) or "")  # reported by validate, not a crash
+
+
+def test_an_old_embedder_ruleset_fails_up_front(plugins) -> None:  # type: ignore[no-untyped-def]
+    # Review (critic): a pre-D-62 zero-arg register() factory and a pre-D-63 ruleset handed straight
+    # to the Engine both failed late and raw. Now: a clean error at resolve / at construction.
+    from uro_core.rulesets.uro_pool import UroPool
+
+    plugins()
+
+    class _Mine(UroPool):
+        id = "mine"
+
+    registry.register("mine", lambda: _Mine())  # type: ignore[arg-type,misc]
+    try:
+        with pytest.raises(ValueError, match="'mine' failed to build: TypeError"):
+            registry.resolve("mine")
+    finally:
+        registry._FACTORIES.pop("mine", None)
+
+    class _PreD63(UroPool):
+        conclude_encounter = None  # type: ignore[assignment]
+
+    with pytest.raises(ValueError, match="missing port methods: conclude_encounter"):
+        Engine(None, ProviderRouter(bindings={}, default=_Stub()), ruleset=_PreD63())  # type: ignore[arg-type]

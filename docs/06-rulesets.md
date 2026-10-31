@@ -107,7 +107,10 @@ that means:
 - a d20 check changes nothing.
 
 The gate threads a changed sheet into the actor's next check in the same beat, so a second push
-sees the first one's strain. A fight in the same beat starts from the checked sheets.
+sees the first one's strain. A fight in the same beat starts from the checked sheets. Only the
+ACTING player character's sheet takes a check's consequences: another participant's PC is never
+rolled for in someone else's beat (the fight path's PvP rule), and an NPC's check is reported
+(`CheckResolved`) but changes nothing, just as only PCs advance (D-63).
 
 **Fights and downtime (D-63).** The engine says WHEN, the ruleset says WHAT, and the world's
 settings say HOW MUCH. Two port hooks:
@@ -146,7 +149,12 @@ ruleset in one file. A plugin needs:
 - **Settings validation that refuses unknown keys,** so a typo in a pack fails `validate`.
 
 The registry checks each plugin once, at first use: its id must match its entry-point name, its
-`api_version` must match, and every method must be present. A plugin that fails any of these, or
+`api_version` must match, and every method must be present. A factory that is a class is checked on
+the class itself, so a ruleset may have REQUIRED settings (a world supplies them); any other factory
+is built once with empty settings to check it. The same contract is checked on every ruleset
+`resolve` builds (an embedder's `register()` included) and by the `Engine` it's handed to, so an
+incompatible ruleset fails at construction, never mid-fight. Two plugins claiming one id are both
+refused, never decided by install order. A plugin that fails any of these, or
 fails to import, is listed by `uro ruleset list` (and `GET /rulesets` as `unusable`) with the
 reason, and any world declaring it is refused. It is never silently missing. A plugin can't take
 a built-in's id; the built-in stays.

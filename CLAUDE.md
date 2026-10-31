@@ -169,7 +169,7 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
 
 - **D-54 — the bounded reaction cascade (C6):** `CounterChanged` is triggerable; after a module pass, CounterChanged-triggered rules run for up to 3 more hops (fail-closed past the cap). Only those rules join a hop, so pre-C6 packs are unchanged. `RULES_API_VERSION` 6→7.
 
-- **D-55 — a third built-in ruleset, `uro_pool`:** an original d6 dice pool (target numbers, push-for-strain, wounds that shrink pools, SIMULTANEOUS exchanges) — hosted by the port with zero changes; `worlds/brinehold` binds it. srd51 was declined (it would recreate D&D 5e). Found: free-roam check consequences never reach sheets in any ruleset (`progression` is never called).
+- **D-55 — a third built-in ruleset, `uro_pool`:** an original d6 dice pool (target numbers, push-for-strain, wounds that shrink pools, SIMULTANEOUS exchanges) — hosted by the port with zero changes; `worlds/brinehold` binds it. srd51 was declined (it would recreate D&D 5e). Found: free-roam check consequences never reached sheets in any ruleset (fixed by D-61/D-63).
 
 - **D-56 — partial-name entity resolution (the entity_index, measured and rejected):** name embeddings can't separate variants from near-names (30 labelled pairs, overlapping), so a deterministic rule ships — a mention links to the ONE entity whose distinctive name words CONTAIN it (subset only; leading honorifics dropped, org words kept; a possessive or a conflicting title never links), if affiliations agree; actor links emit `EntityAliasAdded`. Fresh pairs: 8/10 linked, 0/10 false merges. Tightened by D-58 after the holistic review found the superset direction fused relatives ("Mira's mother" → Mira).
 
@@ -188,5 +188,13 @@ Releases: **v0.2.0** (2026-07-19, PyPI); **v0.3.0** (2026-07-21) a GitHub Releas
   - **History:** world state at any commit (`store.state_at`, the fork's materialization in a transaction that is always rolled back).
 
   Found on the way: the CLI's 8-character commit ids collided within a second (ULID timestamps), so full ids are printed and prefixes are accepted. The phase-end review (9 Opus agents, medium) found 14 issues plus 4 from the critic. All real ones are fixed (#115): an idle revoked socket kept reading and kept its seat; `start_campaign` could adopt another player's live PC; mint lacked the campaign scope; OAuth rotation; YAML errors were 500s; ambiguous world names; doc drift. D-60 overclaims are recorded in Corrections.
+
+- **Per-game rulesets (D-61…D-65, #116–#121, 2026-10-31, unreleased):** the engine says WHEN, the ruleset says WHAT, the world's settings say HOW MUCH. Free-roam checks change sheets (`CheckResult.sheet`, D-61). `[ruleset.config]` is real (WorldGenesis, `RulesetPin`, validated loudly, D-62). The `conclude_encounter` and `downtime` port hooks give each built-in its advancement and rest, for PCs only (D-63). `CheckResolved` lets world rules answer checks (D-64). Plugin rulesets come in through the `uro.rulesets` entry point with `RULESET_API_VERSION`, enforced on plugins, `register()` and the `Engine` (D-65; example `examples/plugins/uro-coinflip`). The phase-end review (9 Opus agents) found 23 + 2; all real ones are fixed (#121):
+  - a low cap lowered a stat, and award settings were unbounded;
+  - a check could land on another player's PC;
+  - `serve --ruleset` was ignored;
+  - a time-skip failed on a missing ruleset;
+  - plugin contract gaps;
+  - `per_event` was missing from the heat-meter example.
 
 Known open items: token counts aren't metered; raw extractor output is only logged, not stored; nothing consumes the outbox yet.

@@ -55,7 +55,9 @@ version = ">=0.1"            #   alien PbtA build. A campaign started on the wor
                              #   worlds/brinehold (id="uro-pool") the d6 dice pool (D-55).
                              # The game's settings for its ruleset (D-62), e.g. `push_strain = 2`.
                              #   `uro ruleset list` / GET /rulesets show each ruleset's settings
-                             #   and defaults; an unknown or invalid key fails validate and import.
+                             #   and defaults; an unknown or invalid key fails validate and pack import.
+                             #   (A world BUNDLE import keeps the world even if its ruleset
+                             #   isn't installed here: it plays once the ruleset is.)
                              #   Stored on the world's WorldGenesis, so every campaign and fork of
                              #   it plays the same rules.
 

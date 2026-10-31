@@ -19,8 +19,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **Check outcomes are events, so world rules can react to them (D-64).** Every free-roam check now
   commits `CheckResolved` (the actor, the affordance, the outcome in the ruleset's own words, the
   roll's trace). A pack's `rules.yaml` can trigger on it: "every failed check raises the heat" is
-  `trigger: {event: CheckResolved, where: {outcome: failure}}` plus `adjust_counter`. This was the
-  missing half of Seventh Vault's heist alarm.
+  `trigger: {event: CheckResolved, where: {outcome: failure}, per_event: true}` plus
+  `adjust_counter`. Without `per_event` a rule fires once per beat, however many checks failed. This
+  was the missing half of Seventh Vault's heist alarm.
 - **Characters advance from fights and rest in downtime (D-63).** The ruleset gains two hooks: a
   fight's end and a stretch of downtime. Each built-in applies its own rules, sized by the world's
   settings:
@@ -46,8 +47,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   failing), so enough misses raise the weakest stat. A d20 check changes nothing. The port's
   `CheckResult` gains an optional `sheet`, and each ruleset applies its own rules. A second check in
   the same beat sees the first one's result, and a fight in the same beat starts from the checked
-  sheet. Not yet live: advancement from encounters (Uro Pool milestones, PbtA conflict-miss XP, d20
-  level-ups) and Uro Pool `rest`, so strain never clears.
+  sheet. Only the acting player character's sheet takes a check's consequences: another player's
+  character is never rolled for in your beat, and an NPC's check is reported but changes nothing.
+  Fights and downtime got their own rules in D-63.
 - **The server can start a campaign on any branch.** `POST /worlds/{w}/campaigns` takes an optional
   `branch` (a name or id, default `main`), like `uro campaign new --branch`. Before, every REST
   campaign started on `main`, so a branch forked over the API could not be played.
@@ -114,6 +116,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   The command refuses a credential that a connection still uses, naming those connections. With
   `--force` it deletes the credential anyway, and those connections become unauthenticated rather
   than deleted. `uro provider rm` now says the credential stays.
+
+### Changed
+- **For embedders with their own ruleset (breaking).** The ruleset port changed:
+  - a registry factory now receives the world's settings, `factory(config)` (D-62);
+  - a ruleset declares `api_version = RULESET_API_VERSION` (D-65);
+  - it implements `config_schema`, `conclude_encounter` and `downtime` (D-62, D-63);
+  - its `id` must equal the id it is registered under.
+
+  `registry.resolve` and the `Engine` both check this, so an old ruleset fails at construction with
+  the missing pieces named, never mid-fight.
+- **`uro serve --ruleset`** sets the ruleset only for campaigns that name none. Those are legacy
+  campaigns, since a campaign started today pins its world's ruleset; every pinned campaign plays
+  its own.
 
 ### Fixed
 - **A PC seated over the server now gets the same starting gear as one seated by the CLI** (a
