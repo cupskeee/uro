@@ -77,8 +77,8 @@ def test_validate_plan_ignores_invented_trigger_categories() -> None:
 def test_resolve_mechanics_resolves_a_check_deterministically() -> None:
     plan = BeatPlan(mechanics=[PlanMechanic(affordance="persuade", actor="a:pc", target="a:npc")])
     sheets = {"a:pc": _pc_sheet({"CHA": 16})}
-    r1 = resolve_mechanics(RS, plan, sheets, "a:pc", Rng(5))
-    r2 = resolve_mechanics(RS, plan, sheets, "a:pc", Rng(5))
+    r1 = resolve_mechanics(RS, plan, sheets, "a:pc", Rng(5)).checks
+    r2 = resolve_mechanics(RS, plan, sheets, "a:pc", Rng(5)).checks
     assert len(r1) == 1 and r1[0].detail["modifier"] == 3  # CHA 16 → +3
     assert r1[0].outcome in ("success", "failure")  # d20's 2-tier graded ladder
     assert r1[0].model_dump() == r2[0].model_dump()  # same seed → same result
@@ -94,7 +94,7 @@ def test_resolve_mechanics_skips_encounter_and_unsheeted() -> None:
             PlanMechanic(affordance="sneak", actor="a:nobody"),
         ]
     )
-    assert resolve_mechanics(RS, plan, {"a:pc": _pc_sheet()}, "a:pc", Rng(1)) == []
+    assert resolve_mechanics(RS, plan, {"a:pc": _pc_sheet()}, "a:pc", Rng(1)).checks == []
 
 
 # --- sheets as state ---

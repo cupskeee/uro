@@ -10,6 +10,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Free-roam checks change character sheets (D-61).** A check that changes its actor's sheet now
+  commits the change as `SheetUpdated` in the beat. A pushed Uro Pool check costs +1 strain, which
+  the trace had always claimed while the sheet never moved. A PbtA miss marks XP (advance by
+  failing), so enough misses raise the weakest stat. A d20 check changes nothing. The port's
+  `CheckResult` gains an optional `sheet`, and each ruleset applies its own rules. A second check in
+  the same beat sees the first one's result, and a fight in the same beat starts from the checked
+  sheet. Not yet live: advancement from encounters (Uro Pool milestones, PbtA conflict-miss XP, d20
+  level-ups) and Uro Pool `rest`, so strain never clears.
 - **The server can start a campaign on any branch.** `POST /worlds/{w}/campaigns` takes an optional
   `branch` (a name or id, default `main`), like `uro campaign new --branch`. Before, every REST
   campaign started on `main`, so a branch forked over the API could not be played.

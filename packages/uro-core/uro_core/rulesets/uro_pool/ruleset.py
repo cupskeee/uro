@@ -16,10 +16,9 @@ axes neither earlier ruleset touches:
                                                            fighters can wound each other)
     levels from winning        XP from failing             MILESTONES from surviving encounters
 
-Honest limit: the pipeline never applies a free-roam check's consequences to the sheet (true of
-every ruleset — PbtA's XP-on-a-miss included), so a push during a CHECK is recorded in its detail
-only.
-A push during an ENCOUNTER changes the fighter's strain, which persists via the final SheetUpdated.
+A push costs strain wherever it happens: a free-roam CHECK returns the strained sheet
+(`CheckResult.sheet`, committed by the engine), and in an ENCOUNTER the strain persists via the
+final SheetUpdated.
 """
 
 from __future__ import annotations
@@ -184,10 +183,15 @@ class UroPool:
         outcome = "fail" if marks == 0 else "triumph" if marks >= _TRIUMPH_MARKS else "success"
         push_note = " (pushed: +1 strain)" if pushed else ""
         trace = f"{trait} pool {sorted(dice)} vs {target}+ → {marks} mark(s): {outcome}{push_note}"
+        # The push's toll is real: the strain lands on the sheet (and so limits the next push)
+        after = (
+            sheet.model_copy(update={"strain": sheet.strain + 1}).model_dump() if pushed else None
+        )
         return CheckResult(
             outcome=outcome,
             trace=trace,
             detail={"dice": dice, "target": target, "marks": marks, "pushed": pushed},
+            sheet=after,
         )
 
     # --- encounters: simultaneous exchanges ---

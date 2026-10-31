@@ -80,12 +80,18 @@ class CheckRequest(BaseModel):
 class CheckResult(BaseModel):
     """A resolved check. `outcome` is a ruleset-declared graded band (the generalization that
     replaced d20's binary `success: bool` — so a 2d6 system's miss/partial/full survives). The
-    pipeline reads only `trace` (→ the narrator); `detail` carries ruleset specifics (the roll,
-    the DC, the 2d6 sum…) for debugging without shaping the contract."""
+    pipeline reads `trace` (→ the narrator) and `sheet`; `detail` carries ruleset specifics (the
+    roll, the DC, the 2d6 sum…) for debugging without shaping the contract.
+
+    `sheet` is the actor's sheet AFTER the check when the check itself changed it — the ruleset
+    applies its own rules (a pushed pool's strain, XP marked on a miss), exactly as an encounter's
+    final sheets carry its harm. The engine commits it as `SheetUpdated`, opaque. None = the check
+    left the sheet as it was."""
 
     outcome: str
     trace: str
     detail: dict[str, Any] = Field(default_factory=dict)
+    sheet: Sheet | None = None
 
 
 # --- encounter mode ---
