@@ -400,4 +400,14 @@ recorded narration replayed onto a fork taken just before its first beat:
 |---|---|---|
 | War story (Leg 3) | Mera's retelling: a new claim at 0.8 → **nothing new**; her belief stays 0.272 with its `learned_from` trail. Sayings 3 → 0; "the tavern" place gone; new hearsay recorded at 0.25–0.35. | fixed — on a different model than the original's `gpt-4o-mini` |
 | Ashfall (Leg 1) | the two dropped news claims **kept**; claims 14 → 15; **threads 2 → 0** | the news instruction said "record it as a dialogue claim", and both original threads had started as reported news; reworded to say news that raises a plot is also a thread |
-| Relational (Leg 4) | beat 12's gap filled; beat 8's rumors become the barkeep's testimony, not narrator facts; thread 1 → 1; claims 13 → 24, one fact **three times** in new words | the repeats named no subject ("the Watch"), so recall never surfaced them to the extractor; it now also sees the branch's latest 15 claims (`test_the_extractor_sees_the_latest_claims_whatever_their_subject`) and is asked to name a claim's subject as the KNOWN lists do. Second replay pending. |
+| Relational (Leg 4) | beat 12's gap filled; beat 8's rumors become the barkeep's testimony, not narrator facts; thread 1 → 1; claims 13 → 24, one fact **three times** in new words | the repeats named no subject ("the Watch"), so recall never surfaced them to the extractor; it now also sees the branch's latest 15 claims (`test_the_extractor_sees_the_latest_claims_whatever_their_subject`) and is asked to name a claim's subject as the KNOWN lists do. |
+
+**Replayed again after #134 (2026-10-31, same model):**
+
+| World | Round 1 → round 2 | Read |
+|---|---|---|
+| Ashfall | threads 0 → **3** (the boats, the Duke's plan, the woman asking after the PC); both news claims still kept; claims 15 → 17 | threads restored (the original had 2) |
+| Relational | "the Watch says it's frightened talk": 3 rewordings → **once**; beat 12's gain kept; claims with no subject 12 → 7 of 24; faction named "River Watch" consistently | repeats fixed; more of what characters say is recorded than in the original (13 claims), some of it low-value ("no one agrees on what is happening") — testimony, `truth=unknown`, but it grows the state; watch it |
+
+Cost: the latest-claims context adds about 10–13% extractor input tokens; mean extractor latency
+did not rise (4.5–5 s). One replay per world — thread creation in particular varies run to run.
