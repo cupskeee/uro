@@ -50,8 +50,9 @@ from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.errors import ExportError
 from uro_core.export import WorldBundle
-from uro_core.pipeline.engine import Engine
+from uro_core.pipeline.engine import BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
+from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
 from uro_core.timeline.models import STARTING_GEAR
@@ -142,6 +143,47 @@ def _new_pc_sheet(ruleset: Any) -> dict[str, Any]:
     return sheet
 
 
+class _RecentCommits:
+    """The commits this server broadcast itself, most recent `cap` — so the live commit feed (D-67),
+    which also carries them once the relay publishes, doesn't send a client the same beat twice."""
+
+    def __init__(self, cap: int = 2048) -> None:
+        self._ids: dict[str, None] = {}
+        self._cap = cap
+
+    def add(self, commit_id: str | None) -> None:
+        if commit_id:
+            self._ids[commit_id] = None
+            while len(self._ids) > self._cap:
+                self._ids.pop(next(iter(self._ids)))
+
+    def __contains__(self, commit_id: object) -> bool:
+        return commit_id in self._ids
+
+
+def _commit_message(message: OutboxMessage) -> dict[str, Any]:
+    """A commit as a PLAYER may see it (D-45): its coordinates and the narration of its beats —
+    prose every player already reads — never its raw events (truth values, hidden beliefs). A
+    commit with no beat (a time-skip, a reaction) still says the branch moved, so a client knows
+    to refetch."""
+    beats = [
+        {
+            "participant_id": e["payload"].get("participant_id", ""),
+            "intent": e["payload"].get("intent_text", ""),
+            "narration": e["payload"].get("narration", ""),
+        }
+        for e in message.events
+        if e.get("event_type") == "BeatResolved" and isinstance(e.get("payload"), dict)
+    ]
+    return {
+        "type": "commit",
+        "commit_id": message.commit_id,
+        "branch_id": message.branch_id,
+        "depth": message.depth,
+        "beats": beats,
+    }
+
+
 class _CodexPendingStore:
     """In-memory pending Codex logins: `login_id -> {device_auth_id, user_code, name, expires_at}`.
 
@@ -179,6 +221,9 @@ class ServerDeps:
     ]  # (campaign, participant, intent) → chunks
     # Chronicler mode (D-25): distill an external game's outcome bundle → committed events.
     report_outcome: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
+    # campaign → the commit its last beat run here made (D-67): sent with `beat_committed`, and
+    # remembered so the live commit feed doesn't push this server's own beat back to its clients
+    last_commit: Callable[[str], str | None] | None = None
     # Management surface (docs/18 B3): the EngineStore port (a Protocol — the server still sees only
     # ports) powers the CRUD/read endpoints; `advance_time` runs an engine-backed time-skip+agendas.
     # None → those endpoints return 501 (a fake-deps test that only exercises play/outcome).
@@ -291,12 +336,19 @@ def engine_deps(
             siblings[key] = engine.with_ruleset(ruleset)
         return siblings[key]
 
+    last_commits: dict[str, str] = {}
+
     async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[str]:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             return
         playing = await engine_for(campaign)
-        async for chunk in playing.run_beat_stream(campaign, participant, text):
+
+        def committed(result: BeatResult) -> None:
+            last_commits[campaign_id] = result.commit_id
+
+        stream = playing.run_beat_stream(campaign, participant, text, on_commit=committed)
+        async for chunk in stream:
             yield chunk
 
     async def report_outcome(campaign_id: str, bundle_json: dict[str, Any]) -> dict[str, Any]:
@@ -500,6 +552,7 @@ def engine_deps(
         campaign_exists=campaign_exists,
         run_beat=run_beat,
         report_outcome=report_outcome,
+        last_commit=last_commits.get,
         store=store,
         advance_time=advance_time,
         advance_branch_time=advance_branch_time,
@@ -529,10 +582,48 @@ def create_app(
     *,
     arbiter: TurnArbiter | None = None,
     cors_origins: list[str] | None = None,
+    commit_feed: CommitFeed | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Uro Engine server")
     hub = SessionHub()
     arb = arbiter or SoloArbiter()
+    own_commits = _RecentCommits()
+    campaign_branches: dict[str, str | None] = {}  # campaign → branch (never changes), cached
+
+    async def push_commit(message: OutboxMessage) -> None:
+        """A commit from anywhere (another server, the CLI, an embedder) reaches the clients of
+        every live campaign on its branch (D-67) — unless this server broadcast it itself."""
+        if message.commit_id in own_commits:
+            return
+        for campaign_id in hub.campaigns():
+            if campaign_id not in campaign_branches and deps.store is not None:
+                campaign = await deps.store.get_campaign(campaign_id)
+                campaign_branches[campaign_id] = campaign.branch_id if campaign else None
+            if campaign_branches.get(campaign_id) == message.branch_id:
+                await hub.publish(campaign_id, _commit_message(message))
+
+    async def consume_commits(feed: CommitFeed) -> None:
+        async for message in feed:
+            try:
+                await push_commit(message)
+            except Exception as exc:  # one bad commit must not stop the feed
+                logger.warning("couldn't push commit %s: %s", message.commit_id, exc)
+
+    if commit_feed is not None:  # (hooks only when a feed is configured)
+        feed = commit_feed
+        feed_task: list[asyncio.Task[None]] = []
+
+        @app.on_event("startup")
+        async def _start_feed() -> None:
+            await feed.connect()
+            feed_task.append(asyncio.create_task(consume_commits(feed)))
+
+        @app.on_event("shutdown")
+        async def _stop_feed() -> None:
+            for task in feed_task:
+                task.cancel()
+            await feed.close()
+
     # Every open play socket with the token it authenticated with, so a revoke can CLOSE the
     # revoked player's sockets at once: an idle socket would otherwise keep reading every broadcast
     # and keep its seat in the turn ring (stalling a party) until its next message.
@@ -990,6 +1081,7 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"invalid outcome bundle: {exc}") from exc
+        own_commits.add(result.get("commit_id"))  # already announced: not again via the feed
         await hub.publish(
             campaign_id, {"type": "outcome_recorded", "encounter_id": encounter_id, **result}
         )
@@ -2019,7 +2111,13 @@ def create_app(
                 mtype = msg.get("type")
                 if mtype == "intent":
                     await _run_and_broadcast(
-                        deps, arb, hub, campaign_id, participant, str(msg.get("text", ""))
+                        own_commits,
+                        deps,
+                        arb,
+                        hub,
+                        campaign_id,
+                        participant,
+                        str(msg.get("text", "")),
                     )
                 elif mtype == "table_talk":
                     # The NON-CANON coordination lane (D-38): out-of-world debate/proposals. It only
@@ -2098,6 +2196,7 @@ async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> No
 
 
 async def _run_and_broadcast(
+    own_commits: _RecentCommits,
     deps: ServerDeps,
     arbiter: TurnArbiter,
     hub: SessionHub,
@@ -2164,6 +2263,8 @@ async def _run_and_broadcast(
         # player gets the token back next round.
         await arbiter.beat_committed(campaign_id, participant, "")
         return
+    commit_id = deps.last_commit(campaign_id) if deps.last_commit is not None else None
+    own_commits.add(commit_id)
     await hub.publish(
         campaign_id,
         {
@@ -2171,6 +2272,7 @@ async def _run_and_broadcast(
             "participant_id": participant,
             "intent": text,
             "narration": "".join(chunks).strip(),
+            "commit_id": commit_id,  # matches the `commit` a client may get for it (D-67)
         },
     )
     # The beat committed — let the arbiter rotate the turn token to the next participant (OQ-7).

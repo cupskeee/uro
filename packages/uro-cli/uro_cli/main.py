@@ -554,6 +554,13 @@ def serve(
         "(consensus). UNSET = auto (solo for 1 token, party for >1). Setting it EXPLICITLY binds "
         "that shape even for a 1-token launch, so a runtime-added player still gets turns (D-39).",
     ),
+    nats_url: str = typer.Option(
+        None,
+        "--nats",
+        help="push every commit — from any process — to WebSocket clients live, via the NATS "
+        "subjects `uro outbox relay` publishes to (D-67)",
+    ),
+    subject_prefix: str = typer.Option("uro", "--subject-prefix", help="the relay's prefix"),
     cors_origin: list[str] = typer.Option(  # noqa: B008
         None,
         "--cors-origin",
@@ -618,7 +625,14 @@ def serve(
     else:
         arbiter = shapes[arbiter_kind]()
     deps = engine_deps(store, engine, tokens, admin_tokens, router=router)
-    fastapi_app = create_app(deps, arbiter=arbiter, cors_origins=cors_origin or None)
+    commit_feed = None
+    if nats_url:
+        from uro_core.adapters.nats import NatsCommitFeed
+
+        commit_feed = NatsCommitFeed(nats_url, subject_prefix=subject_prefix)
+    fastapi_app = create_app(
+        deps, arbiter=arbiter, cors_origins=cors_origin or None, commit_feed=commit_feed
+    )
 
     @fastapi_app.on_event("startup")
     async def _startup() -> None:
@@ -643,6 +657,8 @@ def serve(
         typer.echo(f"  token {t!r} → {p}")
     if cors_origin:
         typer.echo(f"  CORS: allowing {', '.join(cors_origin)}")
+    if nats_url:
+        typer.echo(f"  live commits: {nats_url} ({subject_prefix}.>) — run `uro outbox relay` too")
     uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
 
 
@@ -701,6 +717,11 @@ def connect(
                             )
                         elif kind == "beat_failed":
                             typer.echo(f"\n  ✗ beat failed: {msg['error']}")
+                        elif kind == "commit":  # made elsewhere: another server, the CLI (D-67)
+                            for beat in msg.get("beats") or []:
+                                typer.echo(f"\n[{beat['participant_id']}] {beat['narration']}")
+                            if not msg.get("beats"):
+                                typer.echo("\n  · the world moved on (time passed off-screen)")
                         elif kind in ("participant_joined", "participant_left"):
                             typer.echo(f"  · {msg['participant_id']} {kind.split('_')[1]}")
 

@@ -9,7 +9,7 @@ ring never imports a concrete publisher.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol
 
 from pydantic import BaseModel
@@ -47,3 +47,15 @@ class OutboxStore(Protocol):
         `deliver` each, then mark them published — all in one transaction, so a failure part-way
         leaves the whole batch pending. Returns how many were published."""
         ...
+
+
+class CommitFeed(Protocol):
+    """Live commits for a server to push to its clients (D-67) — e.g. what the outbox relay
+    publishes to NATS. LIVE, not durable: a consumer that's down misses what passed meanwhile (its
+    clients refetch state on reconnect); the outbox and the stream stay the durable record."""
+
+    async def connect(self) -> None: ...
+
+    def __aiter__(self) -> AsyncIterator[OutboxMessage]: ...
+
+    async def close(self) -> None: ...

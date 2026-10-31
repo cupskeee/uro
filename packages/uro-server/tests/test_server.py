@@ -248,7 +248,7 @@ async def test_engine_deps_plays_a_campaign_under_its_own_ruleset(
 
     played: list[tuple[str, int]] = []
 
-    async def fake_stream(self: Engine, campaign: Campaign, participant: str, text: str):  # type: ignore[no-untyped-def]
+    async def fake_stream(self: Engine, campaign: Campaign, participant: str, text: str, **kw: Any):  # type: ignore[no-untyped-def]
         played.append((self.ruleset_id, id(self)))
         yield "ok"
 
@@ -1716,7 +1716,7 @@ def test_ws_intent_beat_frame_shapes() -> None:
     committed = next(m for m in msgs if m["type"] == "beat_committed")
     assert set(started) == {"type", "participant_id", "intent"}
     assert set(chunk) == {"type", "participant_id", "text"}
-    assert set(committed) == {"type", "participant_id", "intent", "narration"}
+    assert set(committed) == {"type", "participant_id", "intent", "narration", "commit_id"}
     # No universal envelope: real frames carry NO campaign_id / beat_id (docs/08 BE-11 retraction).
     assert all("campaign_id" not in m and "beat_id" not in m for m in msgs)
 
@@ -2351,3 +2351,90 @@ def test_a_revoke_closes_the_revoked_players_idle_socket() -> None:
         # the handler then leaves the turn ring and tells the table, like any disconnect
         left = _recv_until(alice, "participant_left")[-1]
         assert left["participant_id"] == "player-2"
+
+
+class _QueueFeed:
+    """A CommitFeed the test pushes into from its own thread (the app runs on TestClient's loop)."""
+
+    def __init__(self) -> None:
+        import queue
+
+        self.q: Any = queue.Queue()
+
+    async def connect(self) -> None:
+        pass
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self._messages()
+
+    async def _messages(self) -> AsyncIterator[Any]:
+        import asyncio
+
+        while (message := await asyncio.to_thread(self.q.get)) is not None:
+            yield message
+
+    async def close(self) -> None:
+        self.q.put(None)
+
+
+def _commit(commit_id: str, branch: str, *events: dict[str, Any]) -> Any:
+    from uro_core.ports.outbox import OutboxMessage
+
+    return OutboxMessage(
+        seq=1,
+        world_id="w",
+        branch_id=branch,
+        commit_id=commit_id,
+        parent_id=None,
+        depth=3,
+        events=list(events),
+    )
+
+
+def test_live_commits_reach_the_campaign_s_clients_without_its_secrets() -> None:
+    # D-67: a commit made ANYWHERE (another server, the CLI) reaches the clients of every live
+    # campaign on its branch, as a player may see it: the beats' narration, never raw events.
+    class _Store:
+        async def get_campaign(self, campaign_id: str) -> Campaign:
+            return Campaign(campaign_id=campaign_id, world_id="w", branch_id="b1")
+
+        async def pc_seats(self, campaign_id: str) -> list[str]:
+            return []
+
+    deps = _fake_deps()
+    deps.store = _Store()  # type: ignore[assignment]
+    deps.last_commit = lambda campaign_id: "c-own"  # what this server's own beat committed
+    feed = _QueueFeed()
+    beat = {
+        "event_type": "BeatResolved",
+        "payload": {"participant_id": "p9", "intent_text": "I pray", "narration": "Bells ring."},
+    }
+    secret = {
+        "event_type": "ClaimRecorded",
+        "payload": {"statement": "the abbot lies", "truth": True},
+    }
+    with (
+        TestClient(create_app(deps, commit_feed=feed)) as client,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws,
+    ):
+        _recv_until(ws, "participant_joined")
+        ws.send_json({"type": "intent", "text": "I look around"})
+        own = next(m for m in _recv_until(ws, "beat_committed") if m["type"] == "beat_committed")
+        assert own["commit_id"] == "c-own"
+        feed.q.put(_commit("c-other-branch", "b2", beat))  # not this campaign's branch
+        feed.q.put(_commit("c-own", "b1", beat))  # this server's own beat: already shown
+        feed.q.put(_commit("c-elsewhere", "b1", beat, secret))
+        feed.q.put(_commit("c-skip", "b1"))  # a time-skip: no beat
+        first = _recv_until(ws, "commit")[-1]
+        assert first["commit_id"] == "c-elsewhere"  # the other branch and the echo never came
+        assert first["beats"] == [
+            {"participant_id": "p9", "intent": "I pray", "narration": "Bells ring."}
+        ]
+        assert "events" not in first and "abbot" not in str(first)  # no truth values reach a player
+        assert _recv_until(ws, "commit")[-1] == {
+            "type": "commit",
+            "commit_id": "c-skip",
+            "branch_id": "b1",
+            "depth": 3,
+            "beats": [],
+        }

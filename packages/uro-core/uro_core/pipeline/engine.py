@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -302,6 +302,7 @@ class Engine:
         intent_text: str,
         *,
         plan: BeatPlan | None = None,
+        on_commit: Callable[[BeatResult], None] | None = None,
     ) -> AsyncIterator[str]:
         """Stream narration to the caller, then extract + commit once the stream ends.
 
@@ -318,9 +319,11 @@ class Engine:
         async for chunk in self._router.stream(role, messages, branch_id=campaign.branch_id):
             collected.append(chunk)
             yield chunk
-        await self._finish(
+        result = await self._finish(
             campaign, participant_id, intent_text, "".join(collected).strip(), ctx, encounter_events
         )
+        if on_commit is not None:  # a streaming caller learns what it committed (D-67)
+            on_commit(result)
 
     def _narration_role(self, ctx: _Context, encounter_events: list[DomainEvent] | None) -> str:
         """Which model voices this beat. Conversational beats route through the `dialogue` model
