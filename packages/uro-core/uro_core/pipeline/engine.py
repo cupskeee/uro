@@ -23,6 +23,7 @@ from uro_core.domain.events import (
     CausedBy,
     DomainEvent,
     beat_resolved,
+    check_resolved,
     claim_recorded,
     item_transferred,
     mode_changed,
@@ -44,7 +45,12 @@ from uro_core.pipeline.extraction import (
     parse_extraction,
     run_gauntlet,
 )
-from uro_core.pipeline.mechanics import MechanicsResult, encounter_trigger, resolve_mechanics
+from uro_core.pipeline.mechanics import (
+    MechanicsResult,
+    ResolvedCheck,
+    encounter_trigger,
+    resolve_mechanics,
+)
 from uro_core.pipeline.plan import (
     BeatPlan,
     PlanMechanic,
@@ -105,6 +111,8 @@ class _Context(BaseModel):
     # actor_id → sheet after this beat's free-roam checks, for each actor a check changed (D-61):
     # committed with the beat, and the starting sheet of any encounter in the same beat
     check_sheets: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # this beat's resolved checks, committed as CheckResolved so reaction rules can answer (D-64)
+    checks: list[ResolvedCheck] = Field(default_factory=list)
     directives: str = ""
     suggestions: list[str] = Field(default_factory=list)
     # The PC the ACTING participant drives this beat (OQ-7) — resolved once from participant_id and
@@ -413,6 +421,7 @@ class Engine:
             plan=plan,
             mechanics_traces=[c.trace for c in gate.checks],
             check_sheets=gate.sheets,
+            checks=gate.resolved,
             directives=plan.narration_directives,
             suggestions=plan.suggestions,
             pc_actor_id=pc_actor_id,
@@ -726,12 +735,22 @@ class Engine:
         beat_id = new_id()
         # What this beat's free-roam checks did to sheets (a push's strain, XP on a miss) — the
         # ruleset's own result, committed like an encounter's final sheets (D-61)
+        ruleset_cause = CausedBy(kind="ruleset", beat_id=beat_id)
         check_events = [
+            check_resolved(
+                actor_id=c.actor_id,
+                affordance=c.affordance,
+                outcome=c.result.outcome,
+                trace=c.result.trace,
+                caused_by=ruleset_cause,
+            )
+            for c in ctx.checks
+        ] + [
             sheet_updated(
                 actor_id=actor_id,
                 sheet=sheet,
                 ruleset_id=self.ruleset_id,
-                caused_by=CausedBy(kind="ruleset", beat_id=beat_id),
+                caused_by=ruleset_cause,
             )
             for actor_id, sheet in sorted(ctx.check_sheets.items())
         ]

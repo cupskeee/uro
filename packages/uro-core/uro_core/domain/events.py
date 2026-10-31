@@ -583,6 +583,36 @@ class SheetUpdatedPayload(BaseModel):
     sheet: dict[str, Any] = Field(default_factory=dict)
 
 
+class CheckResolvedPayload(BaseModel):
+    """A free-roam check's outcome (D-64), in the RULESET's own band (`success`/`failure`,
+    `miss`/`partial`/`full`, `fail`/`success`/`triumph`). Committed so a world's reaction rules
+    can answer a check (a heat meter that rises on every failure) and the log shows the roll."""
+
+    v: int = 1
+    actor_id: str
+    affordance: str
+    outcome: str
+    trace: str = ""
+
+
+def check_resolved(
+    *,
+    actor_id: str,
+    affordance: str,
+    outcome: str,
+    trace: str = "",
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="CheckResolved",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=CheckResolvedPayload(
+            actor_id=actor_id, affordance=affordance, outcome=outcome, trace=trace
+        ).model_dump(),
+    )
+
+
 def sheet_updated(
     *,
     actor_id: str,

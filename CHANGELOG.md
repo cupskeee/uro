@@ -10,6 +10,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **Check outcomes are events, so world rules can react to them (D-64).** Every free-roam check now
+  commits `CheckResolved` (the actor, the affordance, the outcome in the ruleset's own words, the
+  roll's trace). A pack's `rules.yaml` can trigger on it: "every failed check raises the heat" is
+  `trigger: {event: CheckResolved, where: {outcome: failure}}` plus `adjust_counter`. This was the
+  missing half of Seventh Vault's heist alarm.
 - **Characters advance from fights and rest in downtime (D-63).** The ruleset gains two hooks: a
   fight's end and a stretch of downtime. Each built-in applies its own rules, sized by the world's
   settings:

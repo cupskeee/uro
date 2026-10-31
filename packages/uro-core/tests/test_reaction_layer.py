@@ -598,7 +598,7 @@ def test_trigger_on_unknown_event_type_is_rejected() -> None:
             rules=[
                 {
                     "id": "inert",
-                    "trigger": {"event": "CheckResolved"},  # no such event → would never fire
+                    "trigger": {"event": "DiceRolled"},  # no such event → would never fire
                     "then": [{"do": "set_thread_state", "thread": "t:x", "to": "active"}],
                     "scope": {"thread": "t:x"},
                 }
