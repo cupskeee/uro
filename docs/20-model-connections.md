@@ -241,8 +241,12 @@ instead of static (read file), but the seam the core sees is identical.
   per campaign — the one-provider-per-process work, out of scope here); **per-end-user** credentials
   and org isolation (multi-tenant — rides the BFF/platform layer, Loom `docs/05`); OAuth runtime
   resolvers (`auth_mode` reserves the schema; `oauth_pkce`/`oauth_device` wire in when a provider
-  needs them); new provider *kinds* beyond `openai`/`anthropic`/`openai_compat`/`stub` (each is one
-  adapter — `google-genai` is the obvious first).
+  needs them); further provider *kinds* (each is one adapter — a native `google-genai` is the
+  obvious next).
+- **Untested:** OpenRouter (`https://openrouter.ai/api/v1`) and Google Gemini
+  (`https://generativelanguage.googleapis.com/v1beta/openai`) both offer an OpenAI-compatible
+  endpoint, so an `openai_compat` connection with that `--base-url` and the service's key should
+  reach them, but neither has been run against Uro.
 
 ## Build plan (slices, each `just test`-green + committed)
 

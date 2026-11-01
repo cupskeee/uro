@@ -121,8 +121,8 @@ D-45 — omniscient truth, never a player read), **dry-run** (intent-only, D-37)
 **export/import** (a hash-chained bundle out / verify-chain-then-instantiate in; both operator-only —
 export D-45 disclosure, import D-44 structural write; a tampered bundle → 400 before any write),
 **usage telemetry** (`/usage[?stage=]` — llm_calls aggregated by stage, operator-only D-44; the
-engine exposes metering, never bills; `?world=`/`?campaign=` honestly 400 — the rows aren't keyed by
-world/campaign yet), the **ruleset registry** (`/rulesets` — id@version + sheet shape, any-authed)
+engine exposes metering, never bills; `?world=`/`?campaign=` filter to the calls that served them
+since D-66 — calls metered before 0.7 carry no world and count only in the unfiltered total), the **ruleset registry** (`/rulesets` — id@version + sheet shape, any-authed)
 the **world-scoped chronicle** (`/worlds/{w}/chronicle` — any named branch's recent beats,
 operator-only) and the **AI world-authoring stages** (`POST /worlds/backfill` — thin-pack AI
 gap-fill PREVIEW, `ai_backfill`-tagged seeds; `POST /worlds/probe[?tries=]` — judge-scored
