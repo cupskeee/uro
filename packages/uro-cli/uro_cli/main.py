@@ -1798,7 +1798,10 @@ def codex_list(
 def provider_add(
     name: str = typer.Argument(..., help="a display label for this connection"),
     provider: str = typer.Option(
-        ..., "--provider", help="provider kind: openai | anthropic | openai_compat | local | stub"
+        ...,
+        "--provider",
+        help="provider kind: openai | anthropic | openai_compat | local | stub | claude_cli | "
+        "codex_cli (the last two run the installed, logged-in CLI; --base-url = its path)",
     ),
     base_url: str = typer.Option(None, "--base-url", help="per-connection endpoint override"),
     api_key: str = typer.Option(

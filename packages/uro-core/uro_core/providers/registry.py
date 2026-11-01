@@ -21,6 +21,7 @@ from uro_core.errors import ProviderError
 from uro_core.ports.model_registry import ROLES, ModelConnection, ModelRegistry
 from uro_core.providers import codex_auth
 from uro_core.providers.adapters.anthropic import AnthropicProvider
+from uro_core.providers.adapters.cli import ClaudeCliProvider, CodexCliProvider
 from uro_core.providers.adapters.codex import CodexResponsesProvider
 from uro_core.providers.adapters.openai_compat import OpenAICompatProvider
 from uro_core.providers.adapters.stub import StubProvider
@@ -112,6 +113,11 @@ def provider_from_connection(
             api_key=access_token or "",
             base_url=conn.base_url or "https://api.anthropic.com",
         )
+    if kind in ("claude_cli", "codex_cli"):
+        # A locally installed, logged-in CLI run headlessly (D-72): the CLI's own login is the
+        # credential, and `base_url` (if set) names its executable instead of an endpoint.
+        cli = ClaudeCliProvider if kind == "claude_cli" else CodexCliProvider
+        return cli(model=model, command=conn.base_url, reasoning_effort=reasoning_effort)
     if kind == "codex":
         # The PURE path (one-shot probe): a static token, NO auto-refresh. The router path uses
         # `build_codex_provider` (a refresh-capable CodexTokenSource) instead. An expired token here
@@ -266,8 +272,8 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
 # "unknown" (the binding is allowed with a warning; a live `test` is the definitive check).
 def classify_modality(provider: str, model_id: str) -> str:
     m = model_id.lower()
-    if provider in ("anthropic", "codex"):
-        return "chat"  # Anthropic ships no embedding models; the codex backend serves only chat
+    if provider in ("anthropic", "codex", "claude_cli", "codex_cli"):
+        return "chat"  # no embedding models: Anthropic, the codex backend, the CLIs (D-72)
     if provider in ("openai", "openai_compat", "local", "stub"):
         return "embedding" if "embed" in m else "chat"
     return "unknown"
@@ -288,6 +294,10 @@ async def discover_models(
             {"id": "stub-chat", "modality": "chat"},
             {"id": "stub-embed", "modality": "embedding"},
         ]
+    if conn.provider == "claude_cli":  # Claude Code's model aliases (any full model id works too)
+        return [{"id": m, "modality": "chat"} for m in ("haiku", "opus", "sonnet")]
+    if conn.provider == "codex_cli":  # `default` = the model the CLI is configured to use
+        return [{"id": "default", "modality": "chat"}]
     if conn.provider == "codex":
         return await codex_auth.discover_codex_models(
             access_token or "",
@@ -329,6 +339,8 @@ _DEFAULT_PROBE_MODEL = {
     "local": "llama3.1",
     "stub": "stub-chat",
     "codex": "gpt-5",  # fallback if a codex connection's models weren't discovered (review)
+    "claude_cli": "haiku",
+    "codex_cli": "default",
 }
 
 

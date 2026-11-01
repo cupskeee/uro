@@ -47,8 +47,8 @@ world, campaign, or branch. Consequences, all deliberate:
 | --------------- | ------------- | ------------------------------------- | ----- |
 | `id`            | `TEXT`        | PK                                    | ULID (matches world/campaign id convention) |
 | `name`          | `TEXT`        | NOT NULL                              | display label |
-| `provider`      | `TEXT`        | NOT NULL                              | discriminator: `anthropic` \| `openai` \| `openai_compat` \| `local` \| `google-genai` \| `stub` → an adapter |
-| `base_url`      | `TEXT`        | NULL                                  | per-connection endpoint override (an OpenAI-compatible or self-hosted URL) |
+| `provider`      | `TEXT`        | NOT NULL                              | discriminator: `anthropic` \| `openai` \| `openai_compat` \| `local` \| `codex` \| `claude_cli` \| `codex_cli` \| `stub` → an adapter (the two `_cli` kinds run a local CLI, see *Headless CLI kinds*) |
+| `base_url`      | `TEXT`        | NULL                                  | per-connection endpoint override (an OpenAI-compatible or self-hosted URL); for `claude_cli`/`codex_cli`, the CLI's executable path |
 | `auth_id`       | `TEXT`        | NULL, FK → `provider_credentials(id)` **ON DELETE SET NULL** | soft-linked credential |
 | `is_enabled`    | `BOOLEAN`     | NOT NULL DEFAULT true                 | |
 | `cached_models` | `JSONB`       | NULL                                  | `[{"id":"gpt-4o","modality":"chat"}, {"id":"text-embedding-3-small","modality":"embedding"}]` — discovered by `refresh` |
@@ -165,6 +165,46 @@ up (on stub) with no config. Adding the first connection via CLI/API takes over.
 - **`uro-loom`:** the same API — a non-technical operator connects a provider, pastes a key (stored
   encrypted), picks models, and binds roles, all in the browser. (This is the instance operator's
   key; *per-end-user* keys in a multi-tenant deploy remain a platform/BFF concern, `docs/05` of Loom.)
+
+## Headless CLI kinds (D-72)
+
+Two kinds run a locally installed, logged-in CLI once per call instead of calling an HTTP API:
+`claude_cli` runs `claude -p` (Claude Code) and `codex_cli` runs `codex exec` (Codex). The
+**credential is the CLI's own login** on the machine running Uro (a Claude or ChatGPT subscription,
+or whatever the CLI holds), so the connection links no credential; `base_url`, if set, names the
+executable (default: found on `PATH`). The model is any id the CLI accepts (`claude_cli` lists the
+`haiku`/`sonnet`/`opus` aliases; `codex_cli` lists `default`, the model the CLI is configured to use),
+a role may carry a reasoning effort (`--effort` / `model_reasoning_effort`), and neither embeds.
+
+```
+uro provider add claude --provider claude_cli
+uro provider bind narrator <connection> sonnet
+uro provider add codex-cli --provider codex_cli
+uro provider bind extractor <connection> gpt-5.6-luna --reasoning-effort low
+```
+
+**Locked down.** Both CLIs are coding agents with tools, and player text reaches their prompts.
+Every call runs in an empty private directory with the prompt on stdin (never in `argv`, where `ps`
+shows it) and Uro's system prompt from a temporary file in place of the agent's own:
+
+- `claude -p` with `--tools ""` (no tools at all), `--strict-mcp-config` (no MCP servers),
+  `--setting-sources ""` (no user or project settings, so no hooks), `--no-session-persistence`,
+  `--disable-slash-commands`. (`--bare` is not used: it reads only an API key, never a login.)
+- `codex exec` with `--sandbox read-only`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`,
+  `-c web_search="disabled"` and `--disable` for `shell_tool`, `browser_use`, `browser_use_external`,
+  `computer_use`, `in_app_browser`, `image_generation`, `apps` and `plugins`. Measured live
+  (2026-11-01): with only the read-only sandbox, `codex exec` ran `sed` on a planted file outside its
+  directory and quoted it back; with the shell tool off it could not. A feature name the installed
+  Codex doesn't know makes it exit with an error, so a renamed shell tool fails closed. A tool event
+  in its output is refused anyway.
+
+**Costs.** Measured live on a three-beat Ashfall session (narrator and planner on `claude_cli`,
+extractor on `codex_cli` at `low`): each call pays ~1.5–3 s of CLI start-up, so the player could type
+again after 10–13.5 s and a beat was saved after 17–26 s, about twice the HTTP providers' times
+(`docs/21`). `codex exec` sends whole messages, so narration through it doesn't stream, and each call
+carries ~7,000 tokens of Codex's own harness (mostly cached). For a ChatGPT subscription, the `codex`
+kind (direct HTTP with its own login) is faster and streams; `claude_cli` is the way to play on a
+Claude subscription without an API key.
 
 ## Hexagonal fit
 
