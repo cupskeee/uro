@@ -53,8 +53,28 @@ def _warn_if_embedder_cannot_embed(role_kind: dict[str, str]) -> None:
         )
 
 
+def check_reasoning_effort(conn: ModelConnection, effort: str | None) -> str | None:
+    """Validate a binding's reasoning effort (D-71): a known level, on a connection kind whose
+    adapter sends one. Returns the cleaned value (None/"" → None). Which levels a given MODEL
+    accepts is the provider's call; `uro provider test` surfaces a rejection."""
+    from uro_core.ports.model_registry import EFFORT_KINDS, REASONING_EFFORTS
+
+    effort = (effort or "").strip().lower() or None
+    if effort is None:
+        return None
+    if effort not in REASONING_EFFORTS:
+        raise ValueError(f"reasoning effort must be one of {', '.join(REASONING_EFFORTS)}")
+    if conn.provider not in EFFORT_KINDS:
+        raise ValueError(f"a {conn.provider!r} connection takes no reasoning effort")
+    return effort
+
+
 def provider_from_connection(
-    conn: ModelConnection, model: str, access_token: str | None
+    conn: ModelConnection,
+    model: str,
+    access_token: str | None,
+    *,
+    reasoning_effort: str | None = None,
 ) -> LLMProvider:
     """Construct a provider from a registry connection row + its DECRYPTED credential (D-47). Pure
     — the caller resolves the secret (via the store's `get_secret`), so this is reusable for the
@@ -64,10 +84,14 @@ def provider_from_connection(
         return StubProvider()
     if kind == "openai":
         return OpenAICompatProvider(
-            model=model, api_key=access_token, base_url=conn.base_url or "https://api.openai.com/v1"
+            reasoning_effort=reasoning_effort,
+            model=model,
+            api_key=access_token,
+            base_url=conn.base_url or "https://api.openai.com/v1",
         )
     if kind == "local":
         return OpenAICompatProvider(
+            reasoning_effort=reasoning_effort,
             model=model,
             api_key=access_token,
             base_url=conn.base_url
@@ -76,7 +100,12 @@ def provider_from_connection(
     if kind == "openai_compat":
         if not conn.base_url:
             raise ValueError(f"connection {conn.name!r} (openai_compat) requires a base_url")
-        return OpenAICompatProvider(model=model, api_key=access_token, base_url=conn.base_url)
+        return OpenAICompatProvider(
+            model=model,
+            api_key=access_token,
+            base_url=conn.base_url,
+            reasoning_effort=reasoning_effort,
+        )
     if kind == "anthropic":
         return AnthropicProvider(
             model=model,
@@ -95,6 +124,7 @@ def provider_from_connection(
         return CodexResponsesProvider(
             model=model,
             token_provider=_static_token,
+            reasoning_effort=reasoning_effort,
             base_url=conn.base_url or codex_auth.CODEX_BASE_URL,
         )
     raise ValueError(f"connection {conn.name!r} has unknown provider kind {kind!r}")
@@ -140,6 +170,7 @@ def build_codex_provider(
     model: str,
     *,
     source: CodexTokenSource | None = None,
+    reasoning_effort: str | None = None,
 ) -> CodexResponsesProvider:
     """Router-path codex provider. Pass a SHARED `source` so all roles on one credential reuse a
     single token source + lock (review); omitted → a fresh (unshared) one for a lone binding."""
@@ -147,6 +178,7 @@ def build_codex_provider(
         model=model,
         token_provider=source or CodexTokenSource(store, conn.auth_id),
         base_url=conn.base_url or codex_auth.CODEX_BASE_URL,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -193,9 +225,16 @@ async def build_router_from_registry(store: ModelRegistry) -> ProviderRouter | N
         if conn.provider == "codex":
             key = conn.auth_id or conn.id
             source = codex_sources.setdefault(key, CodexTokenSource(store, conn.auth_id))
-            provider = build_codex_provider(store, conn, rb.model, source=source)
+            provider = build_codex_provider(
+                store, conn, rb.model, source=source, reasoning_effort=rb.reasoning_effort
+            )
         else:
-            provider = provider_from_connection(conn, rb.model, await _access_token(store, conn))
+            provider = provider_from_connection(
+                conn,
+                rb.model,
+                await _access_token(store, conn),
+                reasoning_effort=rb.reasoning_effort,
+            )
         role_kind[rb.role] = conn.provider
         if rb.role == "default":
             default = provider

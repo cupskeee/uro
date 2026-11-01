@@ -1859,7 +1859,8 @@ def provider_list() -> None:
         if not bindings:
             typer.echo("  (none — the server falls back to the --provider/uro.toml seed)")
         for b in bindings:
-            typer.echo(f"  {b.role:<9} → {b.connection_id} : {b.model}")
+            effort = f" (effort {b.reasoning_effort})" if b.reasoning_effort else ""
+            typer.echo(f"  {b.role:<9} → {b.connection_id} : {b.model}{effort}")
         if credentials:
             typer.echo("credentials:")
             for cr in credentials:
@@ -2146,11 +2147,17 @@ def provider_bind(
     role: str = typer.Argument(..., help=f"one of: {', '.join(_ROLES)}"),
     connection_id: str = typer.Argument(...),
     model: str = typer.Argument(..., help="a model id offered by the connection's provider"),
+    reasoning_effort: str = typer.Option(
+        "",
+        "--reasoning-effort",
+        help="how hard a reasoning model thinks: none|minimal|low|medium|high|xhigh (D-71; "
+        "omit for the provider's default). `low` on the extractor cut its latency ~40%, live.",
+    ),
 ) -> None:
     """Bind an engine role to a connection + model. `default` backs any unbound role."""
 
     async def _run() -> None:
-        from uro_core.providers.registry import classify_modality
+        from uro_core.providers.registry import check_reasoning_effort, classify_modality
 
         if role not in _ROLES:
             raise ValueError(f"unknown role {role!r}; one of: {', '.join(_ROLES)}")
@@ -2168,10 +2175,13 @@ def provider_bind(
                     f"the embedder role needs an embedding model, not {model!r} "
                     f"(a chat model on provider {conn.provider!r})"
                 )
-            await store.set_role_binding(role, connection_id, model)
+            effort = check_reasoning_effort(conn, reasoning_effort)
+            await store.set_role_binding(role, connection_id, model, reasoning_effort=effort)
         finally:
             await store.close()
-        typer.echo(f"bound {role} → {connection_id} : {model}")
+        typer.echo(
+            f"bound {role} → {connection_id} : {model}" + (f" (effort {effort})" if effort else "")
+        )
 
     _run_async(_run)
 

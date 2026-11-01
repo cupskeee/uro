@@ -46,10 +46,18 @@ class ModelConnection(BaseModel):
     )
 
 
+# How hard a reasoning model thinks (D-71). Which values a model accepts is the provider's call; an
+# unsupported one fails the call, which `uro provider test` surfaces.
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+# Connection kinds whose adapter sends an effort (Codex Responses, OpenAI-style chat completions).
+EFFORT_KINDS = frozenset({"codex", "openai", "openai_compat", "local"})
+
+
 class RoleBinding(BaseModel):
     role: str  # default | narrator | extractor | planner | embedder | dialogue | judge
     connection_id: str
     model: str
+    reasoning_effort: str | None = None  # None = the provider's default (D-71)
 
 
 class ModelRegistry(Protocol):
@@ -118,8 +126,11 @@ class ModelRegistry(Protocol):
         ...
 
     # --- role bindings ---
-    async def set_role_binding(self, role: str, connection_id: str, model: str) -> None:
-        """Bind an engine role to a connection+model (upsert). `default` is the router fallback."""
+    async def set_role_binding(
+        self, role: str, connection_id: str, model: str, *, reasoning_effort: str | None = None
+    ) -> None:
+        """Bind an engine role to a connection+model (upsert). `default` is the router fallback.
+        Rebinding replaces the effort too: an omitted one goes back to the provider's default."""
         ...
 
     async def list_role_bindings(self) -> list[RoleBinding]: ...

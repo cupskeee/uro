@@ -1004,8 +1004,14 @@ def create_app(
                     detail=f"the embedder role needs an embedding model, not {model!r} "
                     f"(a chat model on provider {conn.provider!r})",
                 )
-        await store.set_role_binding(role, connection_id, model)
-        return {"role": role, "connection_id": connection_id}
+        from uro_core.providers.registry import check_reasoning_effort
+
+        try:  # D-71: optional; rebinding without it goes back to the provider's default
+            effort = check_reasoning_effort(conn, body.get("reasoning_effort"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await store.set_role_binding(role, connection_id, model, reasoning_effort=effort)
+        return {"role": role, "connection_id": connection_id, "reasoning_effort": effort}
 
     @app.delete("/providers/roles/{role}")
     async def delete_role(request: Request, role: str) -> dict[str, Any]:

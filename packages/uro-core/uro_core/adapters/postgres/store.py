@@ -1778,26 +1778,29 @@ class PostgresEventStore:
             )
         return row is not None
 
-    async def set_role_binding(self, role: str, connection_id: str, model: str) -> None:
+    async def set_role_binding(
+        self, role: str, connection_id: str, model: str, *, reasoning_effort: str | None = None
+    ) -> None:
         async with self.pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO role_bindings (role, connection_id, model) VALUES ($1, $2, $3) "
+                "INSERT INTO role_bindings (role, connection_id, model, reasoning_effort) "
+                "VALUES ($1, $2, $3, $4) "
                 "ON CONFLICT (role) DO UPDATE SET connection_id = EXCLUDED.connection_id, "
-                "model = EXCLUDED.model, updated_at = now()",
+                "model = EXCLUDED.model, reasoning_effort = EXCLUDED.reasoning_effort, "
+                "updated_at = now()",
                 role,
                 connection_id,
                 model,
+                reasoning_effort,
             )
 
     async def list_role_bindings(self) -> list[RoleBinding]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT role, connection_id, model FROM role_bindings ORDER BY role"
+                "SELECT role, connection_id, model, reasoning_effort FROM role_bindings "
+                "ORDER BY role"
             )
-        return [
-            RoleBinding(role=r["role"], connection_id=r["connection_id"], model=r["model"])
-            for r in rows
-        ]
+        return [RoleBinding(**dict(r)) for r in rows]
 
     async def delete_role_binding(self, role: str) -> bool:
         async with self.pool.acquire() as conn:

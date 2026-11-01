@@ -201,3 +201,70 @@ async def test_add_credential_rejects_an_embedded_newline_key(
     monkeypatch.setenv("URO_SECRET_KEY", Fernet.generate_key().decode())
     with pytest.raises(ValueError):
         await store.add_credential(provider="openai", access_token="sk-leak\nmore")
+
+
+# --- per-role reasoning effort (D-71) ---------------------------------------------
+
+
+async def test_a_binding_carries_its_reasoning_effort(store: PostgresEventStore) -> None:
+    from uro_core.domain.ids import new_id
+
+    cid = await store.add_connection(name=f"o-{new_id()}", provider="openai")
+    try:
+        await store.set_role_binding("extractor", cid, "gpt-5.6-luna", reasoning_effort="low")
+        (bound,) = [b for b in await store.list_role_bindings() if b.role == "extractor"]
+        assert bound.reasoning_effort == "low"
+        await store.set_role_binding("extractor", cid, "gpt-5.6-luna")  # rebinding resets it
+        (bound,) = [b for b in await store.list_role_bindings() if b.role == "extractor"]
+        assert bound.reasoning_effort is None
+    finally:
+        await store.delete_role_binding("extractor")
+        await store.delete_connection(cid)
+
+
+def test_reasoning_effort_is_checked_and_sent() -> None:
+    # D-71: measured on the replayed Ashfall session, the extractor at `low` ran ~40% faster with
+    # the same claims. Only adapters that send an effort accept one, and only a known level.
+    import json
+
+    import httpx
+    from uro_core.providers.adapters.codex import CodexResponsesProvider
+    from uro_core.providers.base import CompletionRequest, Message
+    from uro_core.providers.registry import check_reasoning_effort
+
+    codex = ModelConnection(id="c", name="c", provider="codex")
+    assert check_reasoning_effort(codex, " LOW ") == "low"
+    assert check_reasoning_effort(codex, "") is None
+    with pytest.raises(ValueError, match="one of"):
+        check_reasoning_effort(codex, "turbo")
+    with pytest.raises(ValueError, match="anthropic"):
+        check_reasoning_effort(ModelConnection(id="a", name="a", provider="anthropic"), "low")
+
+    async def token(force: bool) -> str:
+        return "t"
+
+    req = CompletionRequest(messages=[Message(role="user", content="hi")], stage_tag="extractor")
+    body = CodexResponsesProvider(model="m", token_provider=token, reasoning_effort="low")._body(
+        req
+    )
+    assert body["reasoning"] == {"effort": "low"}
+    assert "reasoning" not in CodexResponsesProvider(model="m", token_provider=token)._body(req)
+
+    seen: list[dict] = []  # type: ignore[type-arg]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    oai = provider_from_connection(
+        ModelConnection(id="o", name="o", provider="openai"),
+        "o4-mini",
+        "sk",
+        reasoning_effort="low",
+    )
+    assert isinstance(oai, OpenAICompatProvider)
+    oai._transport = httpx.MockTransport(handler)
+    import asyncio
+
+    asyncio.run(oai.complete(req))
+    assert seen[0]["reasoning_effort"] == "low"
