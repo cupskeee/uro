@@ -9,10 +9,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
-Upgrading: run `uro memory reembed` once (cents of embeddings), on the worlds you play with the
-registry's embedder (`--world` to pick them): beat memories are now embedded with the player's
-intent, and memories from earlier versions are recalled worse until re-embedded. A world whose
-memories have another dimension is skipped and reported.
+## [0.13.0] - 2026-11-01
+
+Upgrading: no database migration. Run `uro memory reembed` once (cents of embeddings), on the
+worlds you play with the registry's embedder (`--world` to pick them): beat memories are now
+embedded with the player's intent, and memories from earlier versions are recalled worse until
+re-embedded. A world whose memories have another dimension is skipped and reported.
 
 ### Fixed
 - **A rule file's misplaced section is refused instead of ignored** (D-76). `rules.yaml` reads only
@@ -995,7 +997,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/cupskeee/uro/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/cupskeee/uro/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cupskeee/uro/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cupskeee/uro/compare/v0.9.0...v0.10.0
