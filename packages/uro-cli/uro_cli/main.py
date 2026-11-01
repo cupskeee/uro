@@ -865,8 +865,10 @@ def memory_reembed(
 ) -> None:
     """Re-embed beat memories as the player's intent with the narration (D-75). Run it once after
     upgrading past 0.12, and after importing an older bundle: memories embedded the old way are
-    recalled worse in an index that mixes both. Idempotent; costs one embedding per memory, on the
-    registry's `embedder` role."""
+    recalled worse in an index that mixes both. It embeds with the registry's `embedder` role, so
+    run it on the worlds played with that embedder (`--world` to pick them); a memory whose stored
+    vector has another dimension is skipped, never mixed in. Idempotent; one embedding per memory,
+    metered like any other call."""
 
     async def _run() -> None:
         store = build_store()
@@ -876,14 +878,21 @@ def memory_reembed(
             router = await build_router_from_registry(store)
             if router is None:
                 raise ValueError("no model registry: bind an embedder first (`uro provider bind`)")
+            router.recorder = store.record_llm_call  # metered like any other call (D-66)
 
             async def embed(texts: list[str]) -> list[list[float]]:
                 return await router.embed("embedder", texts)
 
-            n = await store.reembed_memories(embed, world_id=world_id)
+            n, skipped = await store.reembed_memories(embed, world_id=world_id)
         finally:
             await store.close()
         typer.echo(f"re-embedded {n} memor{'y' if n == 1 else 'ies'}")
+        if skipped:
+            typer.echo(
+                f"skipped {skipped}: their vectors have another dimension than the registry's "
+                "embedder (a world played with a different embedder; leave it, or use --world)",
+                err=True,
+            )
 
     _run_async(_run)
 

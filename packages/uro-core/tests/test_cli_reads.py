@@ -327,3 +327,45 @@ async def test_uro_calls_marks_a_failed_call(
     )
     assert result.exit_code == 0, result.output
     assert "FAILED: ProviderError ← ConnectError" in result.output
+
+
+async def test_uro_memory_reembed_is_metered(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Review: the re-embed is the instance's biggest batch of embedding calls, and it bypassed
+    # metering (D-66).
+    from uro_cli import main as cli
+    from uro_core.providers.adapters.stub import StubProvider
+    from uro_core.providers.router import ProviderRouter
+
+    monkeypatch.setenv("URO_DATABASE_URL", store.dsn)
+
+    async def stub_registry(_store: object) -> ProviderRouter:
+        return ProviderRouter(bindings={}, default=StubProvider())
+
+    monkeypatch.setattr(cli, "build_router_from_registry", stub_registry)
+    w = await store.create_world(f"reembed-{new_id()}")
+    narration = f"The tide comes in over the {new_id()} steps."  # vectors are shared by text
+    commit = await store.append_beat(
+        w.main_branch_id,
+        [beat_resolved(beat_id="b", participant_id="p", intent_text="I wait", narration=narration)],
+    )
+    await store.add_memory(
+        branch_id=w.main_branch_id,
+        commit_id=commit.commit_id,
+        kind="beat",
+        text=narration,
+        vector=(await StubProvider().embed([narration]))[0],  # the embedder it was played with
+        entity_refs=[],
+    )
+
+    async def embed_calls() -> int:
+        return len(await store.recent_llm_calls(stage="embedder", limit=100_000))
+
+    before = await embed_calls()
+    result = await asyncio.to_thread(
+        CliRunner().invoke, app, ["memory", "reembed", "--world", w.world_id]
+    )
+    assert result.exit_code == 0, result.output
+    assert "re-embedded 1 memory" in result.output
+    assert await embed_calls() > before

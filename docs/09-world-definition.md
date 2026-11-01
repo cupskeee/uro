@@ -77,13 +77,16 @@ commits a `knows` edge each way — and it is the only relation a rumor travels 
 that, and it stops below 0.2, so two hops out a rumor is "has heard a rumor"). A `knows` ref that
 names no actor in the pack, or the actor itself, is refused at parse. Rumors spread at the
 moments a world defines them (a world rule's or an agenda's `spread_belief`, a Chronicler
-outcome's witnesses); play never adds `knows` edges. `worlds/ashfall` carries a rumor from the
-docks two regions inland this way (its `agendas.yaml`).
+outcome's witnesses). The extractor never adds `knows` edges; only the pack does (its seeds, or a
+world rule's or agenda's `add_edge`). `worlds/ashfall` carries a rumor from the docks two hops
+inland, into the next region, this way (its `agendas.yaml`). A spread seeds its witnesses and
+re-tells the whole chain each time it runs, overwriting what those actors held, so make a one-off
+spread one-off (Ashfall gates its own on a counter).
 
 Rule files: `rules.yaml` holds `rules`, `agendas.yaml` holds `agendas`, each with
 `rules_api_version`. Any other top-level key is refused at parse (an `agendas:` list written
-into `rules.yaml` used to be accepted and never run), and the two files must declare the same
-version.
+into `rules.yaml` used to be accepted and never run). One file may leave the version to the other;
+two that both declare one must agree.
 
 ## Authoring entities — colloquial aliases (best practice)
 

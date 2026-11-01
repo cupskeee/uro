@@ -2367,38 +2367,50 @@ class PostgresEventStore:
         *,
         world_id: str | None = None,
         batch: int = 64,
-    ) -> int:
+    ) -> tuple[int, int]:
         """Re-embed every beat memory whose vector isn't of its current embed text (D-75: the
         beat's intent with its narration), on one world or all of them. Memories written before
         D-75, or imported from an older bundle, hold narration-only vectors; in an index that mixes
         both, recall of the old ones drops (measured: 16/21 against 18/21 narration-only and 20/21
         all re-embedded). Idempotent: a memory already embedded as its embed text is skipped, and
-        forks that share a memory are embedded once. Returns the number of memory rows updated."""
+        forks that share a memory are embedded once; a failed batch leaves the earlier batches
+        converted, and a rerun finishes the rest.
+
+        `embed` must be the embedder the world is played with. A memory whose new vector has a
+        different dimension from the one it has now is NOT rewritten — a branch with two dimensions
+        can't be searched at all (review: a stub-played world re-embedded by the registry's model).
+        Same dimension, different model can't be detected; that's the caller's to avoid. Returns
+        (memory rows updated, memory rows skipped for a dimension mismatch)."""
         from uro_core.pipeline.recall import memory_embed_text
 
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT m.memory_id, m.content_hash, m.text, "
+                "SELECT m.memory_id, m.content_hash, m.text, vector_dims(v.vector) AS dims, "
                 "  (SELECT e.payload->>'intent_text' FROM events e WHERE e.commit_id = m.commit_id "
                 "   AND e.event_type = 'BeatResolved' LIMIT 1) AS intent "
                 "FROM memory_index m JOIN branches b ON b.branch_id = m.branch_id "
+                "JOIN embeddings v ON v.content_hash = m.content_hash "
                 "WHERE m.kind = 'beat' AND ($1::text IS NULL OR b.world_id = $1)",
                 world_id,
             )
-        todo: dict[str, list[str]] = {}  # embed text → memory ids that need it
+        # (embed text, the dimension its memories have now) → memory ids that need it
+        todo: dict[tuple[str, int], list[str]] = {}
         for r in rows:
             text = memory_embed_text(r["intent"] or "", r["text"])
             if hashlib.sha256(text.encode("utf-8")).hexdigest() != r["content_hash"]:
-                todo.setdefault(text, []).append(r["memory_id"])
-        texts = list(todo)
-        updated = 0
-        for i in range(0, len(texts), batch):
-            chunk = texts[i : i + batch]
-            vectors = await embed(chunk)
+                todo.setdefault((text, r["dims"]), []).append(r["memory_id"])
+        keys = list(todo)
+        updated = skipped = 0
+        for i in range(0, len(keys), batch):
+            chunk = keys[i : i + batch]
+            vectors = await embed([text for text, _ in chunk])
             async with self.pool.acquire() as conn, conn.transaction():
-                for text, vector in zip(chunk, vectors, strict=True):
+                for (text, dims), vector in zip(chunk, vectors, strict=True):
                     if not vector or not any(vector):
                         continue  # nothing worth indexing; the old vector stays
+                    if len(vector) != dims:
+                        skipped += len(todo[(text, dims)])
+                        continue
                     content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
                     await conn.execute(
                         "INSERT INTO embeddings (content_hash, vector) VALUES ($1, $2::vector) "
@@ -2410,10 +2422,10 @@ class PostgresEventStore:
                         "UPDATE memory_index SET content_hash = $1 "
                         "WHERE memory_id = ANY($2::text[])",
                         content_hash,
-                        todo[text],
+                        todo[(text, dims)],
                     )
                     updated += int(status.split()[-1])
-        return updated
+        return updated, skipped
 
     async def search(self, branch_id: str, vector: list[float], k: int) -> list[MemoryHit]:
         async with self.pool.acquire() as conn:
