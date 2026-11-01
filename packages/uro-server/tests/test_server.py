@@ -1980,6 +1980,17 @@ def test_providers_crud_roundtrip_operator() -> None:
     assert client.delete(f"/providers/{conn_id}?token=tok-a").json()["deleted"]
 
 
+def test_a_cli_connection_must_name_its_cli() -> None:
+    # Review (D-72): a claude_cli/codex_cli base_url is an executable to run, so it may only name
+    # that CLI — not /bin/sh or any other program.
+    client = _reg_client()
+    bad = {"name": "c", "provider": "claude_cli", "base_url": "/bin/sh"}
+    resp = client.post("/providers?token=tok-a", json=bad)
+    assert resp.status_code == 400 and "claude" in resp.json()["detail"]
+    good = {"name": "c", "provider": "claude_cli", "base_url": "/opt/homebrew/bin/claude"}
+    assert client.post("/providers?token=tok-a", json=good).status_code == 200
+
+
 def test_providers_are_operator_only() -> None:
     client = _reg_client()
     cases = [

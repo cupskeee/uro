@@ -67,7 +67,29 @@ def check_reasoning_effort(conn: ModelConnection, effort: str | None) -> str | N
         raise ValueError(f"reasoning effort must be one of {', '.join(REASONING_EFFORTS)}")
     if conn.provider not in EFFORT_KINDS:
         raise ValueError(f"a {conn.provider!r} connection takes no reasoning effort")
+    if conn.provider == "claude_cli" and effort not in _CLAUDE_CLI_EFFORTS:
+        # `claude --effort` takes only these; anything else would fail every call (review)
+        raise ValueError(f"a claude_cli effort must be one of {', '.join(_CLAUDE_CLI_EFFORTS)}")
     return effort
+
+
+_CLAUDE_CLI_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# The executable a CLI connection may run (D-72): base_url picks WHICH install, never what program.
+_CLI_EXECUTABLES = {"claude_cli": "claude", "codex_cli": "codex"}
+
+
+def check_cli_command(provider: str, base_url: str | None) -> None:
+    """A `claude_cli`/`codex_cli` connection's base_url, if set, must be a path to that CLI (its
+    file name `claude`/`codex`). It used to run any executable, so a connection was a way to run an
+    arbitrary program with the server's environment (review). ValueError otherwise."""
+    expected = _CLI_EXECUTABLES.get(provider)
+    if expected is None or not base_url:
+        return
+    name = os.path.basename(base_url.rstrip("/\\"))
+    if name not in (expected, f"{expected}.exe", f"{expected}.cmd"):
+        raise ValueError(
+            f"a {provider} connection's base_url must be the path to `{expected}`, not {name!r}"
+        )
 
 
 def provider_from_connection(
@@ -116,6 +138,7 @@ def provider_from_connection(
     if kind in ("claude_cli", "codex_cli"):
         # A locally installed, logged-in CLI run headlessly (D-72): the CLI's own login is the
         # credential, and `base_url` (if set) names its executable instead of an endpoint.
+        check_cli_command(kind, conn.base_url)
         cli = ClaudeCliProvider if kind == "claude_cli" else CodexCliProvider
         return cli(model=model, command=conn.base_url, reasoning_effort=reasoning_effort)
     if kind == "codex":
@@ -296,7 +319,9 @@ async def discover_models(
         ]
     if conn.provider == "claude_cli":  # Claude Code's model aliases (any full model id works too)
         return [{"id": m, "modality": "chat"} for m in ("haiku", "opus", "sonnet")]
-    if conn.provider == "codex_cli":  # `default` = the model the CLI is configured to use
+    if (
+        conn.provider == "codex_cli"
+    ):  # `default` = Codex's built-in default (user config isn't read)
         return [{"id": "default", "modality": "chat"}]
     if conn.provider == "codex":
         return await codex_auth.discover_codex_models(
@@ -376,6 +401,10 @@ async def refresh_connection_models(
     return models
 
 
+# Kinds whose ProviderError text is safe to show (built without any credential in it).
+_DIAGNOSABLE = frozenset({"codex", "claude_cli", "codex_cli"})
+
+
 async def probe_connection(
     store: ModelRegistry,
     connection_id: str,
@@ -415,10 +444,11 @@ async def probe_connection(
     except Exception as exc:
         # NEVER echo the raw provider/httpx exception text: it can carry the plaintext key (e.g.
         # "Illegal header value b'Bearer sk-…'") — report only the exception TYPE (review). The
-        # exception is codex, whose adapter builds its ProviderError token-free (status + the
-        # backend's error body), so surfacing it makes a rejected Responses call diagnosable.
+        # exceptions are codex, whose adapter builds its ProviderError token-free (status + the
+        # backend's error body), and the CLI kinds, whose errors are redacted (D-72) — so a
+        # rejected call, or a CLI that isn't installed or logged in, is diagnosable.
         logger.warning("provider test failed for %s: %s", conn.provider, type(exc).__name__)
-        if conn.provider == "codex" and isinstance(exc, ProviderError):
+        if conn.provider in _DIAGNOSABLE and isinstance(exc, ProviderError):
             return {"ok": False, "detail": f"{conn.provider}:{probe_model} failed — {exc}"}
         return {
             "ok": False,
