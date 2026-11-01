@@ -1180,9 +1180,9 @@ async def test_a_characters_quoted_line_is_testimony_whatever_its_label(
     # checks where a narrator claim's words come from: a character's quoted speech is testimony.
     branch = await _branch(store)
     narration = (
-        "Rain needles the Brinehouse windows. Mera sets down a cup and leans in.\n"
+        "Rain needles the Brinehouse windows. Mera sets down a cup and leans in.\n\n"
         '"Old Weck knows the channels better than any living man," she says. "People avoid him '
-        "— every boat he warns comes back empty, or not at all.\n"
+        "— every boat he warns comes back empty, or not at all.\n\n"
         "The lamp gutters. The cellar door is barred with an iron bolt, rusted shut."
     )
     ex = Extraction(
@@ -1214,12 +1214,83 @@ def test_speech_is_split_per_paragraph_and_by_quote_style() -> None:
     from uro_core.pipeline.extraction import _split_speech, _spoken_not_narrated
 
     told, said = _split_speech(
-        'He nods. “The Duke means war.” «Run» she says.\n"Open, never closed\nAll quiet.'
+        "He nods. “The Duke means war.” «Run, all of you!» she says.\n\n"
+        '"Open, never closed\n\nAll quiet.'
     )
     assert "Duke" in said and "Run" in said and "Open" in said
     assert "nods" in told and "she says" in told and "All quiet" in told  # an unclosed quote ends
-    assert not _spoken_not_narrated("The rain falls.", 'Rain falls. "Hello," she says.')
+    assert not _spoken_not_narrated(
+        "The rain falls.", 'Rain falls. "Hello there, friend," she says.'
+    )
     assert not _spoken_not_narrated("...", '"..."')  # no content words, nothing to judge
+
+
+def test_quotes_that_are_not_speech_stay_narration() -> None:
+    # Review: every quoted span counted as speech, so a name, an inch mark or a wrapped verse line
+    # turned the narrator's own facts into testimony.
+    from uro_core.pipeline.extraction import _spoken_not_narrated
+
+    narrated = [
+        (
+            "The Drowned Rat is a tavern.",
+            'The tavern, called "The Drowned Rat", sits by the docks.',
+        ),
+        ("Corvin is known as the Butcher of Vel.", 'Locals call Corvin "the Butcher of Vel."'),
+        (
+            "The Duke has fled the city.",
+            'The blade is 6" long. The Duke has fled the city tonight.',
+        ),
+        (
+            "The bridge has collapsed into the river.",
+            'Mera sings:\n"The Duke is dead\nand buried deep," she says. The bridge has collapsed '
+            "into the river.",
+        ),
+        (  # speech running over paragraphs that a single line break separates
+            "The cellar door is barred.",
+            '"Every boat he warns comes back empty.\n"And the Duke knows it," she says. The '
+            "cellar door is barred.",
+        ),
+    ]
+    for statement, narration in narrated:
+        assert not _spoken_not_narrated(statement, narration), statement
+
+
+async def test_a_narrated_change_confirming_a_shout_still_retires_the_old_fact(
+    store: PostgresEventStore,
+) -> None:
+    # Review: a character's shout that the narrator then confirms in other words was downgraded,
+    # so its `supersedes` never ran and "sealed" stayed true — the bug D-70 fixed. The narrator's
+    # own text supports the claim, so it stays the narrator's.
+    branch = await _branch(store)
+    first = await run_gauntlet(
+        store, branch, Extraction(claims=[ProposedClaim(statement="The vault seal is intact.")])
+    )
+    await store.append_beat(branch, first)
+    old_id = _of_type(first, "ClaimRecorded")[0].payload["claim_id"]
+    narration = '"The seal is broken!" Mera cries. The vault seal has cracked apart before you.'
+    change = ProposedClaim(statement="The seal is broken.", supersedes=[old_id])
+    events = await run_gauntlet(store, branch, Extraction(claims=[change]), narration=narration)
+    assert _of_type(events, "ClaimRecorded")[0].payload["truth"] == "true"
+    assert _of_type(events, "ClaimTruthChanged")[0].payload["claim_id"] == old_id
+
+
+async def test_a_speaker_the_check_reveals_is_minted_before_claims_about_them(
+    store: PostgresEventStore,
+) -> None:
+    # Review: the pre-mint loop read the extractor's label, so a speaker revealed only by the
+    # quoted-speech check was minted late and a same-beat claim about them got a name token.
+    branch = await _branch(store)
+    narration = 'Mera runs the Brinehouse. "Old Weck knows every channel in the bay," she says.'
+    ex = Extraction(
+        claims=[
+            ProposedClaim(statement="Mera runs the Brinehouse.", about=["Mera"]),
+            ProposedClaim(statement="Old Weck knows every channel in the bay.", speaker="Mera"),
+        ]
+    )
+    events = await run_gauntlet(store, branch, ex, narration=narration)
+    (mera,) = _of_type(events, "ActorCreated")
+    runs = _of_type(events, "ClaimRecorded")[0].payload
+    assert runs["subject_refs"] == [mera.payload["actor_id"]]  # not "name:mera"
 
 
 async def test_the_engine_checks_provenance_against_its_narration(
@@ -1250,5 +1321,6 @@ def test_the_extractor_ends_on_its_durability_check() -> None:
         RecallBundle(recent_beats=[], actors=[], claims=[], beliefs=[]), "Rain falls."
     )[-1].content
     tail = user[user.index("LAST CHECK") :]
-    assert "a month from now" in tail and "NEVER delete news" in tail
+    assert "a month from now" in tail and "NEVER delete NEW news" in tail
+    assert "retelling a KNOWN CLAIM" in tail  # the restatement rule still wins (review)
     assert "says" not in tail.split("NEVER")[0]  # speech is never a moment to delete

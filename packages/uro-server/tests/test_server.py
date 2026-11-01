@@ -2675,3 +2675,32 @@ def test_openapi_describes_every_response() -> None:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
     assert len([op for ops in spec["paths"].values() for op in ops]) == 56
+
+    # ...and every top-level response object is strict, so a hand-built one can't carry an
+    # undeclared key (review: a reused core model dropped it silently).
+    def resolve(schema: dict[str, Any]) -> dict[str, Any]:
+        if "$ref" in schema:
+            return spec["components"]["schemas"][schema["$ref"].rsplit("/", 1)[-1]]
+        if schema.get("type") == "array":
+            return resolve(schema["items"])
+        return schema
+
+    loose = [
+        f"{method.upper()} {path}"
+        for path, ops in spec["paths"].items()
+        for method, op in ops.items()
+        if resolve(op["responses"]["200"]["content"]["application/json"]["schema"]).get(
+            "additionalProperties"
+        )
+        is not False
+    ]
+    assert not loose, loose
+
+
+def test_a_hand_built_core_model_response_is_strict() -> None:
+    # Review (D-74): a route returning a core model (POST /worlds builds World by hand) dropped an
+    # undeclared key silently; the top-level core models are strict now, like the envelopes.
+    from uro_server.schemas import WorldOut
+
+    with pytest.raises(ValueError):
+        WorldOut.model_validate({"world_id": "w", "main_branch_id": "b", "name": "n", "extra": 1})

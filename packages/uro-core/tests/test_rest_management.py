@@ -1072,3 +1072,15 @@ async def test_every_state_section_matches_its_published_schema(store: PostgresE
         r = await client.get(_q(f"/worlds/{world_id}/state?at={head}&sections={sections}"))
         assert r.status_code == 200, r.text
         assert set(r.json()) == {"at", "state"}  # no `branch` key for a commit read
+
+
+async def test_an_http_export_carries_its_format_version(store: PostgresEventStore) -> None:
+    # Review (D-74): exclude_unset dropped the bundle's `v` (a default), so an HTTP export no longer
+    # matched `uro world export`. The route sends every field.
+    async with _client(store) as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": f"v-{new_id()}"})).json()[
+            "world_id"
+        ]
+        bundle = (await client.get(_q(f"/worlds/{world_id}/export"))).json()
+    cli = (await store.export_world(world_id)).model_dump(mode="json")
+    assert bundle["v"] == 1 and set(bundle) == set(cli)
