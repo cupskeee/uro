@@ -50,7 +50,7 @@ from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.errors import ExportError
 from uro_core.export import BundleCommit, WorldBundle
-from uro_core.pipeline.engine import Engine
+from uro_core.pipeline.engine import NARRATION_DONE, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
@@ -369,7 +369,9 @@ def engine_deps(
             last_commits[campaign_id] = commit_id
             announced.add(commit_id, campaign_id)  # beat_committed will tell this campaign
 
-        stream = playing.run_beat_stream(campaign, participant, text, on_commit=committed)
+        stream = playing.run_beat_stream(
+            campaign, participant, text, on_commit=committed, mark_narrated=True
+        )
         async for chunk in stream:
             yield chunk
 
@@ -2337,6 +2339,17 @@ async def _run_and_broadcast(
     chunks: list[str] = []
     try:
         async for chunk in deps.run_beat(campaign_id, participant, text):
+            if chunk == NARRATION_DONE:  # D-71: the story is told; the player may type again
+                await hub.publish(
+                    campaign_id,
+                    {
+                        "type": "beat_narrated",
+                        "participant_id": participant,
+                        "intent": text,
+                        **echo,
+                    },
+                )
+                continue
             chunks.append(chunk)
             await hub.publish(
                 campaign_id,

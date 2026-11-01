@@ -712,11 +712,14 @@ def connect(
         try:
             async with websockets.connect(uri) as ws:
                 typer.echo(f"connected to {campaign_id} as {token!r}. Type an action; /quit.\n")
-                # An intent's beat is SETTLED by one of these, each echoing the intent's text. The
-                # prompt waits for it: shown at once, it sat above the streaming narration and was
-                # gone by the time the beat committed (extraction runs after the narration), so a
-                # player retyped the intent and played it twice (live run, 2026-10-31).
+                # An intent is SETTLED by one of these, each echoing the intent's text. The prompt
+                # waits for it: shown at once, it sat above the streaming narration and was gone by
+                # the time the beat committed, so a player retyped an intent and played it twice
+                # (live run, 2026-10-31). A server that sends `beat_narrated` (D-71) frees the
+                # prompt when the story is told, while the beat is still being extracted; an intent
+                # typed then waits on the server until that beat commits.
                 settles = {
+                    "beat_narrated",  # D-71: the narration is done; the beat commits in the back
                     "beat_committed",
                     "beat_failed",
                     "not_your_turn",
