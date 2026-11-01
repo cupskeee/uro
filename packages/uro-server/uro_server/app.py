@@ -146,6 +146,15 @@ def _new_pc_sheet(ruleset: Any) -> dict[str, Any]:
 _FEED_RETRY_S = 1.0  # first wait before reconnecting a failed live commit feed; doubles to 30s
 
 
+def _effort_field(body: dict[str, Any]) -> str | None:
+    """A request body's optional `reasoning_effort` (D-71): a string or absent, else a 400 — a
+    number or a list used to reach `.strip()` and come back as a 500 (review)."""
+    raw = body.get("reasoning_effort")
+    if raw is not None and not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="reasoning_effort must be a string")
+    return raw
+
+
 async def _call(hook: Callable[[], Any]) -> None:
     """Run a startup/shutdown hook that may be sync or async (FastAPI accepts both)."""
     result = hook()
@@ -281,7 +290,8 @@ class ServerDeps:
     # connection (a 1-token call), and rebuild the instance router from the registry without a
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
     refresh_models: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None
-    test_connection: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
+    # (connection id, model, reasoning effort or None)
+    test_connection: Callable[[str, str, str | None], Awaitable[dict[str, Any]]] | None = None
     reload_router: Callable[[], Awaitable[dict[str, Any]]] | None = None
     # Codex (ChatGPT-subscription) OAuth device flow (D-47): `start` mints a device code to display;
     # `poll` completes the login (token exchange → a codex credential + connection). None → 501.
@@ -486,10 +496,14 @@ def engine_deps(
 
         return await refresh_connection_models(store, connection_id)
 
-    async def test_connection(connection_id: str, model: str) -> dict[str, Any]:
+    async def test_connection(
+        connection_id: str, model: str, reasoning_effort: str | None
+    ) -> dict[str, Any]:
         from uro_core.providers.registry import probe_connection
 
-        return await probe_connection(store, connection_id, model)
+        return await probe_connection(
+            store, connection_id, model, reasoning_effort=reasoning_effort
+        )
 
     async def reload_router() -> dict[str, Any]:
         from uro_core.providers.registry import build_router_from_registry
@@ -1009,7 +1023,7 @@ def create_app(
         from uro_core.providers.registry import check_reasoning_effort
 
         try:  # D-71: optional; rebinding without it goes back to the provider's default
-            effort = check_reasoning_effort(conn, body.get("reasoning_effort"))
+            effort = check_reasoning_effort(conn, _effort_field(body))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await store.set_role_binding(role, connection_id, model, reasoning_effort=effort)
@@ -1043,15 +1057,19 @@ def create_app(
         connection_id: str,
         body: dict[str, Any] = Body(default={}),  # noqa: B008
     ) -> dict[str, Any]:
-        """Probe a connection with a 1-token call (slice 3). Optional `{model}`; returns
-        `{ok, detail}` — a provider failure is `ok:false`, not an HTTP error. Operator-only."""
+        """Probe a connection with a 1-token call (slice 3). Optional `{model, reasoning_effort}`
+        (D-71: checks the model accepts that effort); returns `{ok, detail}` — a provider failure
+        is `ok:false`, not an HTTP error. Operator-only."""
         _require_operator(request)
         if deps.test_connection is None:
             raise HTTPException(status_code=501, detail="connection test not enabled")
+        effort = _effort_field(body)
         try:
-            return await deps.test_connection(connection_id, str(body.get("model") or ""))
+            return await deps.test_connection(connection_id, str(body.get("model") or ""), effort)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="no such connection") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/providers/reload")
     async def reload_providers(request: Request) -> dict[str, Any]:

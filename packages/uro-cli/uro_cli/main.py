@@ -779,8 +779,12 @@ def connect(
                             typer.echo(
                                 "  · voting isn't enabled here (server needs --arbiter vote)"
                             )
+                        elif kind == "beat_narrated":
+                            typer.echo("")  # end the story's line before the prompt comes back
                         elif kind == "beat_failed":
-                            typer.echo(f"\n  ✗ beat failed: {msg['error']}")
+                            typer.echo(
+                                f"\n  ✗ beat failed ({msg.get('intent', '')!r}): {msg['error']}"
+                            )
                         elif kind == "intent_rejected":
                             typer.echo(
                                 f"  ✗ [{msg['participant_id']}] intent rejected: {msg['text']!r}"
@@ -2016,6 +2020,9 @@ def provider_refresh(connection_id: str) -> None:
 def provider_test(
     connection_id: str,
     model: str = typer.Option("", "--model", help="the model to probe (default: a known-good one)"),
+    reasoning_effort: str = typer.Option(
+        "", "--reasoning-effort", help="send this effort too, to check the model accepts it (D-71)"
+    ),
 ) -> None:
     """Probe a connection with one tiny call. Exits 1 if the provider refuses it."""
 
@@ -2027,7 +2034,9 @@ def provider_test(
         try:
             if await store.get_connection(connection_id) is None:
                 raise ValueError(f"no such connection: {connection_id}")
-            result = await probe_connection(store, connection_id, model)
+            result = await probe_connection(
+                store, connection_id, model, reasoning_effort=reasoning_effort or None
+            )
         finally:
             await store.close()
         typer.echo(("ok: " if result["ok"] else "failed: ") + result["detail"])
@@ -2154,7 +2163,8 @@ def provider_bind(
         "",
         "--reasoning-effort",
         help="how hard a reasoning model thinks: none|minimal|low|medium|high|xhigh (D-71; "
-        "omit for the provider's default). `low` on the extractor cut its latency ~40%, live.",
+        "omit for the provider's default). `low` on the extractor cut its latency ~40% in replays "
+        "(docs/21); check a model accepts it with `uro provider test --reasoning-effort`.",
     ),
 ) -> None:
     """Bind an engine role to a connection + model. `default` backs any unbound role."""

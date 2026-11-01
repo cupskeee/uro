@@ -178,3 +178,4 @@ def test_the_prompt_returns_when_the_story_is_told() -> None:
     first_done = out.index("✓ [player-1] 'first'")
     assert prompts[1] < first_done, out  # the prompt came back before the first beat committed
     assert "\x00" not in out  # the marker itself is never shown
+    assert "The tide turns.\n> " in out  # the prompt starts its own line (review)

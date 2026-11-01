@@ -56,7 +56,7 @@ def _warn_if_embedder_cannot_embed(role_kind: dict[str, str]) -> None:
 def check_reasoning_effort(conn: ModelConnection, effort: str | None) -> str | None:
     """Validate a binding's reasoning effort (D-71): a known level, on a connection kind whose
     adapter sends one. Returns the cleaned value (None/"" → None). Which levels a given MODEL
-    accepts is the provider's call; `uro provider test` surfaces a rejection."""
+    accepts is the provider's call: `uro provider test --reasoning-effort` checks one."""
     from uro_core.ports.model_registry import EFFORT_KINDS, REASONING_EFFORTS
 
     effort = (effort or "").strip().lower() or None
@@ -365,19 +365,27 @@ async def refresh_connection_models(
 
 
 async def probe_connection(
-    store: ModelRegistry, connection_id: str, model: str = ""
+    store: ModelRegistry,
+    connection_id: str,
+    model: str = "",
+    *,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """A 1-call liveness probe of a connection (D-47 slice 3) — `POST /providers/{id}/test` and
     `uro provider test`. Returns `{ok, detail}`: a provider failure is `ok: False`, not an error.
-    KeyError if the connection doesn't exist. The call is metered (stage `test`, D-66) when the
-    store can record it."""
+    KeyError if the connection doesn't exist; ValueError for an effort the connection can't take.
+    With `reasoning_effort` (D-71) the probe sends it, so a model that rejects it fails here rather
+    than on every call of the role it's bound to. Metered (stage `test`, D-66) when it can be."""
     from uro_core.providers.base import Message
 
     conn = await store.get_connection(connection_id)
     if conn is None:
         raise KeyError(connection_id)
     probe_model = model or default_probe_model(conn)
-    provider = provider_from_connection(conn, probe_model, await _access_token(store, conn))
+    effort = check_reasoning_effort(conn, reasoning_effort)
+    provider = provider_from_connection(
+        conn, probe_model, await _access_token(store, conn), reasoning_effort=effort
+    )
     router = ProviderRouter(
         bindings={"test": provider}, recorder=getattr(store, "record_llm_call", None)
     )
