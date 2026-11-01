@@ -2088,7 +2088,7 @@ def _reg_client_with_ops() -> TestClient:
     async def _refresh(cid: str) -> list[dict[str, str]]:
         return [{"id": "gpt-4o", "modality": "chat"}]
 
-    async def _test(cid: str, model: str) -> dict[str, object]:
+    async def _test(cid: str, model: str, effort: str | None = None) -> dict[str, object]:
         return {"ok": True, "detail": "pong"}
 
     async def _reload() -> dict[str, object]:
@@ -2617,3 +2617,17 @@ def test_a_role_binding_takes_a_reasoning_effort() -> None:
         json={"connection_id": conn_id, "model": "gpt-5.6-luna", "reasoning_effort": "turbo"},
     )
     assert bad.status_code == 400
+
+
+def test_a_reasoning_effort_must_be_a_string() -> None:
+    # D-71 review: a number or a list reached `.strip()` and came back as a 500.
+    client = _reg_client()
+    conn_id = client.post(
+        "/providers?token=tok-a", json={"name": "oai", "provider": "openai"}
+    ).json()["id"]
+    for bad in (3, ["low"], True):
+        r = client.put(
+            "/providers/roles/extractor?token=tok-a",
+            json={"connection_id": conn_id, "model": "gpt-5.1", "reasoning_effort": bad},
+        )
+        assert r.status_code == 400, r.text

@@ -14,8 +14,10 @@ Upgrading: run `uro db migrate` (migration 026 adds `reasoning_effort` to role b
 ### Added
 - **A reasoning effort per role** (D-71). `uro provider bind <role> <conn> <model>
   --reasoning-effort low`, or `reasoning_effort` on `PUT /providers/roles/{role}`. Measured on
-  replayed sessions, the extractor at `low` was about 40% faster with the same results; we
-  recommend it there. Sent by the Codex and OpenAI-style adapters; other kinds refuse it.
+  replayed sessions, the extractor at `low` was about 40% faster and kept the same key news; we
+  recommend it there. Check a model accepts an effort with `uro provider test <conn> --model <m>
+  --reasoning-effort low`. Sent by the Codex and OpenAI-style adapters (which then send no
+  `temperature`); other kinds refuse it.
 - **`beat_narrated`** (D-71). `uro serve` tells clients when a beat's story is complete, before it
   is extracted and saved, and `uro connect` gives the prompt back then. Live, the player could type
   again after ~6 s instead of ~14 s. An intent typed early waits until the beat is saved.

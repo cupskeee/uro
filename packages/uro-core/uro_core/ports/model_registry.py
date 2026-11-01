@@ -47,7 +47,7 @@ class ModelConnection(BaseModel):
 
 
 # How hard a reasoning model thinks (D-71). Which values a model accepts is the provider's call; an
-# unsupported one fails the call, which `uro provider test` surfaces.
+# unsupported one fails every call, so check it first with `uro provider test --reasoning-effort`.
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 # Connection kinds whose adapter sends an effort (Codex Responses, OpenAI-style chat completions).
 EFFORT_KINDS = frozenset({"codex", "openai", "openai_compat", "local"})

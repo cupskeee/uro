@@ -329,7 +329,7 @@ class Engine:
         ):
             collected.append(chunk)
             yield chunk
-        if mark_narrated:
+        if mark_narrated and "".join(collected).strip():  # an empty story fails the beat anyway
             yield NARRATION_DONE
         # a streaming caller learns the commit the MOMENT it's appended — before the post-commit
         # work (memory, reactions), during which a relay could already publish it (D-67 review)

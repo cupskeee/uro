@@ -313,3 +313,35 @@ async def test_a_stream_can_mark_where_the_narration_ends(store: PostgresEventSt
     assert seen == ["Rain.", "DONE", "commit"]
     plain = [c async for c in engine.run_beat_stream(campaign, "p1", "I wait again")]
     assert NARRATION_DONE not in plain  # an embedder that didn't ask sees only narration
+
+
+async def test_an_empty_story_is_never_marked_told(store: PostgresEventStore) -> None:
+    # D-71 review: the marker freed the player's prompt for a beat whose empty narration was
+    # certain to fail.
+    from collections.abc import AsyncIterator
+
+    from uro_core.pipeline.engine import NARRATION_DONE, Engine
+    from uro_core.providers.adapters.stub import hashing_embedding
+    from uro_core.providers.base import CompletionRequest
+    from uro_core.providers.router import ProviderRouter
+
+    class _Silent:
+        async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
+            yield "  "
+
+        async def complete(self, req: CompletionRequest) -> str:
+            return "{}"
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [hashing_embedding(t) for t in texts]
+
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Silent()))
+    world = await store.create_world(f"outbox-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    seen: list[str] = []
+    from uro_core.errors import EmptyNarrationError
+
+    with pytest.raises(EmptyNarrationError):  # an empty narration fails the beat
+        async for chunk in engine.run_beat_stream(campaign, "p1", "I wait", mark_narrated=True):
+            seen.append(chunk)
+    assert NARRATION_DONE not in seen

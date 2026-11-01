@@ -121,3 +121,33 @@ async def test_all_roles_bound_without_default_is_ok() -> None:
     router = await build_router_from_registry(reg)
     assert router is not None
     assert isinstance(router._provider_for("narrator"), StubProvider)
+
+
+async def test_each_binding_s_reasoning_effort_reaches_its_adapter() -> None:
+    # D-71 review: the effort was stored and listed, but no test showed the router built the
+    # adapters with it — dropping it there would have left it silently unsent.
+    from uro_core.providers.adapters.codex import CodexResponsesProvider
+
+    reg = FakeRegistry(
+        connections=[
+            ModelConnection(id="c1", name="oai", provider="openai", auth_id="k1"),
+            ModelConnection(id="c2", name="cdx", provider="codex", auth_id="k2"),
+        ],
+        bindings=[
+            RoleBinding(role="default", connection_id="c1", model="gpt-5.1"),
+            RoleBinding(
+                role="planner", connection_id="c1", model="gpt-5.1", reasoning_effort="low"
+            ),
+            RoleBinding(
+                role="extractor", connection_id="c2", model="gpt-5.6-luna", reasoning_effort="low"
+            ),
+        ],
+        secrets={"k1": ("sk-oai", None)},
+    )
+    router = await build_router_from_registry(reg)
+    assert router is not None
+    planner, extractor = router._provider_for("planner"), router._provider_for("extractor")
+    assert isinstance(planner, OpenAICompatProvider) and planner._reasoning_effort == "low"
+    assert isinstance(extractor, CodexResponsesProvider) and extractor._reasoning_effort == "low"
+    default = router._provider_for("default")
+    assert isinstance(default, OpenAICompatProvider) and default._reasoning_effort is None

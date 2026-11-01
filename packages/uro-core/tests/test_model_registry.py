@@ -223,8 +223,8 @@ async def test_a_binding_carries_its_reasoning_effort(store: PostgresEventStore)
 
 
 def test_reasoning_effort_is_checked_and_sent() -> None:
-    # D-71: measured on the replayed Ashfall session, the extractor at `low` ran ~40% faster with
-    # the same claims. Only adapters that send an effort accept one, and only a known level.
+    # D-71: measured on the replayed Ashfall session, the extractor at `low` ran ~40% faster and
+    # kept the same key news. Only adapters that send an effort accept one, and only a known level.
     import json
 
     import httpx
@@ -268,3 +268,49 @@ def test_reasoning_effort_is_checked_and_sent() -> None:
 
     asyncio.run(oai.complete(req))
     assert seen[0]["reasoning_effort"] == "low"
+
+
+def test_an_effort_drops_temperature_for_gpt5_on_openai() -> None:
+    # D-71 review: OpenAI rejects `temperature` beside `reasoning_effort` on GPT-5-family models,
+    # so a binding that sets an effort gets the reasoning-model dialect.
+    from uro_core.providers.base import CompletionRequest, Message
+
+    req = CompletionRequest(
+        messages=[Message(role="user", content="hi")], stage_tag="extractor", max_tokens=99
+    )
+    tuned = OpenAICompatProvider(model="gpt-5.1", reasoning_effort="low")
+    body: dict = {}  # type: ignore[type-arg]
+    tuned._apply_sampling(body, req)
+    assert body == {"max_completion_tokens": 99, "reasoning_effort": "low"}
+    plain: dict = {}  # type: ignore[type-arg]
+    OpenAICompatProvider(model="gpt-4o")._apply_sampling(plain, req)
+    assert "temperature" in plain and "reasoning_effort" not in plain
+
+
+async def test_a_connection_test_can_send_an_effort(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D-71 review: `uro provider test` never sent an effort, so a model that rejects one passed the
+    # test and then failed every call of the role it was bound to.
+    from uro_core.domain.ids import new_id
+    from uro_core.providers import registry as reg
+    from uro_core.providers.registry import probe_connection
+
+    seen: list[str | None] = []
+    real = reg.provider_from_connection
+
+    def spy(conn, model, token, *, reasoning_effort=None):  # type: ignore[no-untyped-def]
+        seen.append(reasoning_effort)
+        return real(ModelConnection(id="s", name="s", provider="stub"), model, None)
+
+    monkeypatch.setattr(reg, "provider_from_connection", spy)
+    oai = await store.add_connection(name=f"o-{new_id()}", provider="openai")
+    stub = await store.add_connection(name=f"s-{new_id()}", provider="stub")
+    try:
+        assert (await probe_connection(store, oai, "gpt-5.1", reasoning_effort="low"))["ok"]
+        assert seen == ["low"]
+        with pytest.raises(ValueError, match="stub"):  # a kind that takes none says so
+            await probe_connection(store, stub, "stub-chat", reasoning_effort="low")
+    finally:
+        await store.delete_connection(oai)
+        await store.delete_connection(stub)

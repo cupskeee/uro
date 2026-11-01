@@ -70,8 +70,10 @@ class OpenAICompatProvider:
     def _apply_sampling(self, body: dict[str, object], req: CompletionRequest) -> None:
         """Add the temperature + token-cap fields to `body`, dialect-aware. o-series reasoning
         models take `max_completion_tokens` (not `max_tokens`) and reject a non-default
-        `temperature`, so both legacy fields are omitted for them."""
-        if _is_reasoning_model(self._model):
+        `temperature`, so both legacy fields are omitted for them. A binding that sets a reasoning
+        effort (D-71) declares a reasoning model too: OpenAI rejects `temperature` beside a
+        `reasoning_effort` on GPT-5-family models (review), so it gets the same dialect."""
+        if _is_reasoning_model(self._model) or self._reasoning_effort:
             if req.max_tokens is not None:
                 body["max_completion_tokens"] = req.max_tokens
             # temperature intentionally omitted: reasoning models allow only the default (1)

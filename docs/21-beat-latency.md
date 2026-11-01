@@ -44,12 +44,16 @@ Live, through `uro serve`, time from sending an intent (three beats each):
    `PUT /providers/roles/{role}`. Sent by the Codex adapter as `reasoning.effort` and by the
    OpenAI-compatible adapter as `reasoning_effort`; refused for connection kinds that send none.
    Which levels a model accepts is the provider's call (`gpt-5.6-luna` via Codex: `none`, `low`,
-   `medium`, `high`, `xhigh`). Recommended: `low` on the extractor.
+   `medium`, `high`, `xhigh`); check one first with `uro provider test <conn> --model <m>
+   --reasoning-effort low` (or `reasoning_effort` on `POST /providers/{id}/test`). On an OpenAI-style
+   connection an effort also means the reasoning-model request shape: no `temperature`, which OpenAI
+   rejects beside an effort on GPT-5-family models. Recommended: `low` on the extractor.
 2. **The prompt returns when the story is told.** `Engine.run_beat_stream(mark_narrated=True)`
    yields `NARRATION_DONE` between the narration and the commit; `uro serve` turns it into a
    `beat_narrated` frame (with the intent's `intent_id`), and `uro connect` frees its prompt on it.
-   An intent typed then waits on the server until the beat commits, so beats never overlap and
-   recall stays consistent. The player reads and types while the extractor works.
+   An intent typed then waits on the server until the beat commits (or fails), so one player's beats
+   never overlap and recall stays consistent. An empty narration, which fails the beat, is never
+   marked. The player reads and types while the extractor works.
 
 ## Designed and deferred: background extraction
 
