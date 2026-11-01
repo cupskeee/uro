@@ -9,6 +9,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-01
+
+Upgrading: no database migration. A client of `POST /campaigns/{c}/dry-run` now reads the history
+pass as `caused_by.pass` (it was `history_pass`), and `GET /providers` writes a credential's
+`last_refresh` as `…Z`. An embedder calling `run_gauntlet` directly passes `narration=` to get the
+quoted-speech check.
+
 ### Added
 - **Typed API responses** (D-74). Every HTTP route publishes its response shape in
   `/openapi.json`, so a client can generate its types (for TypeScript, `openapi-typescript`). The
@@ -960,7 +967,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/cupskeee/uro/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cupskeee/uro/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cupskeee/uro/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cupskeee/uro/compare/v0.8.0...v0.9.0
