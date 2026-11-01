@@ -1,3 +1,6 @@
 - id: "t:saltborn-ritual"
   stakes: "The Saltborn gather to complete a ritual that would drown Vel beneath the tide."
   state: "active"
+- id: "t:salt-road"
+  stakes: "The salt wagons have stopped reaching Saltroad, and nobody inland knows why."
+  state: "dormant"

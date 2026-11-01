@@ -47,6 +47,13 @@ def pack_to_events(pack: WorldPack) -> list[DomainEvent]:
             events.append(edge_added(src=a.id, rel_type="member_of", dst=a.faction))
         if a.location:
             events.append(edge_added(src=a.id, rel_type="located_in", dst=a.location))
+    # Acquaintance (D-76), after every actor exists: mutual, one edge each way, each pair once.
+    knows: set[tuple[str, str]] = set()
+    for a in pack.actors:
+        for other in a.knows:
+            knows |= {(a.id, other), (other, a.id)}
+    for src, dst in sorted(knows):
+        events.append(edge_added(src=src, rel_type="knows", dst=dst))
     for c in pack.claims:
         events.append(
             claim_recorded(

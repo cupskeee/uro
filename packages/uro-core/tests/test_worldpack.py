@@ -24,7 +24,9 @@ def test_parse_ashfall_pack() -> None:
     assert pack.manifest.history.simulate_years == 200
     assert pack.manifest.llm_roles["narrator"] == "anthropic:claude-sonnet-5"
     assert {p.kind for p in pack.places} == {"region", "settlement", "site"}
-    assert len(pack.actors) == 3 and len(pack.factions) == 2 and len(pack.threads) == 1
+    # D-76 added the salt road: three actors who know each other, a second plot, one rumor
+    assert len(pack.actors) == 6 and len(pack.factions) == 2 and len(pack.threads) == 2
+    assert len(pack.claims) == 1 and pack.rule_pack is not None and len(pack.rule_pack.agendas) == 2
     assert any(f.at_war_with for f in pack.factions)  # the Duchy/Saltborn war
     assert "overview.md" in pack.lore
 

@@ -69,6 +69,22 @@ simulate_years = 200
 narrator = "anthropic:claude-sonnet-5"
 ```
 
+## Authoring entities — who knows whom (D-76)
+
+An actor may list the actors it knows: `knows: ["a:hesk"]`. Acquaintance is mutual — import
+commits a `knows` edge each way — and it is the only relation a rumor travels along
+(`engines/actor.propagate_belief`: the witnesses hold it at 0.9, each retelling keeps 0.55 of
+that, and it stops below 0.2, so two hops out a rumor is "has heard a rumor"). A `knows` ref that
+names no actor in the pack, or the actor itself, is refused at parse. Rumors spread at the
+moments a world defines them (a world rule's or an agenda's `spread_belief`, a Chronicler
+outcome's witnesses); play never adds `knows` edges. `worlds/ashfall` carries a rumor from the
+docks two regions inland this way (its `agendas.yaml`).
+
+Rule files: `rules.yaml` holds `rules`, `agendas.yaml` holds `agendas`, each with
+`rules_api_version`. Any other top-level key is refused at parse (an `agendas:` list written
+into `rules.yaml` used to be accepted and never run), and the two files must declare the same
+version.
+
 ## Authoring entities — colloquial aliases (best practice)
 
 `entities/actors.yaml` items carry an optional `aliases: [...]`. **Give every named NPC the short

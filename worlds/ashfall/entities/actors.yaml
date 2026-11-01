@@ -15,3 +15,22 @@
   tier: 1
   role: "dock fisher"
   location: "p:vel"
+  knows: ["a:hesk"]
+# Who knows whom along the salt road (D-76): the path a rumor from the docks travels inland.
+- id: "a:hesk"
+  name: "Hesk"
+  tier: 1
+  role: "salt-road carter"
+  location: "p:saltroad"
+  knows: ["a:brannoc"]
+- id: "a:brannoc"
+  name: "Brannoc"
+  tier: 1
+  role: "a regular at the Lantern"
+  location: "p:lantern"
+  knows: ["a:ysolde"]
+- id: "a:ysolde"
+  name: "Ysolde"
+  tier: 1
+  role: "the Lantern's barmaid"
+  location: "p:lantern"

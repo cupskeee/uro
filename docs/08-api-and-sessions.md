@@ -282,6 +282,7 @@ uro extraction-policy show | set --no-places …   # which emergent categories p
 uro token list <campaign> | uro token revoke <campaign> --participant P   # against a running server
 uro outbox status                         # committed beats waiting to be published (D-57)
 uro outbox relay --nats nats://localhost:4222 [--once]   # publish them to NATS JetStream
+uro memory reembed [--world W]            # re-embed memories as intent + narration once, after upgrading or an old import (D-75)
 ```
 
 `uro play` and `uro dry-run` are the two commands the whole roadmap's acceptance tests run through.

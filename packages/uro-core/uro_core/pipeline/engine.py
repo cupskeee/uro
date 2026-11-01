@@ -56,7 +56,12 @@ from uro_core.pipeline.plan import (
     validate_plan,
 )
 from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
-from uro_core.pipeline.recall import RecallBundle, assemble_recall, build_narrator_messages
+from uro_core.pipeline.recall import (
+    RecallBundle,
+    assemble_recall,
+    build_narrator_messages,
+    memory_embed_text,
+)
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import Message
 from uro_core.providers.router import ProviderRouter
@@ -264,7 +269,12 @@ class Engine:
                 vector
             ):  # empty response or zero-norm (no words) → recall nothing
                 return recall
-            hits = await self._store.search(branch_id, vector, self._semantic_k)
+            # Over-fetch by the recency window: the nearest memories are often beats still IN the
+            # window (dropped below), and fetching only k left 0-2 old memories mid-scene
+            # (measured, D-75). Old memories are what semantic recall is for.
+            hits = await self._store.search(
+                branch_id, vector, self._semantic_k + len(recall.recent_beats)
+            )
         except Exception as exc:  # best-effort; structured recall stands
             logger.warning("semantic recall failed, using structured recall only: %s", exc)
             return recall
@@ -275,6 +285,8 @@ class Engine:
                 continue
             seen.add(hit.text)
             recall.memories.append(hit.text)
+            if len(recall.memories) == self._semantic_k:
+                break
         return recall
 
     async def run_beat(
@@ -522,6 +534,7 @@ class Engine:
                 commit.commit_id,
                 narration,
                 [a.actor_id for a in ctx.recall.actors],
+                intent=intent_text,
             )
             # Reaction Layer (docs/17, D-33): after the beat commits, a post-beat pass reads the
             # just-committed state and commits any consequences as a SEPARATE caused_by=module
@@ -1022,17 +1035,25 @@ class Engine:
         return Rng(int(digest[:12], 16))
 
     async def _remember(
-        self, branch_id: str, commit_id: str, text: str, entity_refs: list[str]
+        self,
+        branch_id: str,
+        commit_id: str,
+        text: str,
+        entity_refs: list[str],
+        *,
+        intent: str = "",
     ) -> None:
-        """Embed the beat's narration and index it for later semantic recall.
+        """Embed the beat (its intent with its narration, D-75) and index it for later semantic
+        recall; the narration alone is what recall later shows.
 
         Post-commit and fully best-effort: the beat is ALREADY committed, so nothing
         here — a failed embed, an empty vector, or a memory-write DB error — may raise
         out and fail a beat that persisted. The memory index is a rebuildable aux cache.
         """
+        embed_text = memory_embed_text(intent, text)
         try:
             vectors = await self._router.embed(
-                "embedder", [text], branch_id=branch_id, recorder=self._recorder
+                "embedder", [embed_text], branch_id=branch_id, recorder=self._recorder
             )
             vector = vectors[0] if vectors else None
             if not vector or not any(vector):  # empty/zero-norm → nothing worth indexing
@@ -1044,6 +1065,7 @@ class Engine:
                 text=text,
                 vector=vector,
                 entity_refs=entity_refs,
+                embed_text=embed_text,
             )
         except Exception as exc:  # never fail a committed beat
             logger.warning("memory write failed for a committed beat: %s", exc)

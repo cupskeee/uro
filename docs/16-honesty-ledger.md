@@ -516,3 +516,25 @@ logged-in CLIs; no role binding was changed.
 | Extraction on live narration (D-73) | **live-validated** | the party session recorded Mera's and the dockhands' news as testimony and only lasting changes as narrator fact (drag marks under the pier, a snapped watch-lantern, a barrel lid torn off); no atmosphere. |
 | The CLI providers | **live-validated** | a Brinehold session on `claude -p` + `codex exec`, after the D-72 review fixes (scrubbed environment, Codex feature check): five beats, four Uro Pool checks, the seal's opening recorded, all calls metered. |
 
+## Post-PoC — recall of callbacks (2026-11-01, D-75, OQ-3 narrowed)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Thematic callbacks recalled | **proxy (measured offline)** | a benchmark of 7 facts planted in a live session × named/thematic/oblique callbacks, ranked among 172 played beat memories: 20/21 in the top 4 with the intent embedded (18/21 narration-only). One session's plants; ranks measured, not the narrator's use of them. |
+| Memory slots outside the recency window | **proven** | `test_recent_beats_never_starve_the_memory_slots` (it fails on the old code); before, mid-scene queries kept 0-2 of 4 memories (measured). |
+| A word only the intent said recalls the beat | **proven** | `test_a_word_only_the_intent_said_recalls_the_beat` (the live fear case, deterministic). |
+| Recall through the engine, after the build | **live-validated (one session)** | `uro memory reembed` on the benchmark session's world (20 re-embedded; a second run 0), then all 21 callbacks through the engine's real `_recall`: 21/21 recalled, 4 of 4 memories delivered on every query (2.56 before the slot fix), no intent text shown to the narrator. Per session, which is what the engine searches; the 172-memory scale figure is the offline one above. |
+| Old memories re-embedded | **proven (operator step)** | `uro memory reembed` (`test_reembed_moves_old_memories_to_the_intent_vector`: correct, idempotent, scoped to a world). Until it runs, a mixed index recalls old memories worse (16/21 measured). |
+
+## Post-PoC — off-screen simulation (2026-11-01, D-76, OQ-4 narrowed)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| The world moves while nobody watches | **proven (deterministic), at explicit time-skips only** | `test_the_world_moved_while_you_were_away`: a 30-day skip on Ashfall heats the Saltborn feud once, surfaces the salt-road plot, and carries a rumor from the docks to a roadhouse two regions inland (0.9 / 0.495 / 0.272, stopping at the floor); a fork from before the skip has none of it; export/import keeps it. |
+| Rumors spread in ordinary play | **only where a world defines it** | along authored `knows` edges, from a world rule's or agenda's `spread_belief` or a Chronicler outcome's witnesses. A rumor an NPC tells the player, or a deed witnessed in a normal beat, spreads to no one (deferred, D-76). |
+| The clock follows play | **no** | only an explicit time-skip moves it (one ever, measured); play rarely passes time (~3 of 209 narrations). Deferred with a gate (D-76). |
+| `world_time.segment` | **schema-only** | never written: every stored event says "morning" (3,692 of 3,692). |
+| Per-event day stamps | **stale for ordinary beats** | beat events are stamped day 0 whatever the clock says (a beat after a skip to day 2 says day 0); every reader uses the chain's maximum day, which is right. |
+| Time in the prompts | **not told** | no prompt template mentions the day. |
+| Rule files read what they hold | **proven** | a key `rules.yaml`/`agendas.yaml` doesn't read is refused (`test_an_agenda_written_into_rules_yaml_is_refused`); a `knows` ref to nobody is refused (`test_a_knows_ref_to_nobody_is_refused`). Faction/location refs on seeds are still not checked (pre-existing). |
+
