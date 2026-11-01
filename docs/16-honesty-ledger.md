@@ -382,7 +382,7 @@ v0.7.0 (runbook: `docs/live-run.md` §8) and read back from Postgres. Models: th
 
 | Capability | Status | Evidence |
 |---|---|---|
-| Full server + real Engine over WebSocket | **live-validated (one session)** | 11 beats through `uro serve` + `uro connect` on Ashfall, 1 more through a second server. Found on the way: #129 had broken `serve` (the store never opened; every connect was a 500), fixed in #130 with a test that drives the real `serve` wiring. |
+| Full server + real Engine over WebSocket | **live-validated (two sessions)** | 11 beats through `uro serve` + `uro connect` on Ashfall, 1 more through a second server. Found on the way: #129 had broken `serve` (the store never opened; every connect was a 500), fixed in #130 with a test that drives the real `serve` wiring. Second session (2026-11-01, the fourth pass): six party beats through `uro serve` on the registry's providers, no errors. |
 | Live commits across processes (D-67) | **live-validated** | relay + two servers: the client printed the CLI's in-place time-skip and the beat played through the other server; every commit reached the outbox and was published. |
 | Token metering (D-66) | **live-validated** | every Codex chat call carried tokens in and out; OpenAI embeddings and `gpt-4o-mini` calls too; per-world and per-campaign filters correct. The extractor is the costliest stage (~55% of chat input tokens) and the slowest (7 s mean, 13.8 s worst) — and the next beat waits for it. |
 | Flavor recorded as fact | **much improved, live** | Ashfall (12 beats, `gpt-5.6-luna`): one narrator fact recorded true ("Old Weck has milky eyes", a lasting trait); 14 dialogue claims as testimony. In July: 21 of 27 claims true, many passing moments. |
@@ -429,7 +429,7 @@ world rule in live play, and the extractor on `gpt-4o-mini` (by replay).
 
 | Capability | Status | Evidence |
 |---|---|---|
-| A two-player party over WebSocket | **live-validated (one session)** | `uro serve` with two tokens: player-1 and player-2 alternated strictly over six beats, each as their own PC. The "not your turn" path wasn't exercised live — player-2's identical intent arrived 1.4 s after player-1's beat committed, a legitimate turn; it stays covered by `test_another_players_identical_intent_never_settles_ours`. |
+| A two-player party over WebSocket | **live-validated (two sessions)** | `uro serve` with two tokens: player-1 and player-2 alternated strictly over six beats, each as their own PC. The "not your turn" path wasn't exercised live — player-2's identical intent arrived 1.4 s after player-1's beat committed, a legitimate turn; it stays covered by `test_another_players_identical_intent_never_settles_ours`. Second session (2026-11-01): two scripted clients alternated six beats; player-2's out-of-turn intent got `not_your_turn` with its own `intent_id`, and each client received the other's commits. |
 | A world rule in live play, voiced by the narrator | **live-validated** | Ashfall's `failures-get-talked-about`: player-2's failed sneak committed the module rumor, and asked what people were saying, Mera answered "someone tried their luck down there and failed". First reaction ever to fire in a live session. |
 | Physical risk rolled | **found live → fixed (D-69)** | a forced lock (Uro Basic) and a row through rising surf (Uro Pool) went unrolled: no built-in affordance covered physical danger, so the narrator decided (Basic) or never resolved (Pool) the outcome. Every built-in now declares a `danger` affordance (`test_every_builtin_rolls_for_physical_danger`). |
 | Uro Pool in live play | **played, mechanics unexercised** | five beats, no check could fire (above); the pool, push, strain and wounds remain proven only by deterministic tests until a pass with `endure`. |
@@ -477,7 +477,7 @@ still said it had two bounded mutations — retiring a narrator fact is the thir
 
 | Capability | Status | Evidence |
 |---|---|---|
-| `claude_cli` / `codex_cli` run the logged-in CLIs | **live-validated (one session)** | three Ashfall beats with narrator/dialogue/planner on `claude -p` and the extractor on `codex exec` at `low`: claims extracted, a check rolled, the world rule fired, no errors. ~2× the HTTP providers' latency. Deterministic tests drive a fake CLI (`test_cli_providers.py`). |
+| `claude_cli` / `codex_cli` run the logged-in CLIs | **live-validated (two sessions)** | three Ashfall beats with narrator/dialogue/planner on `claude -p` and the extractor on `codex exec` at `low`: claims extracted, a check rolled, the world rule fired, no errors. ~2× the HTTP providers' latency. Deterministic tests drive a fake CLI (`test_cli_providers.py`). Second session (2026-11-01, after the review fixes): five Brinehold (Uro Pool) beats with narrator/dialogue/planner on `claude -p` sonnet and the extractor on `codex exec` at `low` — four checks rolled, the broken seal recorded, every call metered with its model, no errors; told after 11–17 s, saved after 18–30 s. |
 | The lockdown (tools off, a fresh empty directory per call, prompt on stdin, a scrubbed environment) | **proven (structural) + live-checked** | the flags are asserted in tests; live, a planted canary file outside the directory leaked through `codex exec` with only its read-only sandbox, and did not leak through either adapter (rechecked after the review, with the wider Codex feature list). |
 | Codex's tools are off | **by construction for the features Codex 0.163 lists; backstop beyond** | each tool feature is disabled and checked against `codex features list` before the first call (a retired name refuses to run, tested). A tool behind a feature name added later isn't on the list: a tool event in the output fails the call (tested). |
 | The CLI never sees Uro's secrets | **proven (test) + live** | the environment is an allowlist; a test plants `ANTHROPIC_API_KEY`/`URO_SECRET_KEY` and the fake CLI sees neither. Live, with bogus API keys in Uro's environment, both CLIs still answered on their own logins. |
@@ -503,4 +503,16 @@ held-out ones (40 beats).
 | A handler can't send an undeclared key | **proven (structural)** | the envelope models forbid extra keys and FastAPI validates every response; the whole suite reaches all 56 routes with a response (measured by recording each validated response). Mutations caught: an extra key, a dropped row column, an untyped route, optional keys sent as `null`. |
 | State rows match the projections | **proven** | `test_state_rows_match_the_projection_catalog` (models vs `_SNAPSHOT_TABLES`) and a real-store read of all eleven sections. |
 | WebSocket frames | **documented, not in OpenAPI** | OpenAPI has no WebSocket model; docs/08 lists the frames and `test_server.py` pins their key sets (BE-11). |
+
+## Post-PoC — the fourth live pass (2026-11-01, run by Claude)
+
+Three surfaces that had one live session each got a second, after D-72's review fixes and with
+D-73 in place. Run through the model registry (Codex `gpt-5.6-luna`; OpenAI embeddings) and the
+logged-in CLIs; no role binding was changed.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| A party over WebSocket | **live-validated** | Ashfall, `uro serve` with two tokens, two scripted clients: six alternating beats; `beat_narrated` after 6–11.5 s, `beat_committed` after 11–19 s; an out-of-turn intent got `not_your_turn`; each client saw the other's commits. |
+| Extraction on live narration (D-73) | **live-validated** | the party session recorded Mera's and the dockhands' news as testimony and only lasting changes as narrator fact (drag marks under the pier, a snapped watch-lantern, a barrel lid torn off); no atmosphere. |
+| The CLI providers | **live-validated** | a Brinehold session on `claude -p` + `codex exec`, after the D-72 review fixes (scrubbed environment, Codex feature check): five beats, four Uro Pool checks, the seal's opening recorded, all calls metered. |
 
