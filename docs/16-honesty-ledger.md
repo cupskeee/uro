@@ -34,14 +34,14 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 | Semantic / pgvector recall | proven | branch-scoped cosine, degrades to structured-only; `test_memory.py`. Tests use the stub embedder (a bag-of-words proxy); real embeddings run live once. |
 | Extractor whitelist (creations — actors, places, factions, threads, claims + `member_of`/`located_in` edges, D-49/D-50 — plus three bounded mutations: resolving a live emergent thread, D-52, an alias on a known actor, D-56, and retiring a narrator-established fact the narration changes, D-70) | **proven (by construction)** | the `Extraction` schema can't *express* damage/death/terrain/loss — the load-bearing anti-hallucination defense. |
 | Extractor tier ceiling (new actors ≤ T1) + player-text isolation | proven | `tier=1` always; the extractor sees narration only, never the raw intent. |
-| Provenance labeling (narrator→`truth=true`, dialogue→testimony+belief) | proven (by policy) | correct insofar as the extractor classifies provenance honestly. |
+| Provenance labeling (narrator→`truth=true`, dialogue→testimony+belief) | proven (by policy) **+ structural for quoted speech (D-73)** | a `narrator` claim whose words come mostly from a character's quoted lines is recorded as testimony (`test_a_characters_quoted_line_is_testimony_whatever_its_label`). Reported speech without quote marks still rests on the extractor's label. |
 | Contradiction downgrade (would-be `truth=true` → `unknown`) | partial | only claims the extractor **self-flagged** vs recalled `truth=true`; a full narration-vs-state cross-check is deferred. |
-| Flavor filter (atmosphere not canon) | partial | safety net depending on `durable=false` labeling; live flavor over-extraction is a known, unfixed follow-up. |
+| Flavor filter (atmosphere not canon) | partial (prompt) **— measured, D-73** | still the extractor's judgment (`durable`), backed by a closing check in its prompt. On replays, `gpt-5.6-luna` records no atmosphere as fact; `gpt-4o-mini` went from ~24 such claims to ~4 across nine sessions (five held out). A small model still lets some through. |
 | Entity resolution (canonical name fold + partial name) | proven | `canonical_name` + SQL mirror; live stress-test showed zero splits. **D-56:** the embedding `entity_index` was MEASURED, not built — name embeddings can't separate variants from near-names (overlapping distributions on 30 labelled pairs); a deterministic partial-name rule ships instead (fresh pairs: 8/10 linked, 0/10 false merges, 0/3 ambiguous linked; `test_partial_name_rule_links_variants_and_refuses_near_names`, `test_a_partial_name_links_to_the_known_actor_and_records_an_alias`, `test_partial_names_never_link_when_ambiguous_or_conflicting` — the ambiguity guard confirmed load-bearing by mutation). **D-58 (holistic review):** the first version also linked in the SUPERSET direction and fused relatives into the named actor ("Mira's mother" → Mira, even a PC) and districts into their city ("Vel Market" → Vel); now subset-only with leading-title and possessive guards (`test_relatives_and_retitled_names_never_merge_into_a_known_actor`, each review counterexample refused). Residual risk: a new character introduced by any single name word that exactly one existing actor shares is linked unless their factions conflict (since D-68 a stated place no longer blocks a partial link) (relatives in one house don't). |
 | Claim/belief layer (beliefs surfaced with certainty phrasing) | proven | phrasing is deterministic; a live narrator *actually hedging* on it is stub-tested, never live. |
 | **Thesis: state-tracked narration > raw transcript** | **proxy** | the ablation *mechanism* (bare ⇒ 0 state) is proven; the *qualitative* win is one caveated live run (docs/live-run.md). |
 | `fact_consistency` (T2) | proxy | narrator-origin `truth=true` survivors / all but superseded ones (D-70) — a regression trend, not ground-truth verification. |
-| Consequence/evidence gating (D-21) at commit | deferred | `truth=true` rests on the extractor's provenance label — "not a hard security boundary." |
+| Consequence/evidence gating (D-21) at commit | deferred | apart from the quoted-speech check (D-73), `truth=true` rests on the extractor's provenance label — "not a hard security boundary." |
 | Memory compression / summarizer (synopses, journals) | deferred | `BeatResolvedPayload.synopsis` + memory-`kind` "synopsis/journal" are reserved; only "beat" is ever written. |
 
 ## Phase 2 — timeline · Phase 3 — mechanics
@@ -481,3 +481,17 @@ still said it had two bounded mutations — retiring a narrator fact is the thir
 | The lockdown (tools off, a fresh empty directory per call, prompt on stdin, a scrubbed environment) | **proven (structural) + live-checked** | the flags are asserted in tests; live, a planted canary file outside the directory leaked through `codex exec` with only its read-only sandbox, and did not leak through either adapter (rechecked after the review, with the wider Codex feature list). |
 | Codex's tools are off | **by construction for the features Codex 0.163 lists; backstop beyond** | each tool feature is disabled and checked against `codex features list` before the first call (a retired name refuses to run, tested). A tool behind a feature name added later isn't on the list: a tool event in the output fails the call (tested). |
 | The CLI never sees Uro's secrets | **proven (test) + live** | the environment is an allowlist; a test plants `ANTHROPIC_API_KEY`/`URO_SECRET_KEY` and the fake CLI sees neither. Live, with bogus API keys in Uro's environment, both CLIs still answered on their own logins. |
+
+## Post-PoC — extraction quality, measured (2026-11-01, D-73)
+
+Three open quality items from the live runs, each measured before anything was changed. Replays use
+recorded narration (`scripts/extraction_replay.py`): four tuning sessions (33 beats) and five
+held-out ones (40 beats).
+
+| Item | Status | Evidence |
+|---|---|---|
+| Atmosphere recorded as fact | **model-dependent → reduced (prompt)** | `gpt-5.6-luna` (the bound extractor): no atmosphere among its narrator facts. `gpt-4o-mini`: ~10 of ~22 per run on the tuning set; with the closing check, ~4 across all nine sessions (~1 on the five held out), with the reported plans and rumors kept (compared with the baseline on each held-out session). Its sayings ("Names are poor currency in Brackenford") still become testimony claims, as before. |
+| A character's quoted line recorded as narrator fact | **found → fixed (structural)** | `gpt-4o-mini` did it ~5 times per run. The quoted-speech check flags 10 of the instance's 125 historical narrator claims — all speech — and no others. |
+| Planner re-ask latency | **closed by data** | since 2026-10-01: 89 planner calls against 90 narrator/dialogue calls on the bound model — about one per beat, so re-asks almost never happen. |
+| A borderline thread varies by run | **accepted** | two `gpt-5.6-luna` runs on the same narration record the same plots grouped differently (2 vs 3 threads; 1 vs 2). Merging similar threads could fuse distinct plots (D-51). |
+

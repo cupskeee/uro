@@ -193,7 +193,9 @@ async def _main(source: str, provider: str) -> None:
             extraction, used = await _extract(router, messages, store, branch)
             calls += used
             events = (
-                await run_gauntlet(store, branch, extraction, policy=policy) if extraction else []
+                await run_gauntlet(store, branch, extraction, policy=policy, narration=b.narration)
+                if extraction
+                else []
             )
             await store.append_beat(
                 branch,

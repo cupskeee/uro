@@ -1170,3 +1170,85 @@ async def test_a_superseded_fact_does_not_count_against_consistency(
     change = ProposedClaim(statement="The hatch stands open.", supersedes=[old])
     await store.append_beat(branch, await run_gauntlet(store, branch, Extraction(claims=[change])))
     assert await store.fact_consistency(branch) == (1, 1)
+
+
+async def test_a_characters_quoted_line_is_testimony_whatever_its_label(
+    store: PostgresEventStore,
+) -> None:
+    # 2026-11-01 replays: gpt-4o-mini labelled Mera's quoted lines as the narrator's, so "Old Weck
+    # knows the channels better than any living man" became canon (truth=true). The gauntlet now
+    # checks where a narrator claim's words come from: a character's quoted speech is testimony.
+    branch = await _branch(store)
+    narration = (
+        "Rain needles the Brinehouse windows. Mera sets down a cup and leans in.\n"
+        '"Old Weck knows the channels better than any living man," she says. "People avoid him '
+        "— every boat he warns comes back empty, or not at all.\n"
+        "The lamp gutters. The cellar door is barred with an iron bolt, rusted shut."
+    )
+    ex = Extraction(
+        claims=[
+            ProposedClaim(statement="Old Weck knows the channels better than any living man."),
+            ProposedClaim(  # the open quote runs to the paragraph's end (multi-paragraph speech)
+                statement="Every boat Old Weck warns comes back empty.", speaker="Mera"
+            ),
+            ProposedClaim(statement="The cellar door is barred with a rusted iron bolt."),
+        ]
+    )
+    events = await run_gauntlet(store, branch, ex, narration=narration)
+    claims = {e.payload["statement"]: e.payload for e in _of_type(events, "ClaimRecorded")}
+    weck = claims["Old Weck knows the channels better than any living man."]
+    assert (weck["truth"], weck["origin"]) == ("unknown", "dialogue")
+    boats = claims["Every boat Old Weck warns comes back empty."]
+    assert (boats["truth"], boats["origin"]) == ("unknown", "dialogue")
+    (belief,) = _of_type(events, "BeliefChanged")  # a named speaker holds what they said
+    assert belief.payload["claim_id"] == boats["claim_id"]
+    door = claims["The cellar door is barred with a rusted iron bolt."]
+    assert (door["truth"], door["origin"]) == ("true", "narrator")  # the narrator's own words
+
+    # without the narration (an embedder calling the gauntlet directly) the label still decides
+    events = await run_gauntlet(store, branch, ex)
+    assert all(e.payload["truth"] == "true" for e in _of_type(events, "ClaimRecorded"))
+
+
+def test_speech_is_split_per_paragraph_and_by_quote_style() -> None:
+    from uro_core.pipeline.extraction import _split_speech, _spoken_not_narrated
+
+    told, said = _split_speech(
+        'He nods. “The Duke means war.” «Run» she says.\n"Open, never closed\nAll quiet.'
+    )
+    assert "Duke" in said and "Run" in said and "Open" in said
+    assert "nods" in told and "she says" in told and "All quiet" in told  # an unclosed quote ends
+    assert not _spoken_not_narrated("The rain falls.", 'Rain falls. "Hello," she says.')
+    assert not _spoken_not_narrated("...", '"..."')  # no content words, nothing to judge
+
+
+async def test_the_engine_checks_provenance_against_its_narration(
+    store: PostgresEventStore,
+) -> None:
+    # The guard needs the narration the claims came from; the engine passes it (D-73).
+    world = await store.create_world(f"said-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    said = '{"claims":[{"statement":"The Duke means to burn the docks.","provenance":"narrator"}]}'
+    provider = ScriptedProvider(
+        narration='Mera wipes the bar. "The Duke means to burn the docks," she says.',
+        completions=[said],
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=provider))
+    await engine.run_beat(campaign, "player-1", "I ask Mera what she's heard")
+    (claim,) = await store.list_claims(campaign.branch_id)
+    assert (claim.truth, claim.origin) == ("unknown", "dialogue")
+
+
+def test_the_extractor_ends_on_its_durability_check() -> None:
+    # Measured on replays (D-73): gpt-4o-mini recorded atmosphere as fact until the rule was
+    # restated LAST, right after the schema; its first wording ("what someone says") also dropped
+    # reported news, so news is named as always kept.
+    from uro_core.pipeline.extraction import build_extractor_messages
+    from uro_core.pipeline.recall import RecallBundle
+
+    user = build_extractor_messages(
+        RecallBundle(recent_beats=[], actors=[], claims=[], beliefs=[]), "Rain falls."
+    )[-1].content
+    tail = user[user.index("LAST CHECK") :]
+    assert "a month from now" in tail and "NEVER delete news" in tail
+    assert "says" not in tail.split("NEVER")[0]  # speech is never a moment to delete

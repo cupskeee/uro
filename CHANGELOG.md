@@ -9,6 +9,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Fixed
+- **A character's line is no longer recorded as fact** (D-73). When the extractor labels a claim
+  as the narrator's but its words come from a character's quoted speech in the narration, the
+  claim is recorded as testimony (`truth=unknown`), not canon. Seen with `gpt-4o-mini` as the
+  extractor: "Old Weck knows the channels better than any living man", said by Mera, became fact.
+- **Less atmosphere recorded as fact by small extractor models** (D-73). The extractor's prompt
+  now ends with a short check: drop what only describes this moment, keep what would still be true
+  in a month, and always keep reported news and plans. On replayed sessions, `gpt-4o-mini`'s
+  atmosphere claims fell from ~24 to ~4; `gpt-5.6-luna` was unaffected. Embedders calling
+  `run_gauntlet` directly can pass `narration=` to get the quoted-speech check.
+
 ## [0.11.0] - 2026-11-01
 
 Upgrading: run `uro db migrate` (migration 026 adds `reasoning_effort` to role bindings).
