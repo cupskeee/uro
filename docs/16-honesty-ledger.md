@@ -472,3 +472,10 @@ still reached the narrator through an on-stage character's belief
 failure (`test_a_superseded_fact_does_not_count_against_consistency`); and the extractor's
 trust-boundary statements (its docstring, the whitelist rows in docs/12 and this ledger, CLAUDE.md)
 still said it had two bounded mutations — retiring a narrator fact is the third.
+
+## Post-PoC — headless CLI providers (2026-11-01, D-72)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| `claude_cli` / `codex_cli` run the logged-in CLIs | **live-validated (one session)** | three Ashfall beats with narrator/dialogue/planner on `claude -p` and the extractor on `codex exec` at `low`: claims extracted, a check rolled, the world rule fired, no errors. ~2× the HTTP providers' latency. Deterministic tests drive a fake CLI (`test_cli_providers.py`). |
+| The lockdown (no tools, empty directory, prompt on stdin) | **proven (structural) + live-checked** | the flags are asserted in tests (each fails when removed); live, a planted canary file outside the directory leaked through `codex exec` with only its read-only sandbox, and did not leak through either adapter. |
