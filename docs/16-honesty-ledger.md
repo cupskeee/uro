@@ -541,3 +541,20 @@ logged-in CLIs; no role binding was changed.
 | Time in the prompts | **not told** | no prompt template mentions the day. |
 | Rule files read what they hold | **proven** | a key `rules.yaml`/`agendas.yaml` doesn't read is refused (`test_an_agenda_written_into_rules_yaml_is_refused`); a `knows` ref to nobody is refused (`test_a_knows_ref_to_nobody_is_refused`). Faction/location refs on seeds are still not checked (pre-existing). |
 
+## Post-PoC — the long run (2026-11-02, run by Claude, v0.13.0)
+
+One Ashfall campaign of 146 beats in four acts with 7-, 7- and 14-day time-skips, through the model
+registry (Codex `gpt-5.6-luna` for every chat role, `text-embedding-3-large`). Scripted beats
+measured; an LLM "player" played the other 110 toward each act's goal, told not to mention the
+planted things. 852 calls, no errors, 15.1 s a beat, ~37 minutes. 12 facts were planted (acts 1-2)
+and called back 56-122 beats later with thematic or oblique intents (acts 3-4).
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Recall of callbacks at campaign scale | **live-validated (one campaign)** | the planted fact reached the narrator in 12/12 callbacks. The plant's own beat ranked in the top 4 for 10/12 (mostly 1st or 2nd among 70-125 memories outside the window); the other two came through claims. Every callback got 4 of 4 memories (D-75). |
+| The narrator USES what recall brings | **partial: 8/12** | 8 used the planted detail (some in other words: the map as "the salt-stiffened chart… Grey Shoals"), 1 partly (the sword's notches, not its name), 3 not: it misread the letter errand (sent the player east, though "a sealed letter must be delivered to Orla in Vel" was an active thread in the prompt), sidestepped the nickname, and never tied the fear to Weck or the brother. The gap is narrator adherence, not retrieval. |
+| The rumor across a skip, in play | **live-validated** | after the first skip Brannoc told it hedged ("Only talk… no one who saw it has come in to swear by the tale"); beliefs Weck 0.9, Hesk 0.495, Brannoc 0.272 as designed. |
+| Bystander knowledge | **narrator-improvised, then recorded** | Ysolde, who holds no belief, told a garbled variant of what Brannoc had just said in the same room; the extractor then recorded it as her testimony and belief. Old Weck, 83 beats after witnessing Mera's tale, retold it consistently, from recall. No harm to play observed. |
+| Time passing in play | **measured: narrated every time, recorded never** | the narration passed time on all 8 beats where the player slept, waited, travelled or rested, and on 1 of the other 138 (where the intent said "at first light"); none of it came from speech. The fiction ran ~36 days; the clock, moved only by the skips, recorded 28. This is the labelled data the D-76 clock gate asked for. |
+| State over a long campaign | **healthy, one watch item** | 13 actors (no duplicates), 128 claims (30 narrator facts, all lasting clues, no atmosphere), 146 memories. 9 plot threads, all still live, none resolved: player commitments (the promise, the letter) became threads, and scene-level ones accumulate. Every thread reaches every narrator prompt. |
+
