@@ -181,12 +181,14 @@ an unknown campaign.
 
 Every HTTP route declares its response shape (`uro_server/schemas.py`), so `GET /openapi.json`
 describes what each endpoint returns and a client can generate its types from it (for TypeScript,
-`openapi-typescript`). FastAPI validates every response against its schema: a handler that returns a
-key its schema doesn't declare fails instead of sending it, and the tests reach every route, so the
-published shapes and the real ones can't drift apart. A key a handler leaves out stays out (no
-`null` is added). Core models are reused where a handler returns one (`World`, `Campaign`,
-`Marker`, `ModelConnection`, `WorldBundle`, `DomainEvent`, …); the state rows mirror the projection
-catalog column for column (a test keeps them in lockstep). Opaque by design and typed only as
+`openapi-typescript`). FastAPI validates every response against its schema. Every shape a handler
+builds by hand is strict — the envelopes, the state rows and the core models a route returns whole —
+so an undeclared key fails instead of being sent, and the tests reach every route. A core model
+nested in an envelope (`ModelConnection`, `Campaign`, `DomainEvent`, …) is a dump of that model
+itself, so it matches by construction and is not checked for extra keys. A key a handler leaves out
+stays out (no `null` is added), except on the export, which sends every field so the bundle carries
+its format version `v`. Timestamps are ISO 8601 as pydantic writes them (`…Z` for UTC). The state
+rows mirror the projection catalog column for column (a test keeps them in lockstep). Opaque by design and typed only as
 objects: a ruleset's sheet and settings schemas (D-30), event payloads, edge attributes. The
 WebSocket frames below are not in the OpenAPI document (it has no WebSocket model); this section is
 their contract.

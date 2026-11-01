@@ -20,10 +20,15 @@ Enforced by construction (structural — cannot be bypassed):
   player's intent text (see engine._extract) — so a player cannot directly assert
   a claim into the extractor.
 
-- Quoted speech is testimony: a claim labelled 'narrator' whose words come mostly from a
-  character's quoted lines in the narration (not the narrator's own text) is recorded as
-  `truth=unknown`, origin 'dialogue' — a lexical check of WHERE the words come from, so it catches
-  a character's lines relabelled as narration (a small model's habit), not a paraphrase.
+Enforced in code when the caller passes the beat's narration (the engine always does; a direct
+`run_gauntlet` caller must pass `narration=`):
+- Quoted speech is testimony (D-73): a claim labelled 'narrator' whose words come mostly from a
+  character's quoted lines, and less than half from the narrator's own text, is recorded as
+  `truth=unknown`, origin 'dialogue'. A lexical check of WHERE the words come from: it catches a
+  character's lines relabelled as narration (a small model's habit), not a paraphrase. Only
+  "…", “…” and «…» count as quotes, and a short title-case span ("The Drowned Rat") is a name, not
+  speech; single-quoted speech (straight or curly) is read as the narrator's text, like
+  reported speech.
 
 Enforced by policy (correct as far as the extractor classifies honestly):
 - Provenance: narrator-asserted → `truth=true`; a character's speech → `truth=unknown`
@@ -44,7 +49,8 @@ Parsing salvages per ITEM (D-51): a null optional field takes its default and on
 item is dropped alone — it never discards the rest of the beat's extracted state.
 
 NOT yet implemented (docs/13, deferred): evidence-span/consequence gating. The "a truth=true
-claim must not merely restate a character's assertion" guard covers QUOTED speech only (above);
+claim must not merely restate a character's assertion" guard covers double-quoted speech only
+(above);
 otherwise `truth=true` rests on the extractor's provenance label, and a narrator that echoes a
 player's words is a residual surface, mitigated only by the narrator being the trusted tier. Do
 not read this as a hard security boundary.
@@ -231,35 +237,78 @@ def _content_words(text: str) -> set[str]:
     return out
 
 
+_NAME_JOINERS = frozenset({"the", "of", "and", "a", "an", "de", "du", "la", "le", "von", "van"})
+
+
+def _is_utterance(span: str) -> bool:
+    """A quoted span that reads as someone speaking. A short one in title case with no `!` or `?`
+    is a name, a title or an epithet — "The Drowned Rat", "the Butcher of Vel." — and stays
+    narration (review: such names turned the narrator's own facts into testimony); "The Duke means
+    war." has lowercase words, so it is speech."""
+    words = span.split()
+    if not words:
+        return False
+    if len(words) > 5 or any(ch in span for ch in "!?"):
+        return True
+    return not all(
+        w[:1].isupper() or not w[:1].isalpha() or w.strip(",.;:").lower() in _NAME_JOINERS
+        for w in words
+    )
+
+
 def _split_speech(narration: str) -> tuple[str, str]:
-    """(the narrator's own text, the quoted speech). Per paragraph, so a quote left open at a
-    paragraph's end (multi-paragraph speech) closes there instead of inverting the rest."""
+    """(the narrator's own text, the quoted speech). A quote left open at a line break closes there
+    when a blank line follows or the next line opens a quote (speech running over paragraphs), and
+    otherwise continues onto the next line (a wrapped quote) — so neither case inverts the text
+    after it. A `"` right after a digit is an inch mark, not a quote."""
     told: list[str] = []
     said: list[str] = []
-    for para in narration.split("\n"):
-        closer: str | None = None
-        for ch in para:
-            if closer is None and (ch == '"' or ch in _OPEN_CLOSE):
-                closer = '"' if ch == '"' else _OPEN_CLOSE[ch]
-            elif closer is not None and ch == closer:
+    closer: str | None = None
+    span: list[str] = []
+
+    def close() -> None:
+        text = "".join(span)
+        (said if _is_utterance(text) else told).append(f" {text} ")
+        span.clear()
+
+    for i, ch in enumerate(narration):
+        prev = narration[i - 1] if i else ""
+        if ch == "\n" and closer is not None:
+            ahead = re.match(r"[ \t]*(\n)?\s*(.?)", narration[i + 1 :])
+            if ahead and (ahead.group(1) or ahead.group(2) in ('"', *_OPEN_CLOSE)):
+                close()
                 closer = None
+                told.append(ch)
             else:
-                (told if closer is None else said).append(ch)
-        told.append("\n")
-        said.append("\n")
+                span.append(" ")
+        elif closer is None:
+            if ch in _OPEN_CLOSE or (ch == '"' and not prev.isdigit()):
+                closer = _OPEN_CLOSE.get(ch, '"')
+            else:
+                told.append(ch)
+        elif ch == closer:
+            close()
+            closer = None
+        else:
+            span.append(ch)
+    if closer is not None:  # an unclosed quote runs to the end of the narration
+        close()
     return "".join(told), "".join(said)
 
 
 def _spoken_not_narrated(statement: str, narration: str) -> bool:
-    """True when a claim's words come mostly from a character's quoted speech rather than the
-    narrator's own text: then it is testimony, whatever provenance the extractor gave it."""
+    """True when a claim's words come mostly from a character's quoted speech and the narrator's
+    own text supports less than half of them: then it is testimony, whatever provenance the
+    extractor gave it. A narrator who confirms a shout in other words keeps the fact (review: "The
+    seal is broken!" + "the vault seal has cracked apart": the change must still retire the old
+    "sealed" fact)."""
     words = _content_words(statement)
     if not words:
         return False
     told, said = _split_speech(narration)
     in_told = len(words & _content_words(told)) / len(words)
     in_said = len(words & _content_words(said)) / len(words)
-    return in_said >= 0.5 and in_said > in_told
+    return in_said >= 0.5 and in_told < 0.5
 
 
 class _Name(NamedTuple):
@@ -364,8 +413,9 @@ def build_extractor_messages(
         "someone does, sees, hears or feels right now (a gesture, a sound, light, weather, a "
         "smell, a mood, a comparison). Keep a claim if it would still be true and worth knowing a "
         "month from now: who someone is, what they own or know, a place's lasting state, an "
-        "injury, a change that stays. NEVER delete news, a rumor, a warning or a plan a character "
-        "reports — those are dialogue claims, always kept."
+        "injury, a change that stays. NEVER delete NEW news, a rumor, a warning or a plan a "
+        "character reports: those are dialogue claims. (A character retelling a KNOWN CLAIM is "
+        "still a restatement — leave that out.)"
     )
     system = (env or DEFAULT_ENV).render("extractor.system.j2")
     return [
@@ -689,10 +739,22 @@ async def run_gauntlet(
             events  # claims/beliefs disabled → the entity graph only (the engine disclaims recall)
         )
 
+    # Each claim's provenance, settled once: a 'narrator' claim made of a character's quoted
+    # speech is the character's (D-73). Both loops below use it, so a speaker the check reveals is
+    # pre-minted like any other (review: it was minted only when its claim came up).
+    origins = [
+        "dialogue"
+        if pc.provenance == "narrator"
+        and narration
+        and _spoken_not_narrated(pc.statement.strip(), narration)
+        else pc.provenance
+        for pc in extraction.claims
+    ]
+
     # Pre-mint dialogue speakers so a claim *about* a speaker links to the same actor_id the belief
     # uses, not a divergent name-token.
-    for pc in extraction.claims:
-        if pc.durable and pc.provenance == "dialogue" and pc.speaker and pc.speaker.strip():
+    for pc, origin in zip(extraction.claims, origins, strict=True):
+        if pc.durable and origin == "dialogue" and pc.speaker and pc.speaker.strip():
             resolve_actor(pc.speaker)
 
     # Restatement guard (D-51): live play re-proposed a KNOWN claim verbatim, beat after beat
@@ -712,17 +774,14 @@ async def run_gauntlet(
         return claim_id in believed[actor_id]
 
     retired: set[str] = set()  # facts superseded this beat (D-70)
-    for pc in extraction.claims:
+    for pc, origin in zip(extraction.claims, origins, strict=True):
         if not pc.durable:
             continue  # flavor / atmosphere — not canon (docs/05 promotion rules)
         statement = pc.statement.strip()
         if not statement:
             continue
         subject_refs = [(link_actor(s) or _name_token(s)) for s in pc.about if s.strip()]
-        origin = pc.provenance
-        if origin == "narrator" and narration and _spoken_not_narrated(statement, narration):
-            origin = "dialogue"  # a character said it: testimony, never canon
-        truth: Truth = "true" if origin == "narrator" else "unknown"
+        truth: Truth = "true" if origin == "narrator" else "unknown"  # a character's: testimony
         if truth == "true":
             # A CHANGE of state (D-70): the narrator says the world moved on ("the seal snaps").
             # Only a fact the narrator itself established in play is retired; authored, mechanical,

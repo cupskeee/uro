@@ -2,11 +2,13 @@
 client can generate its types from it.
 
 Each route declares one of these as its `response_model`, so FastAPI validates the handler's
-output against it on every response: a handler returning a key its schema doesn't declare fails
-(the server's envelope models forbid extra keys), and a test that calls the route catches it. Core
-models (`World`, `Campaign`, `ModelConnection`, …) are reused as-is where a handler returns one.
-Routes are declared with `response_model_exclude_unset`, so a key a handler leaves out stays out
-(no `null` appears that wasn't sent before).
+output against it on every response. Every shape a handler builds by hand is strict (an undeclared
+key fails, and a test that calls the route catches it): the envelopes below, the state rows, and
+the core models a route returns whole (`WorldOut`, `MarkerOut`, …). A core model nested in an
+envelope is a dump of that model itself (`ModelConnection`, `Campaign`, …), so it matches by
+construction; it is not checked for extra keys. Routes are declared with
+`response_model_exclude_unset`, so a key a handler leaves out stays out (no `null` appears that
+wasn't sent before). Timestamps are ISO 8601 as pydantic writes them (`…Z` for UTC).
 
 State rows mirror the projection catalog (`_SNAPSHOT_TABLES` in the Postgres projector); a test
 keeps the two in lockstep. Ruleset sheets, edge attributes and event payloads are opaque by design
@@ -20,8 +22,9 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from uro_core.chronicler import ReceiptEntry
 from uro_core.domain.events import BeatResolvedPayload, DomainEvent
+from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.engines.probe import ProbeResult
-from uro_core.export import BundleEvent
+from uro_core.export import BundleCommit, BundleEvent, WorldBundle
 from uro_core.ports.model_registry import ModelConnection, ProviderCredential, RoleBinding
 from uro_core.ports.tokens import TokenInfo
 from uro_core.timeline.models import (
@@ -31,7 +34,9 @@ from uro_core.timeline.models import (
     LineageEntry,
     Marker,
     ParticipantNote,
+    World,
 )
+from uro_core.worldpack.create import SeedResult
 from uro_core.worldpack.models import ThreadSeed
 from uro_core.worldpack.sufficiency import SufficiencyDimension
 
@@ -40,6 +45,35 @@ class Out(BaseModel):
     """A response envelope: an undeclared key fails validation, so a handler and its schema
     can't drift apart."""
 
+    model_config = ConfigDict(extra="forbid")
+
+
+# --- core models a route returns whole, made strict: a handler that builds one by hand (POST
+# /worlds does) can't add a key the model doesn't have. Nested core models are dumps of the model
+# itself, so they match it by construction. ---
+
+
+class WorldOut(World):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MarkerOut(Marker):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SeedResultOut(SeedResult):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ExtractionPolicyOut(ExtractionPolicy):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CommitOut(BundleCommit):
+    model_config = ConfigDict(extra="forbid")
+
+
+class WorldBundleOut(WorldBundle):
     model_config = ConfigDict(extra="forbid")
 
 

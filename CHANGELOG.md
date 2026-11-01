@@ -12,8 +12,10 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ### Added
 - **Typed API responses** (D-74). Every HTTP route publishes its response shape in
   `/openapi.json`, so a client can generate its types (for TypeScript, `openapi-typescript`). The
-  server validates each response against that schema, so the published shapes can't drift from
-  the real ones. The wire is unchanged except for the fix below.
+  server validates each response against that schema, and every shape a handler builds by hand is
+  strict, so the published shapes can't drift from the real ones. The wire is unchanged except for
+  the fix below and one detail: a credential's `last_refresh` in `GET /providers` is now written
+  `…Z` for UTC (it was `…+00:00`), like the token list.
 
 ### Fixed
 - **Dry-run events spell the history pass `pass`** (D-74), as the stored event log and docs/12
@@ -22,11 +24,14 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   as the narrator's but its words come from a character's quoted speech in the narration, the
   claim is recorded as testimony (`truth=unknown`), not canon. Seen with `gpt-4o-mini` as the
   extractor: "Old Weck knows the channels better than any living man", said by Mera, became fact.
+  Only double quotes count, a short title-case quote is a name, and a fact the narrator's own text
+  supports stays the narrator's.
 - **Less atmosphere recorded as fact by small extractor models** (D-73). The extractor's prompt
   now ends with a short check: drop what only describes this moment, keep what would still be true
-  in a month, and always keep reported news and plans. On replayed sessions, `gpt-4o-mini`'s
-  atmosphere claims fell from ~24 to ~4; `gpt-5.6-luna` was unaffected. Embedders calling
-  `run_gauntlet` directly can pass `narration=` to get the quoted-speech check.
+  in a month, and keep new news and plans a character reports (a retelling of a known claim is
+  still left out). On replayed sessions, `gpt-4o-mini`'s atmosphere claims fell from ~24 to ~4–6;
+  `gpt-5.6-luna` already recorded none, and still does with the check. Embedders calling
+  `run_gauntlet` directly must pass `narration=` to get the quoted-speech check.
 
 ## [0.11.0] - 2026-11-01
 

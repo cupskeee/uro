@@ -48,7 +48,6 @@ from pydantic import ValidationError
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
-from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.errors import ExportError
 from uro_core.export import BundleCommit, WorldBundle
 from uro_core.pipeline.engine import NARRATION_DONE, Engine
@@ -56,7 +55,7 @@ from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
-from uro_core.timeline.models import FORK_TIME_SKIP, STARTING_GEAR, Marker, World
+from uro_core.timeline.models import FORK_TIME_SKIP, STARTING_GEAR, World
 from uro_core.worldpack.create import SeedResult
 
 from uro_server import schemas as S
@@ -1096,7 +1095,7 @@ def create_app(
             raise HTTPException(status_code=501, detail="router reload not enabled")
         return await deps.reload_router()
 
-    @app.get("/extraction-policy", **_out(ExtractionPolicy))
+    @app.get("/extraction-policy", **_out(S.ExtractionPolicyOut))
     async def get_extraction_policy_ep(request: Request) -> dict[str, Any]:
         """The instance's emergent-extraction policy (D-49/D-50): which categories play may create —
         `{extract_actors, extract_places, extract_factions, extract_threads, extract_claims}`.
@@ -1104,7 +1103,7 @@ def create_app(
         _require_operator(request)
         return (await _mgmt().get_extraction_policy()).model_dump()
 
-    @app.patch("/extraction-policy", **_out(ExtractionPolicy))
+    @app.patch("/extraction-policy", **_out(S.ExtractionPolicyOut))
     async def patch_extraction_policy_ep(
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
@@ -1281,7 +1280,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="limit must not be negative")
         return limit
 
-    @app.post("/worlds", **_out(World))
+    @app.post("/worlds", **_out(S.WorldOut))
     async def create_world(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:  # noqa: B008
         # OPERATOR-only (D-46, refining D-44): create_world instantiates a fresh world + main branch
         # — the same structural write as `/worlds/import` (operator-only), so it's gated alike.
@@ -1313,7 +1312,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"invalid world: {exc}") from exc
         return {"world_id": w.world_id, "main_branch_id": w.main_branch_id, "name": w.name}
 
-    @app.get("/worlds", **_out(list[World]))
+    @app.get("/worlds", **_out(list[S.WorldOut]))
     async def list_worlds(request: Request) -> list[dict[str, Any]]:
         _auth(request)
         return [w.model_dump() for w in await _mgmt().list_worlds()]
@@ -1398,7 +1397,7 @@ def create_app(
             "backfilled": result.backfilled,
         }
 
-    @app.post("/worlds/{world_id}/seed", **_out(SeedResult))
+    @app.post("/worlds/{world_id}/seed", **_out(S.SeedResultOut))
     async def seed_world_from_pack(
         world_id: str,
         request: Request,
@@ -1580,7 +1579,7 @@ def create_app(
                 result["head_commit"] = fresh.head_commit
         return result
 
-    @app.post("/worlds/{world_id}/markers", **_out(Marker))
+    @app.post("/worlds/{world_id}/markers", **_out(S.MarkerOut))
     async def create_world_marker(
         world_id: str,
         request: Request,
@@ -1648,7 +1647,7 @@ def create_app(
         )
         return {"branch": branch, "events": [e.model_dump() for e in events]}
 
-    @app.get("/worlds/{world_id}/commits/{commit_id}", **_out(BundleCommit))
+    @app.get("/worlds/{world_id}/commits/{commit_id}", **_out(S.CommitOut))
     async def world_commit_detail(
         world_id: str, commit_id: str, request: Request
     ) -> dict[str, Any]:
@@ -1742,7 +1741,9 @@ def create_app(
         beats = await store.recent_beats(b.branch_id, limit)
         return {"branch": branch, "beats": [bt.model_dump() for bt in beats]}
 
-    @app.get("/worlds/{world_id}/export", **_out(WorldBundle))
+    # Every field, set or default: the bundle's `v` is a default, and a bundle must carry its format
+    # version like `uro world export` writes it (review: exclude_unset dropped it).
+    @app.get("/worlds/{world_id}/export", response_model=S.WorldBundleOut)
     async def export_world_bundle(world_id: str, request: Request) -> WorldBundle:
         """Export the whole world as a portable, hash-chain-verified bundle (BE-8, docs/08) —
         mirrors `uro world export`. OPERATOR-only (D-45): the bundle carries the ENTIRE event log
@@ -1753,9 +1754,9 @@ def create_app(
         store = _mgmt()
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
-        return await store.export_world(world_id)  # the model itself: not dumped and re-read
+        return await store.export_world(world_id)
 
-    @app.post("/worlds/import", **_out(World))
+    @app.post("/worlds/import", **_out(S.WorldOut))
     async def import_world_bundle(
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
@@ -2122,7 +2123,7 @@ def create_app(
             "ratio": consistent / total if total else 1.0,
         }
 
-    @app.post("/campaigns/{campaign_id}/end", **_out(Marker))
+    @app.post("/campaigns/{campaign_id}/end", **_out(S.MarkerOut))
     async def end_campaign_endpoint(
         campaign_id: str,
         request: Request,
