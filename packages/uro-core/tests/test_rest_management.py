@@ -1017,3 +1017,58 @@ async def test_a_streamed_beat_s_commit_is_remembered_for_its_campaign(
     _ = [chunk async for chunk in deps.run_beat(campaign.campaign_id, "alice", "I knock")]
     head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
     assert deps.last_commit(campaign.campaign_id) == head
+
+
+async def test_every_state_section_matches_its_published_schema(store: PostgresEventStore) -> None:
+    # The state endpoints validate each row against uro_server.schemas (typed responses). Put a row
+    # in EVERY projection and read all eleven sections back, so each row model meets real columns.
+    from uro_core.domain.events import (
+        actor_created,
+        belief_changed,
+        claim_recorded,
+        counter_changed,
+        edge_added,
+        faction_created,
+        module_cause,
+        place_created,
+        thread_created,
+    )
+
+    async with _client(store) as client:
+        world_id = (await client.post(_q("/worlds"), json={"name": f"rows-{new_id()}"})).json()[
+            "world_id"
+        ]
+        r = await client.post(
+            _q(f"/worlds/{world_id}/campaigns"), json={"participant": "alice", "new_pc_name": "Ash"}
+        )
+        campaign_id, branch = r.json()["campaign_id"], r.json()["branch_id"]
+        await store.append_beat(
+            branch,
+            [
+                actor_created(
+                    actor_id="a:mera", name="Mera", role="barkeep", aliases=["the barkeep"]
+                ),
+                place_created(place_id="p:inn", name="The Brinehouse", kind="site"),
+                faction_created(faction_id="f:salt", name="Saltborn"),
+                edge_added(src="a:mera", rel_type="member_of", dst="f:salt", attrs={"since": 3}),
+                thread_created(thread_id="t:boats", stakes="Boats come in light.", state="active"),
+                claim_recorded(claim_id="c:watch", statement="The watch has doubled."),
+                belief_changed(actor_id="a:mera", claim_id="c:watch", confidence=0.6),
+                counter_changed(
+                    scope_ref="f:salt", key="heat", to_value=3, caused_by=module_cause("heat")
+                ),
+            ],
+        )
+        sections = "actors,claims,beliefs,places,pcs,sheets,items,factions,edges,threads,counters"
+        r = await client.get(_q(f"/campaigns/{campaign_id}/state?sections={sections}"))
+        assert r.status_code == 200, r.text
+        state = r.json()["state"]
+        assert all(state[s] for s in sections.split(",")), state  # a row in every section
+        assert state["edges"][0]["attrs"] == {"since": 3} and state["counters"][0]["value"] == 3
+
+        r = await client.get(_q(f"/worlds/{world_id}/state?at={branch}&sections={sections}"))
+        assert r.status_code in (200, 404), r.text  # `at` takes a commit; a branch id is a 404
+        head = (await store.get_branch(branch)).head_commit  # type: ignore[union-attr]
+        r = await client.get(_q(f"/worlds/{world_id}/state?at={head}&sections={sections}"))
+        assert r.status_code == 200, r.text
+        assert set(r.json()) == {"at", "state"}  # no `branch` key for a commit read

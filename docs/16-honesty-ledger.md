@@ -495,3 +495,12 @@ held-out ones (40 beats).
 | Planner re-ask latency | **closed by data** | since 2026-10-01: 89 planner calls against 90 narrator/dialogue calls on the bound model — about one per beat, so re-asks almost never happen. |
 | A borderline thread varies by run | **accepted** | two `gpt-5.6-luna` runs on the same narration record the same plots grouped differently (2 vs 3 threads; 1 vs 2). Merging similar threads could fuse distinct plots (D-51). |
 
+## Post-PoC — typed API responses (2026-11-01, D-74)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| `/openapi.json` describes every response | **proven** | `test_openapi_describes_every_response`: all 56 routes have a response schema, none a bare object. |
+| A handler can't send an undeclared key | **proven (structural)** | the envelope models forbid extra keys and FastAPI validates every response; the whole suite reaches all 56 routes with a response (measured by recording each validated response). Mutations caught: an extra key, a dropped row column, an untyped route, optional keys sent as `null`. |
+| State rows match the projections | **proven** | `test_state_rows_match_the_projection_catalog` (models vs `_SNAPSHOT_TABLES`) and a real-store read of all eleven sections. |
+| WebSocket frames | **documented, not in OpenAPI** | OpenAPI has no WebSocket model; docs/08 lists the frames and `test_server.py` pins their key sets (BE-11). |
+

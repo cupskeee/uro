@@ -9,7 +9,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **Typed API responses** (D-74). Every HTTP route publishes its response shape in
+  `/openapi.json`, so a client can generate its types (for TypeScript, `openapi-typescript`). The
+  server validates each response against that schema, so the published shapes can't drift from
+  the real ones. The wire is unchanged except for the fix below.
+
 ### Fixed
+- **Dry-run events spell the history pass `pass`** (D-74), as the stored event log and docs/12
+  do; `POST /campaigns/{c}/dry-run` sent `caused_by.history_pass`.
 - **A character's line is no longer recorded as fact** (D-73). When the extractor labels a claim
   as the narrator's but its words come from a character's quoted speech in the narration, the
   claim is recorded as testimony (`truth=unknown`), not canon. Seen with `gpt-4o-mini` as the

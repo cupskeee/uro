@@ -139,7 +139,7 @@ def test_outcome_endpoint_distills_the_bundle() -> None:
 
     async def report_outcome(campaign_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
         recorded["campaign"], recorded["bundle"] = campaign_id, bundle
-        return {"committed_events": 4, "commit_id": "c:abc"}
+        return {"committed_events": 4, "commit_id": "c:abc", "receipt": []}
 
     deps = _fake_deps()
     deps.report_outcome = report_outcome
@@ -956,12 +956,10 @@ def test_dry_run_returns_the_would_be_events_and_commits_nothing() -> None:
         if campaign_id != "camp-1":
             raise HTTPException(status_code=404, detail="no such campaign")
         seen["participant"], seen["intent"] = participant, intent
-        return [
-            {
-                "event_type": "ClaimRecorded",
-                "entity_refs": ["a:hero"],
-                "payload": {"statement": intent},
-            }
+        from uro_core.domain.events import claim_recorded
+
+        return [  # what the engine returns: whole DomainEvent dumps
+            claim_recorded(claim_id="c:1", statement=intent, subject_refs=["a:hero"]).model_dump()
         ]
 
     deps = _fake_deps()
@@ -970,7 +968,12 @@ def test_dry_run_returns_the_would_be_events_and_commits_nothing() -> None:
         "/campaigns/camp-1/dry-run?token=tok-a", json={"intent": "I bribe the guard"}
     )
     assert resp.status_code == 200
-    assert resp.json()["events"][0]["event_type"] == "ClaimRecorded"
+    (event,) = resp.json()["events"]
+    assert (
+        event["event_type"] == "ClaimRecorded"
+        and event["payload"]["statement"] == "I bribe the guard"
+    )
+    assert "pass" in event["caused_by"] and "history_pass" not in event["caused_by"]  # docs/12 wire
     assert seen == {"participant": "player-1", "intent": "I bribe the guard"}  # token→participant
 
 
@@ -1409,6 +1412,7 @@ class _FakeUsageStore:
                 "tokens_in": 0,
                 "tokens_out": 0,
                 "avg_latency_ms": 12,
+                "failed": 0,
             },
             {
                 "stage_tag": "planner",
@@ -1417,6 +1421,7 @@ class _FakeUsageStore:
                 "tokens_in": 40,
                 "tokens_out": 10,
                 "avg_latency_ms": 30,
+                "failed": 1,
             },
         ]
 
@@ -1756,7 +1761,7 @@ def test_ws_outcome_recorded_broadcast_shape() -> None:
     # The Chronicler outcome endpoint broadcasts an `outcome_recorded` frame to the play channel —
     # a real server→client frame docs/08 previously omitted (BE-11). Assert it reaches a listener.
     async def report_outcome(campaign_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
-        return {"committed_events": 2, "commit_id": "c:xyz"}
+        return {"committed_events": 2, "commit_id": "c:xyz", "receipt": []}
 
     deps = _fake_deps()
     deps.report_outcome = report_outcome
@@ -1792,7 +1797,7 @@ def test_pack_upload_rejects_a_zip_bomb_by_decompressed_size(monkeypatch: Any) -
 def test_dry_run_rejects_a_foreign_scoped_token() -> None:
     # A minted token scoped to camp-1 can't dry-run camp-2 (LLM cost + state read) — review fix.
     async def _preview(campaign_id: str, participant: str, intent: str) -> list[dict[str, Any]]:
-        return [{"event_type": "BeatResolved"}]
+        return []
 
     deps = _fake_deps()
     deps.preview_beat = _preview
@@ -1978,6 +1983,7 @@ def test_providers_crud_roundtrip_operator() -> None:
     ]
     assert client.delete("/providers/roles/narrator?token=tok-a").json()["deleted"]
     assert client.delete(f"/providers/{conn_id}?token=tok-a").json()["deleted"]
+    assert client.delete(f"/providers/credentials/{cred_id}?token=tok-a").json()["deleted"]
 
 
 def test_a_cli_connection_must_name_its_cli() -> None:
@@ -2642,3 +2648,30 @@ def test_a_reasoning_effort_must_be_a_string() -> None:
             json={"connection_id": conn_id, "model": "gpt-5.1", "reasoning_effort": bad},
         )
         assert r.status_code == 400, r.text
+
+
+def test_state_rows_match_the_projection_catalog() -> None:
+    # The state row models (uro_server.schemas) mirror _SNAPSHOT_TABLES column for column, so a
+    # projection column added or renamed in the core fails here instead of 500ing a state read.
+    from uro_core.adapters.postgres.projector import _SNAPSHOT_TABLES
+    from uro_server.schemas import DiffSections, StateSections
+
+    rows = {name: f.annotation for name, f in StateSections.model_fields.items()}
+    assert set(rows) == set(_SNAPSHOT_TABLES) == set(DiffSections.model_fields)
+    for section, columns in _SNAPSHOT_TABLES.items():
+        row_model = StateSections.model_fields[section].annotation.__args__[0].__args__[0]  # type: ignore[union-attr]
+        assert tuple(row_model.model_fields) == columns, section
+
+
+def test_openapi_describes_every_response() -> None:
+    # Every HTTP route publishes a response schema (not a bare "object"): a client can generate its
+    # types from /openapi.json.
+    spec = TestClient(create_app(_fake_deps())).get("/openapi.json").json()
+    untyped = []
+    for path, ops in spec["paths"].items():
+        for method, op in ops.items():
+            schema = op["responses"]["200"]["content"]["application/json"]["schema"]
+            if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
+                untyped.append(f"{method.upper()} {path}")
+    assert not untyped, untyped
+    assert len([op for ops in spec["paths"].values() for op in ops]) == 56

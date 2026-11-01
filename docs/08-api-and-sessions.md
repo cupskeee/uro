@@ -177,6 +177,20 @@ read; `beat_failed` broadcasts a generic reason (the raw exception is logged, no
 upload caps decompressed size (zip-bomb); `?limit<0` and a non-int `seed` are `400`; `/roster` `404`s
 an unknown campaign.
 
+### Response schemas (D-74)
+
+Every HTTP route declares its response shape (`uro_server/schemas.py`), so `GET /openapi.json`
+describes what each endpoint returns and a client can generate its types from it (for TypeScript,
+`openapi-typescript`). FastAPI validates every response against its schema: a handler that returns a
+key its schema doesn't declare fails instead of sending it, and the tests reach every route, so the
+published shapes and the real ones can't drift apart. A key a handler leaves out stays out (no
+`null` is added). Core models are reused where a handler returns one (`World`, `Campaign`,
+`Marker`, `ModelConnection`, `WorldBundle`, `DomainEvent`, …); the state rows mirror the projection
+catalog column for column (a test keeps them in lockstep). Opaque by design and typed only as
+objects: a ruleset's sheet and settings schemas (D-30), event payloads, edge attributes. The
+WebSocket frames below are not in the OpenAPI document (it has no WebSocket model); this section is
+their contract.
+
 ### The WebSocket wire contract (BE-11 — frame-for-frame with `app.py`)
 
 Every frame is a JSON object with a `type`. There is **no** universal envelope: a frame carries only its `type` + the fields listed below. The channel is already scoped to one campaign by the connection URL, so frames do **not** repeat `campaign_id`; `participant_id` names the actor of the frame (absent only where there is none, e.g. `vote_decided`).
