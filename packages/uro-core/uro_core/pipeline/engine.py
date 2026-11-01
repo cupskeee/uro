@@ -1078,7 +1078,9 @@ class Engine:
             extraction = parse_extraction(raw)
             if extraction is not None:
                 policy = await self._store.get_extraction_policy()
-                return await run_gauntlet(self._store, branch_id, extraction, policy=policy)
+                return await run_gauntlet(
+                    self._store, branch_id, extraction, policy=policy, narration=narration
+                )
             messages = [
                 *messages,
                 Message(

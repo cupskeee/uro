@@ -29,8 +29,8 @@ if TYPE_CHECKING:  # annotation-only (from __future__ import annotations) — no
     from uro_core.engines.probe import ProbeReport
     from uro_core.ports.tokens import TokenInfo
     from uro_core.providers.router import ProviderRouter
-    from uro_core.timeline.models import Campaign, RulesetPin, World
-    from uro_core.worldpack.create import PackImport, SeedResult
+    from uro_core.timeline.models import Campaign, RulesetPin
+    from uro_core.worldpack.create import PackImport
     from uro_core.worldpack.models import WorldManifest, WorldPack
 
 from fastapi import (
@@ -48,6 +48,7 @@ from pydantic import ValidationError
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
+from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.errors import ExportError
 from uro_core.export import BundleCommit, WorldBundle
 from uro_core.pipeline.engine import NARRATION_DONE, Engine
@@ -55,11 +56,19 @@ from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
-from uro_core.timeline.models import FORK_TIME_SKIP, STARTING_GEAR
+from uro_core.timeline.models import FORK_TIME_SKIP, STARTING_GEAR, Marker, World
+from uro_core.worldpack.create import SeedResult
 
+from uro_server import schemas as S
 from uro_server.sessions import SessionHub, TokenRegistry
 
 logger = logging.getLogger("uro_server")
+
+
+def _out(model: Any) -> dict[str, Any]:
+    """A route's response schema (`uro_server.schemas`): FastAPI validates every response against
+    it and publishes it in `/openapi.json`; a key the handler leaves out stays out."""
+    return {"response_model": model, "response_model_exclude_unset": True}
 
 
 def _bearer_token(request: Request) -> str:
@@ -778,11 +787,11 @@ def create_app(
                 return JSONResponse({"detail": "pack archive too large"}, status_code=413)
         return await call_next(request)
 
-    @app.get("/healthz")
+    @app.get("/healthz", **_out(S.Status))
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/version")
+    @app.get("/version", **_out(S.Versions))
     async def server_version(request: Request) -> dict[str, str]:
         """The server's package versions — what a client (uro-loom) is talking to. Any-authed: the
         unauthenticated `/healthz` stays a bare liveness probe that advertises nothing."""
@@ -810,7 +819,7 @@ def create_app(
             branch_ids = [campaign.branch_id]
         return stage, world_id, branch_ids
 
-    @app.get("/usage")
+    @app.get("/usage", **_out(S.Usage))
     async def usage(request: Request) -> dict[str, Any]:
         """LLM-call telemetry aggregated by stage (BE-10, docs/07). OPERATOR-only (D-44): it reveals
         model/token/latency cost. The engine EXPOSES metering (docs/00) — it never bills/caps.
@@ -822,7 +831,7 @@ def create_app(
         total_calls = sum(int(r["calls"]) for r in rows)
         return {"stage": stage, "total_calls": total_calls, "by_stage": rows}
 
-    @app.get("/llm-calls")
+    @app.get("/llm-calls", **_out(S.LLMCalls))
     async def llm_calls(request: Request) -> dict[str, Any]:
         """The most recent metered calls, newest first (`?stage=&world=&campaign=&limit=`, default
         20), each structured call with its full stored response (D-66) — what the extractor or
@@ -836,7 +845,7 @@ def create_app(
         )
         return {"calls": [{**c, "created_at": c["created_at"].isoformat()} for c in calls]}
 
-    @app.get("/rulesets")
+    @app.get("/rulesets", **_out(S.Rulesets))
     async def rulesets(request: Request) -> dict[str, Any]:
         """The bound ruleset registry (BE-10, docs/06): each built-in's `id`, `version`, and sheet
         shape — what a Ruleset viewer needs. A plain any-authed read (public capability info, no
@@ -856,7 +865,7 @@ def create_app(
     # wiring layer's get_secret at serve startup). A credential's key arrives as plaintext over the
     # (operator-only, TLS-in-prod) wire and is encrypted at rest under URO_SECRET_KEY.
 
-    @app.get("/providers")
+    @app.get("/providers", **_out(S.Providers))
     async def list_providers(request: Request) -> dict[str, Any]:
         """The full registry snapshot — connections, role bindings, and credential METADATA (never
         secrets). Operator-only (D-47)."""
@@ -868,7 +877,7 @@ def create_app(
             "credentials": [c.model_dump() for c in await store.list_credentials()],
         }
 
-    @app.post("/providers")
+    @app.post("/providers", **_out(S.Created))
     async def create_provider(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:  # noqa: B008
         """Register a model connection. Optional `auth_id` links an existing credential (validated).
         Operator-only."""
@@ -892,7 +901,7 @@ def create_app(
         )
         return {"id": cid}
 
-    @app.patch("/providers/{connection_id}")
+    @app.patch("/providers/{connection_id}", **_out(S.Updated))
     async def update_provider(
         connection_id: str,
         request: Request,
@@ -921,14 +930,14 @@ def create_app(
             await store.set_connection_enabled(connection_id, enabled)
         return {"updated": True}
 
-    @app.delete("/providers/{connection_id}")
+    @app.delete("/providers/{connection_id}", **_out(S.Deleted))
     async def delete_provider(request: Request, connection_id: str) -> dict[str, Any]:
         """Delete a connection (its role bindings cascade → those roles fall back to `default`).
         Operator-only."""
         _require_operator(request)
         return {"deleted": await _mgmt().delete_connection(connection_id)}
 
-    @app.post("/providers/credentials")
+    @app.post("/providers/credentials", **_out(S.Created))
     async def create_credential(
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
@@ -949,7 +958,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"id": cred_id}
 
-    @app.patch("/providers/credentials/{credential_id}")
+    @app.patch("/providers/credentials/{credential_id}", **_out(S.Rotated))
     async def rotate_credential(
         credential_id: str,
         request: Request,
@@ -988,14 +997,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such credential")
         return {"rotated": True}
 
-    @app.delete("/providers/credentials/{credential_id}")
+    @app.delete("/providers/credentials/{credential_id}", **_out(S.Deleted))
     async def delete_credential(request: Request, credential_id: str) -> dict[str, Any]:
         """Delete a credential; linked connections are UNLINKED (auth_id→NULL), not deleted.
         Operator-only."""
         _require_operator(request)
         return {"deleted": await _mgmt().delete_credential(credential_id)}
 
-    @app.put("/providers/roles/{role}")
+    @app.put("/providers/roles/{role}", **_out(S.RoleSet))
     async def set_role(
         role: str,
         request: Request,
@@ -1036,13 +1045,13 @@ def create_app(
         await store.set_role_binding(role, connection_id, model, reasoning_effort=effort)
         return {"role": role, "connection_id": connection_id, "reasoning_effort": effort}
 
-    @app.delete("/providers/roles/{role}")
+    @app.delete("/providers/roles/{role}", **_out(S.Deleted))
     async def delete_role(request: Request, role: str) -> dict[str, Any]:
         """Remove a role binding (that role falls back to `default`). Operator-only."""
         _require_operator(request)
         return {"deleted": await _mgmt().delete_role_binding(role)}
 
-    @app.post("/providers/{connection_id}/refresh")
+    @app.post("/providers/{connection_id}/refresh", **_out(S.Models))
     async def refresh_provider(request: Request, connection_id: str) -> dict[str, Any]:
         """Discover the connection's models (a LIVE call to the provider) and cache them with their
         modality (slice 3). Operator-only; 502 on a provider/network failure, 404 if unknown."""
@@ -1058,7 +1067,7 @@ def create_app(
             logger.warning("model discovery failed: %s", type(exc).__name__)
             raise HTTPException(status_code=502, detail="model discovery failed") from exc
 
-    @app.post("/providers/{connection_id}/test")
+    @app.post("/providers/{connection_id}/test", **_out(S.ProbeOutcome))
     async def test_provider(
         request: Request,
         connection_id: str,
@@ -1078,7 +1087,7 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/providers/reload")
+    @app.post("/providers/reload", **_out(S.Reloaded))
     async def reload_providers(request: Request) -> dict[str, Any]:
         """Rebuild this instance's provider router from the registry — no restart (slice 4).
         Operator-only. An empty registry leaves the seed router in place (`reloaded:false`)."""
@@ -1087,7 +1096,7 @@ def create_app(
             raise HTTPException(status_code=501, detail="router reload not enabled")
         return await deps.reload_router()
 
-    @app.get("/extraction-policy")
+    @app.get("/extraction-policy", **_out(ExtractionPolicy))
     async def get_extraction_policy_ep(request: Request) -> dict[str, Any]:
         """The instance's emergent-extraction policy (D-49/D-50): which categories play may create —
         `{extract_actors, extract_places, extract_factions, extract_threads, extract_claims}`.
@@ -1095,7 +1104,7 @@ def create_app(
         _require_operator(request)
         return (await _mgmt().get_extraction_policy()).model_dump()
 
-    @app.patch("/extraction-policy")
+    @app.patch("/extraction-policy", **_out(ExtractionPolicy))
     async def patch_extraction_policy_ep(
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
@@ -1118,7 +1127,7 @@ def create_app(
         await store.set_extraction_policy(updated)
         return updated.model_dump()
 
-    @app.post("/providers/codex/start")
+    @app.post("/providers/codex/start", **_out(S.CodexLogin))
     async def codex_start_ep(
         request: Request,
         body: dict[str, Any] = Body(default={}),  # noqa: B008
@@ -1138,7 +1147,7 @@ def create_app(
             logger.warning("codex device-code request failed: %s", type(exc).__name__)
             raise HTTPException(status_code=502, detail="codex device-code request failed") from exc
 
-    @app.post("/providers/codex/poll")
+    @app.post("/providers/codex/poll", **_out(S.CodexPoll))
     async def codex_poll_ep(
         request: Request,
         body: dict[str, Any] = Body(default={}),  # noqa: B008
@@ -1172,7 +1181,9 @@ def create_app(
             logger.warning("codex poll failed: %s", type(exc).__name__)
             raise HTTPException(status_code=502, detail="codex authorization failed") from exc
 
-    @app.post("/campaigns/{campaign_id}/encounters/{encounter_id}/outcome")
+    @app.post(
+        "/campaigns/{campaign_id}/encounters/{encounter_id}/outcome", **_out(S.OutcomeRecorded)
+    )
     async def report_outcome(
         campaign_id: str,
         encounter_id: str,
@@ -1270,7 +1281,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="limit must not be negative")
         return limit
 
-    @app.post("/worlds")
+    @app.post("/worlds", **_out(World))
     async def create_world(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any]:  # noqa: B008
         # OPERATOR-only (D-46, refining D-44): create_world instantiates a fresh world + main branch
         # — the same structural write as `/worlds/import` (operator-only), so it's gated alike.
@@ -1302,12 +1313,12 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"invalid world: {exc}") from exc
         return {"world_id": w.world_id, "main_branch_id": w.main_branch_id, "name": w.name}
 
-    @app.get("/worlds")
+    @app.get("/worlds", **_out(list[World]))
     async def list_worlds(request: Request) -> list[dict[str, Any]]:
         _auth(request)
         return [w.model_dump() for w in await _mgmt().list_worlds()]
 
-    @app.post("/worlds/validate")
+    @app.post("/worlds/validate", **_out(S.PackValidation))
     async def validate_world_pack(
         request: Request,
         pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
@@ -1348,7 +1359,7 @@ def create_app(
                 "gaps": report.gaps,
             }
 
-    @app.post("/worlds/create")
+    @app.post("/worlds/create", **_out(S.PackCreated))
     async def create_world_from_pack(
         request: Request,
         pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
@@ -1387,7 +1398,7 @@ def create_app(
             "backfilled": result.backfilled,
         }
 
-    @app.post("/worlds/{world_id}/seed")
+    @app.post("/worlds/{world_id}/seed", **_out(SeedResult))
     async def seed_world_from_pack(
         world_id: str,
         request: Request,
@@ -1419,7 +1430,7 @@ def create_app(
                 raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
         return result.model_dump()
 
-    @app.post("/worlds/backfill")
+    @app.post("/worlds/backfill", **_out(S.Backfill))
     async def backfill_world_pack(
         request: Request,
         pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
@@ -1461,7 +1472,7 @@ def create_app(
                 "seeds": seeds,  # the ai_backfill ThreadSeeds (preview — nothing committed)
             }
 
-    @app.post("/worlds/probe")
+    @app.post("/worlds/probe", **_out(S.Probe))
     async def probe_world_pack(
         request: Request,
         pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
@@ -1502,7 +1513,7 @@ def create_app(
             body["warnings"] = report.warnings
             return body
 
-    @app.get("/worlds/{world_id}/branches")
+    @app.get("/worlds/{world_id}/branches", **_out(S.Branches))
     async def list_world_branches(world_id: str, request: Request) -> dict[str, Any]:
         """The branch tree + markers for a world (docs/03, docs/18 B3). A plain any-authed READ:
         `_auth` only, NO operator gate — D-44 scopes only structural writes / act-for-another to
@@ -1522,7 +1533,7 @@ def create_app(
             "markers": [m.model_dump() for m in markers],
         }
 
-    @app.post("/worlds/{world_id}/branches")
+    @app.post("/worlds/{world_id}/branches", **_out(S.Forked))
     async def fork_world_branch(
         world_id: str,
         request: Request,
@@ -1569,7 +1580,7 @@ def create_app(
                 result["head_commit"] = fresh.head_commit
         return result
 
-    @app.post("/worlds/{world_id}/markers")
+    @app.post("/worlds/{world_id}/markers", **_out(Marker))
     async def create_world_marker(
         world_id: str,
         request: Request,
@@ -1593,7 +1604,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return marker.model_dump()
 
-    @app.get("/worlds/{world_id}/log")
+    @app.get("/worlds/{world_id}/log", **_out(S.Log))
     async def world_branch_log(world_id: str, request: Request) -> dict[str, Any]:
         """A branch's commit lineage, git-log style (BE-3, docs/03). A plain any-authed READ
         (`_auth`). Head→genesis order; `?branch=` (default `main`), `?limit=` (default 20)."""
@@ -1613,7 +1624,7 @@ def create_app(
             "entries": [e.model_dump() for e in entries],
         }
 
-    @app.get("/worlds/{world_id}/events")
+    @app.get("/worlds/{world_id}/events", **_out(S.Events))
     async def world_events(world_id: str, request: Request) -> dict[str, Any]:
         """The raw event log along a branch, filterable (BE-4, docs/12). OPERATOR-only (D-45): the
         raw log carries omniscient truth — `ClaimRecorded` truth-values, hidden beliefs, `caused_by`
@@ -1637,7 +1648,7 @@ def create_app(
         )
         return {"branch": branch, "events": [e.model_dump() for e in events]}
 
-    @app.get("/worlds/{world_id}/commits/{commit_id}")
+    @app.get("/worlds/{world_id}/commits/{commit_id}", **_out(BundleCommit))
     async def world_commit_detail(
         world_id: str, commit_id: str, request: Request
     ) -> dict[str, Any]:
@@ -1655,7 +1666,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such commit")
         return detail.model_dump()
 
-    @app.get("/worlds/{world_id}/state")
+    @app.get("/worlds/{world_id}/state", **_out(S.WorldState))
     async def world_state(world_id: str, request: Request) -> dict[str, Any]:
         """A world's projections at a branch head (`?branch=`, default main) or at ANY commit
         (`?at=` a marker, commit id, or unique prefix — materialized like a fork, then discarded;
@@ -1685,7 +1696,7 @@ def create_app(
         except ValueError as exc:  # an unknown section — typo-loud
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/worlds/{world_id}/diff")
+    @app.get("/worlds/{world_id}/diff", **_out(S.Diff))
     async def world_branch_diff(world_id: str, request: Request) -> dict[str, Any]:
         """What differs between two branches of a world, per projection section (docs/18 B5,
         `uro branch diff`): `{section: {added, removed, changed}}` keyed by each section's primary
@@ -1712,7 +1723,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"a": request.query_params["a"], "b": request.query_params["b"], "diff": diff}
 
-    @app.get("/worlds/{world_id}/chronicle")
+    @app.get("/worlds/{world_id}/chronicle", **_out(S.Chronicle))
     async def world_chronicle(world_id: str, request: Request) -> dict[str, Any]:
         """A branch's recent beats, world-scoped (BE-10, docs/08) — the world twin of the
         campaign chronicle. OPERATOR-only: unlike the campaign read (a player's own current
@@ -1731,8 +1742,8 @@ def create_app(
         beats = await store.recent_beats(b.branch_id, limit)
         return {"branch": branch, "beats": [bt.model_dump() for bt in beats]}
 
-    @app.get("/worlds/{world_id}/export")
-    async def export_world_bundle(world_id: str, request: Request) -> dict[str, Any]:
+    @app.get("/worlds/{world_id}/export", **_out(WorldBundle))
+    async def export_world_bundle(world_id: str, request: Request) -> WorldBundle:
         """Export the whole world as a portable, hash-chain-verified bundle (BE-8, docs/08) —
         mirrors `uro world export`. OPERATOR-only (D-45): the bundle carries the ENTIRE event log
         (omniscient truth + beliefs), so it's bulk disclosure, never player-facing. The response IS
@@ -1742,10 +1753,9 @@ def create_app(
         store = _mgmt()
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
-        bundle = await store.export_world(world_id)
-        return bundle.model_dump(mode="json")
+        return await store.export_world(world_id)  # the model itself: not dumped and re-read
 
-    @app.post("/worlds/import")
+    @app.post("/worlds/import", **_out(World))
     async def import_world_bundle(
         request: Request,
         body: dict[str, Any] = Body(...),  # noqa: B008
@@ -1770,7 +1780,7 @@ def create_app(
             ) from exc
         return world.model_dump()  # {world_id (remapped), name, main_branch_id}
 
-    @app.post("/worlds/{world_id}/campaigns")
+    @app.post("/worlds/{world_id}/campaigns", **_out(S.CampaignCreated))
     async def create_campaign(
         world_id: str,
         request: Request,
@@ -1844,14 +1854,14 @@ def create_app(
         # GM data, not a player read. Expose it only to an operator; strip it for a player token.
         return c.model_dump() if admin else c.model_dump(exclude={"seed"})
 
-    @app.get("/campaigns")
+    @app.get("/campaigns", **_out(list[S.CampaignView]))
     async def list_campaigns(request: Request) -> list[dict[str, Any]]:
         _auth(request)
         _, _, admin = _scope(request)
         world_id = request.query_params.get("world_id")
         return [_campaign_view(c, admin) for c in await _mgmt().list_campaigns(world_id)]
 
-    @app.get("/campaigns/{campaign_id}")
+    @app.get("/campaigns/{campaign_id}", **_out(S.CampaignView))
     async def get_campaign(campaign_id: str, request: Request) -> dict[str, Any]:
         _auth(request)
         _, _, admin = _scope(request)
@@ -1860,7 +1870,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such campaign")
         return _campaign_view(c, admin)
 
-    @app.post("/campaigns/{campaign_id}/join")
+    @app.post("/campaigns/{campaign_id}/join", **_out(S.Joined))
     async def join_campaign(
         campaign_id: str,
         request: Request,
@@ -1911,7 +1921,7 @@ def create_app(
             result["token"] = await deps.mint_token(participant, campaign_id)
         return result
 
-    @app.post("/campaigns/{campaign_id}/tokens")
+    @app.post("/campaigns/{campaign_id}/tokens", **_out(S.Minted))
     async def mint_token_endpoint(
         campaign_id: str,
         request: Request,
@@ -1937,7 +1947,7 @@ def create_app(
             )
         return {"token": await deps.mint_token(participant, campaign_id)}
 
-    @app.get("/campaigns/{campaign_id}/tokens")
+    @app.get("/campaigns/{campaign_id}/tokens", **_out(S.Tokens))
     async def list_tokens_endpoint(campaign_id: str, request: Request) -> dict[str, Any]:
         """The campaign's runtime tokens — metadata only (`token_id` is a hash prefix, never the
         token). An operator sees every participant's; anyone else only their own (D-39)."""
@@ -1955,7 +1965,7 @@ def create_app(
             ]
         }
 
-    @app.post("/campaigns/{campaign_id}/tokens/revoke")
+    @app.post("/campaigns/{campaign_id}/tokens/revoke", **_out(S.Revoked))
     async def revoke_token_endpoint(
         campaign_id: str,
         request: Request,
@@ -1995,7 +2005,7 @@ def create_app(
         revoked = await deps.revoke_token(target)
         return {"revoked": revoked, "closed_sockets": await _close_revoked_sockets()}
 
-    @app.get("/campaigns/{campaign_id}/roster")
+    @app.get("/campaigns/{campaign_id}/roster", **_out(S.Roster))
     async def campaign_roster(campaign_id: str, request: Request) -> dict[str, Any]:
         _auth(request)
         store = _mgmt()
@@ -2003,7 +2013,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such campaign")
         return {"pcs": await store.campaign_pcs(campaign_id)}
 
-    @app.get("/campaigns/{campaign_id}/state")
+    @app.get("/campaigns/{campaign_id}/state", **_out(S.CampaignState))
     async def campaign_state(campaign_id: str, request: Request) -> dict[str, Any]:
         _auth(request)  # 401 on a bad/missing token
         _, _, admin = _scope(request)  # operator tier decides which sections are readable
@@ -2032,7 +2042,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"branch_id": c.branch_id, "state": across.get(c.branch_id, {})}
 
-    @app.get("/campaigns/{campaign_id}/chronicle")
+    @app.get("/campaigns/{campaign_id}/chronicle", **_out(S.Chronicle))
     async def campaign_chronicle(campaign_id: str, request: Request) -> dict[str, Any]:
         _auth(request)
         store = _mgmt()
@@ -2045,7 +2055,7 @@ def create_app(
 
     _MAX_TIMESKIP_DAYS = 100 * 365  # cap the in-fiction jump (a runaway skip fires N agenda rounds)
 
-    @app.post("/campaigns/{campaign_id}/time-skip")
+    @app.post("/campaigns/{campaign_id}/time-skip", **_out(S.TimeSkipped))
     async def campaign_time_skip(
         campaign_id: str,
         request: Request,
@@ -2068,7 +2078,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"days must be <= {_MAX_TIMESKIP_DAYS}")
         return await deps.advance_time(campaign_id, days)
 
-    @app.post("/campaigns/{campaign_id}/dry-run")
+    @app.post("/campaigns/{campaign_id}/dry-run", **_out(S.DryRun))
     async def dry_run_beat(
         campaign_id: str,
         request: Request,
@@ -2095,7 +2105,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"events": events}
 
-    @app.get("/campaigns/{campaign_id}/consistency")
+    @app.get("/campaigns/{campaign_id}/consistency", **_out(S.Consistency))
     async def campaign_consistency(campaign_id: str, request: Request) -> dict[str, Any]:
         """The narrator contradiction-survival proxy (T2, BE-5, `uro consistency`). A plain
         any-authed read — a metric count, not omniscient truth. `ratio` = consistent/total
@@ -2112,7 +2122,7 @@ def create_app(
             "ratio": consistent / total if total else 1.0,
         }
 
-    @app.post("/campaigns/{campaign_id}/end")
+    @app.post("/campaigns/{campaign_id}/end", **_out(Marker))
     async def end_campaign_endpoint(
         campaign_id: str,
         request: Request,
@@ -2134,7 +2144,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return m.model_dump()
 
-    @app.get("/campaigns/{campaign_id}/codex")
+    @app.get("/campaigns/{campaign_id}/codex", **_out(S.Codex))
     async def list_codex(campaign_id: str, request: Request) -> dict[str, Any]:
         """A participant's out-of-world notes for this campaign's world (BE-9, `uro codex list`).
         SELF-or-admin (D-39): a caller reads their OWN codex; an operator may read another's
@@ -2153,7 +2163,7 @@ def create_app(
         notes = await store.participant_notes(target or "", c.world_id)
         return {"participant": target, "notes": [n.model_dump() for n in notes]}
 
-    @app.post("/campaigns/{campaign_id}/codex")
+    @app.post("/campaigns/{campaign_id}/codex", **_out(S.Noted))
     async def add_codex(
         campaign_id: str,
         request: Request,

@@ -20,9 +20,15 @@ Enforced by construction (structural — cannot be bypassed):
   player's intent text (see engine._extract) — so a player cannot directly assert
   a claim into the extractor.
 
+- Quoted speech is testimony: a claim labelled 'narrator' whose words come mostly from a
+  character's quoted lines in the narration (not the narrator's own text) is recorded as
+  `truth=unknown`, origin 'dialogue' — a lexical check of WHERE the words come from, so it catches
+  a character's lines relabelled as narration (a small model's habit), not a paraphrase.
+
 Enforced by policy (correct as far as the extractor classifies honestly):
 - Provenance: narrator-asserted → `truth=true`; a character's speech → `truth=unknown`
-  plus a belief for the speaker (an NPC can lie without corrupting world truth).
+  plus a belief for the speaker (an NPC can lie without corrupting world truth). Reported speech
+  without quote marks ("Mera says the Duke…") rests on the extractor's label.
 - Contradiction: a proposed `truth=true` claim the extractor flags as contradicting
   an existing `truth=true` claim is downgraded to `unknown`.
 - Flavor filter (docs/05 promotion rules): the prompt tells the extractor to leave
@@ -37,11 +43,11 @@ Enforced by policy (correct as far as the extractor classifies honestly):
 Parsing salvages per ITEM (D-51): a null optional field takes its default and one malformed
 item is dropped alone — it never discards the rest of the beat's extracted state.
 
-NOT yet implemented (docs/13, deferred): evidence-span/consequence gating and the
-"a truth=true claim must not merely restate a character's assertion" guard. So
-`truth=true` currently rests on the extractor's self-declared provenance label; a
-narrator that echoes a player's words is a residual surface, mitigated only by the
-narrator being the trusted tier. Do not read this as a hard security boundary.
+NOT yet implemented (docs/13, deferred): evidence-span/consequence gating. The "a truth=true
+claim must not merely restate a character's assertion" guard covers QUOTED speech only (above);
+otherwise `truth=true` rests on the extractor's provenance label, and a narrator that echoes a
+player's words is a residual surface, mitigated only by the narrator being the trusted tier. Do
+not read this as a hard security boundary.
 """
 
 from __future__ import annotations
@@ -198,6 +204,63 @@ _HONORIFICS = frozenset(
 # a possessive ("Mira's", "Thomas'") — straight or curly apostrophe (models emit both)
 _POSSESSIVE = re.compile("[^\\W\\d_]['\u2019]s\\b|s['\u2019](?=\\s|$)", re.IGNORECASE)
 
+# Quoted-speech grounding (a narrator claim must come from the narrator's own words). A tiny stop
+# list and a crude suffix strip are enough: the test is which part of the narration the claim's
+# content words come from, not what they mean.
+_STOPWORD_TEXT = """a an the and or but of to in on at by for with from into onto as is are was
+were be been being has have had do does did it its this that these those there their they them he
+she his her him you your i we our us not no so if then than too very just only still now all any
+some each every one who whom whose which what when where why how out up down over under again more
+most such own same can will would should could may might must shall about after before while
+because until against between through during without within"""
+_STOPWORDS = frozenset(_STOPWORD_TEXT.split())
+_OPEN_CLOSE = {"\u201c": "\u201d", "\u00ab": "\u00bb"}  # “…”, «…» ("…" toggles)
+
+
+def _content_words(text: str) -> set[str]:
+    out = set()
+    for w in re.findall(r"[a-z]+(?:'[a-z]+)?", text.lower().replace("\u2019", "'")):
+        w = re.sub(r"'s$", "", w)
+        if w in _STOPWORDS or len(w) < 3:
+            continue
+        for suffix in ("ing", "ed", "es", "s"):
+            if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+                w = w[: -len(suffix)]
+                break
+        out.add(w)
+    return out
+
+
+def _split_speech(narration: str) -> tuple[str, str]:
+    """(the narrator's own text, the quoted speech). Per paragraph, so a quote left open at a
+    paragraph's end (multi-paragraph speech) closes there instead of inverting the rest."""
+    told: list[str] = []
+    said: list[str] = []
+    for para in narration.split("\n"):
+        closer: str | None = None
+        for ch in para:
+            if closer is None and (ch == '"' or ch in _OPEN_CLOSE):
+                closer = '"' if ch == '"' else _OPEN_CLOSE[ch]
+            elif closer is not None and ch == closer:
+                closer = None
+            else:
+                (told if closer is None else said).append(ch)
+        told.append("\n")
+        said.append("\n")
+    return "".join(told), "".join(said)
+
+
+def _spoken_not_narrated(statement: str, narration: str) -> bool:
+    """True when a claim's words come mostly from a character's quoted speech rather than the
+    narrator's own text: then it is testimony, whatever provenance the extractor gave it."""
+    words = _content_words(statement)
+    if not words:
+        return False
+    told, said = _split_speech(narration)
+    in_told = len(words & _content_words(told)) / len(words)
+    in_said = len(words & _content_words(said)) / len(words)
+    return in_said >= 0.5 and in_said > in_told
+
 
 class _Name(NamedTuple):
     words: frozenset[str]  # the distinctive words
@@ -296,7 +359,13 @@ def build_extractor_messages(
         '"supersedes": [known claim ids this narration CHANGES], '
         '"durable": false for any passing moment, gesture, mood, or sensation / true for a '
         "lasting fact, or news or a plan a character reports, "
-        '"confidence": 0..1, how sure the SPEAKER sounds}]}'
+        '"confidence": 0..1, how sure the SPEAKER sounds}]}\n\n'
+        "LAST CHECK before you answer: delete every claim that only describes THIS moment — what "
+        "someone does, sees, hears or feels right now (a gesture, a sound, light, weather, a "
+        "smell, a mood, a comparison). Keep a claim if it would still be true and worth knowing a "
+        "month from now: who someone is, what they own or know, a place's lasting state, an "
+        "injury, a change that stays. NEVER delete news, a rumor, a warning or a plan a character "
+        "reports — those are dialogue claims, always kept."
     )
     system = (env or DEFAULT_ENV).render("extractor.system.j2")
     return [
@@ -379,8 +448,14 @@ async def run_gauntlet(
     extraction: Extraction,
     *,
     policy: ExtractionPolicy | None = None,
+    narration: str | None = None,
 ) -> list[DomainEvent]:
     """Validate proposals into committable events (docs/13). Downgrade-or-drop only.
+
+    `narration` (the prose the claims were extracted from) lets the gauntlet check provenance: a
+    claim labelled 'narrator' whose words come from a character's quoted speech is recorded as
+    testimony (`truth=unknown`, origin 'dialogue') — a small model labels a character's lines as
+    the narrator's, which made rumors canon (2026-11-01 replays).
 
     `policy` gates which EMERGENT categories may be created (D-49) — a disabled category is silently
     skipped (structural: the extractor may propose it, but nothing commits).
@@ -644,7 +719,10 @@ async def run_gauntlet(
         if not statement:
             continue
         subject_refs = [(link_actor(s) or _name_token(s)) for s in pc.about if s.strip()]
-        truth: Truth = "true" if pc.provenance == "narrator" else "unknown"
+        origin = pc.provenance
+        if origin == "narrator" and narration and _spoken_not_narrated(statement, narration):
+            origin = "dialogue"  # a character said it: testimony, never canon
+        truth: Truth = "true" if origin == "narrator" else "unknown"
         if truth == "true":
             # A CHANGE of state (D-70): the narrator says the world moved on ("the seal snaps").
             # Only a fact the narrator itself established in play is retired; authored, mechanical,
@@ -694,11 +772,11 @@ async def run_gauntlet(
                     statement=statement,
                     subject_refs=subject_refs,
                     truth=truth,
-                    origin=pc.provenance,
+                    origin=origin,
                 )
             )
 
-        if pc.provenance == "dialogue" and pc.speaker and pc.speaker.strip():
+        if origin == "dialogue" and pc.speaker and pc.speaker.strip():
             speaker_ref = resolve_actor(pc.speaker)
             # A restatement never overwrites a belief the speaker ALREADY holds (D-58): that row may
             # carry a propagated rumor's decayed confidence and its `learned_from` chain (P5).
