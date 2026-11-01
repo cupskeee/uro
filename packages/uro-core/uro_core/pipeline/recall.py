@@ -69,6 +69,14 @@ class RecallBundle(BaseModel):
 RECENT_CLAIMS = 15
 
 
+def memory_embed_text(intent: str, narration: str) -> str:
+    """The text a beat's memory is embedded as (D-75): the player's intent with the narration, so
+    a later callback that echoes what the player DID finds the beat even when the narration never
+    put it in words (measured: "afraid of deep water" was in the intent only). The narrator is
+    shown the narration alone. An empty intent embeds the narration, as before D-75."""
+    return f"Player: {intent.strip()}\n{narration}" if intent.strip() else narration
+
+
 def _name_token(name: str) -> str:
     return f"name:{name.strip().lower()}"
 

@@ -516,3 +516,12 @@ logged-in CLIs; no role binding was changed.
 | Extraction on live narration (D-73) | **live-validated** | the party session recorded Mera's and the dockhands' news as testimony and only lasting changes as narrator fact (drag marks under the pier, a snapped watch-lantern, a barrel lid torn off); no atmosphere. |
 | The CLI providers | **live-validated** | a Brinehold session on `claude -p` + `codex exec`, after the D-72 review fixes (scrubbed environment, Codex feature check): five beats, four Uro Pool checks, the seal's opening recorded, all calls metered. |
 
+## Post-PoC — recall of callbacks (2026-11-01, D-75, OQ-3 narrowed)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Thematic callbacks recalled | **proxy (measured offline)** | a benchmark of 7 facts planted in a live session × named/thematic/oblique callbacks, ranked among 172 played beat memories: 20/21 in the top 4 with the intent embedded (18/21 narration-only). One session's plants; ranks measured, not the narrator's use of them. |
+| Memory slots outside the recency window | **proven** | `test_recent_beats_never_starve_the_memory_slots` (it fails on the old code); before, mid-scene queries kept 0-2 of 4 memories (measured). |
+| A word only the intent said recalls the beat | **proven** | `test_a_word_only_the_intent_said_recalls_the_beat` (the live fear case, deterministic). |
+| Old memories re-embedded | **proven (operator step)** | `uro memory reembed` (`test_reembed_moves_old_memories_to_the_intent_vector`: correct, idempotent, scoped to a world). Until it runs, a mixed index recalls old memories worse (16/21 measured). |
+

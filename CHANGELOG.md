@@ -9,6 +9,20 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+Upgrading: run `uro memory reembed` once (cents of embeddings): beat memories are now embedded
+with the player's intent, and memories from earlier versions are recalled worse until re-embedded.
+
+### Fixed
+- **Semantic recall no longer loses its slots to recent beats** (D-75). It took the 4 nearest
+  memories and then dropped the ones still in the recency window, so mid-scene it brought back 0–2
+  older beats instead of 4.
+
+### Changed
+- **Memories remember what the player did** (D-75). Each beat's memory is embedded as the
+  player's intent with the narration, and still shown to the narrator as the narration alone. On
+  a callback benchmark (7 planted facts, 21 callbacks, 172 memories), recall went from 18/21 to
+  20/21. `uro memory reembed [--world W]` re-embeds older memories.
+
 ## [0.12.0] - 2026-11-01
 
 Upgrading: no database migration. A client of `POST /campaigns/{c}/dry-run` now reads the history

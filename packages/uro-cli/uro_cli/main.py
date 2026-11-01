@@ -70,6 +70,9 @@ policy_app = typer.Typer(
     no_args_is_help=True,
     help="Which emergent world state play may create — the instance's extraction policy (D-49).",
 )
+memory_app = typer.Typer(
+    no_args_is_help=True, help="Semantic memory — the beat index recall searches (docs/04)."
+)
 app.add_typer(db_app, name="db")
 app.add_typer(world_app, name="world")
 app.add_typer(branch_app, name="branch")
@@ -81,6 +84,7 @@ provider_app.add_typer(credential_app, name="credential")
 app.add_typer(outbox_app, name="outbox")
 app.add_typer(ruleset_app, name="ruleset")
 app.add_typer(policy_app, name="extraction-policy")
+app.add_typer(memory_app, name="memory")
 
 # The engine roles a connection can back (resolved by the ProviderRouter) — shared with the server.
 _ROLES = tuple(sorted(ROLES))
@@ -853,6 +857,35 @@ def _server_post(server: str, path: str, token: str, body: dict[str, Any] | None
     except OSError as exc:
         typer.echo(f"could not reach {server}: {exc} (is `uro serve` running?)", err=True)
         raise typer.Exit(1) from exc
+
+
+@memory_app.command("reembed")
+def memory_reembed(
+    world: str = typer.Option(None, "--world", help="one world (id or name); default every world"),
+) -> None:
+    """Re-embed beat memories as the player's intent with the narration (D-75). Run it once after
+    upgrading past 0.12, and after importing an older bundle: memories embedded the old way are
+    recalled worse in an index that mixes both. Idempotent; costs one embedding per memory, on the
+    registry's `embedder` role."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            world_id = (await _world_or_exit(store, world)).world_id if world else None
+            router = await build_router_from_registry(store)
+            if router is None:
+                raise ValueError("no model registry: bind an embedder first (`uro provider bind`)")
+
+            async def embed(texts: list[str]) -> list[list[float]]:
+                return await router.embed("embedder", texts)
+
+            n = await store.reembed_memories(embed, world_id=world_id)
+        finally:
+            await store.close()
+        typer.echo(f"re-embedded {n} memor{'y' if n == 1 else 'ies'}")
+
+    _run_async(_run)
 
 
 @outbox_app.command("status")

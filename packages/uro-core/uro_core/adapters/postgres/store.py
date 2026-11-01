@@ -2336,8 +2336,11 @@ class PostgresEventStore:
         text: str,
         vector: list[float],
         entity_refs: list[str],
+        embed_text: str = "",
     ) -> None:
-        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        # The hash of what was EMBEDDED, not of memory_index.text (D-75): two beats with the same
+        # narration but different intents have different vectors, and must not share one.
+        content_hash = hashlib.sha256((embed_text or text).encode("utf-8")).hexdigest()
         async with self.pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 "INSERT INTO embeddings (content_hash, vector) VALUES ($1, $2::vector) "
@@ -2357,6 +2360,60 @@ class PostgresEventStore:
                 entity_refs,
                 commit_id,
             )
+
+    async def reembed_memories(
+        self,
+        embed: Callable[[list[str]], Awaitable[list[list[float]]]],
+        *,
+        world_id: str | None = None,
+        batch: int = 64,
+    ) -> int:
+        """Re-embed every beat memory whose vector isn't of its current embed text (D-75: the
+        beat's intent with its narration), on one world or all of them. Memories written before
+        D-75, or imported from an older bundle, hold narration-only vectors; in an index that mixes
+        both, recall of the old ones drops (measured: 16/21 against 18/21 narration-only and 20/21
+        all re-embedded). Idempotent: a memory already embedded as its embed text is skipped, and
+        forks that share a memory are embedded once. Returns the number of memory rows updated."""
+        from uro_core.pipeline.recall import memory_embed_text
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT m.memory_id, m.content_hash, m.text, "
+                "  (SELECT e.payload->>'intent_text' FROM events e WHERE e.commit_id = m.commit_id "
+                "   AND e.event_type = 'BeatResolved' LIMIT 1) AS intent "
+                "FROM memory_index m JOIN branches b ON b.branch_id = m.branch_id "
+                "WHERE m.kind = 'beat' AND ($1::text IS NULL OR b.world_id = $1)",
+                world_id,
+            )
+        todo: dict[str, list[str]] = {}  # embed text → memory ids that need it
+        for r in rows:
+            text = memory_embed_text(r["intent"] or "", r["text"])
+            if hashlib.sha256(text.encode("utf-8")).hexdigest() != r["content_hash"]:
+                todo.setdefault(text, []).append(r["memory_id"])
+        texts = list(todo)
+        updated = 0
+        for i in range(0, len(texts), batch):
+            chunk = texts[i : i + batch]
+            vectors = await embed(chunk)
+            async with self.pool.acquire() as conn, conn.transaction():
+                for text, vector in zip(chunk, vectors, strict=True):
+                    if not vector or not any(vector):
+                        continue  # nothing worth indexing; the old vector stays
+                    content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                    await conn.execute(
+                        "INSERT INTO embeddings (content_hash, vector) VALUES ($1, $2::vector) "
+                        "ON CONFLICT (content_hash) DO NOTHING",
+                        content_hash,
+                        _vector_literal(vector),
+                    )
+                    status = await conn.execute(
+                        "UPDATE memory_index SET content_hash = $1 "
+                        "WHERE memory_id = ANY($2::text[])",
+                        content_hash,
+                        todo[text],
+                    )
+                    updated += int(status.split()[-1])
+        return updated
 
     async def search(self, branch_id: str, vector: list[float], k: int) -> list[MemoryHit]:
         async with self.pool.acquire() as conn:
