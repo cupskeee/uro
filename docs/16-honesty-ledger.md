@@ -523,6 +523,7 @@ logged-in CLIs; no role binding was changed.
 | Thematic callbacks recalled | **proxy (measured offline)** | a benchmark of 7 facts planted in a live session × named/thematic/oblique callbacks, ranked among 172 played beat memories: 20/21 in the top 4 with the intent embedded (18/21 narration-only). One session's plants; ranks measured, not the narrator's use of them. |
 | Memory slots outside the recency window | **proven** | `test_recent_beats_never_starve_the_memory_slots` (it fails on the old code); before, mid-scene queries kept 0-2 of 4 memories (measured). |
 | A word only the intent said recalls the beat | **proven** | `test_a_word_only_the_intent_said_recalls_the_beat` (the live fear case, deterministic). |
+| Recall through the engine, after the build | **live-validated (one session)** | `uro memory reembed` on the benchmark session's world (20 re-embedded; a second run 0), then all 21 callbacks through the engine's real `_recall`: 21/21 recalled, 4 of 4 memories delivered on every query (2.56 before the slot fix), no intent text shown to the narrator. Per session, which is what the engine searches; the 172-memory scale figure is the offline one above. |
 | Old memories re-embedded | **proven (operator step)** | `uro memory reembed` (`test_reembed_moves_old_memories_to_the_intent_vector`: correct, idempotent, scoped to a world). Until it runs, a mixed index recalls old memories worse (16/21 measured). |
 
 ## Post-PoC — off-screen simulation (2026-11-01, D-76, OQ-4 narrowed)
