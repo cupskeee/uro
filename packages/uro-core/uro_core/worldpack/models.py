@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from uro_core.worldpack.rules import RulePack
 
@@ -84,6 +84,9 @@ class ActorSeed(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     faction: str | None = None  # member_of ref
     location: str | None = None  # located_in ref
+    # Actor ids this actor knows (D-76): acquaintance is mutual, so each becomes a `knows` edge
+    # both ways, which is the only relation rumors spread along (engines/actor.propagate_belief).
+    knows: list[str] = Field(default_factory=list)
 
 
 class ThreadSeed(BaseModel):
@@ -114,3 +117,16 @@ class WorldPack(BaseModel):
     lore: dict[str, str] = Field(default_factory=dict)  # relative path → markdown
     prompts: dict[str, str] = Field(default_factory=dict)  # filename → template override
     rule_pack: RulePack | None = None  # rules.yaml/agendas.yaml — the Reaction Layer (docs/17)
+
+    @model_validator(mode="after")
+    def _knows_refs_resolve(self) -> WorldPack:
+        """A `knows` ref must name another actor in the pack (D-76): an edge to nobody would be
+        accepted and do nothing, so a typo silently cuts a rumor's path."""
+        ids = {a.id for a in self.actors}
+        for a in self.actors:
+            for other in a.knows:
+                if other == a.id:
+                    raise ValueError(f"actor {a.id!r} lists itself in `knows`")
+                if other not in ids:
+                    raise ValueError(f"actor {a.id!r} knows {other!r}, which is not an actor")
+        return self

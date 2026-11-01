@@ -1,0 +1,32 @@
+rules_api_version: 7
+# Off-screen (D-76): agendas run when in-fiction time passes (a time-skip), whether or not anyone
+# watches. Deterministic data, no LLM. Each fires at most once per skip.
+agendas:
+  # The feud grows each week, and word of the burned wagon travels the salt road: Old Weck saw it,
+  # Hesk the carter hears it from him, Brannoc at the Lantern hears it third-hand, as a rumor.
+  - id: word-travels-the-salt-road
+    every_days: 7
+    then:
+      - do: adjust_counter
+        scope_ref: "f:saltborn"
+        key: "war_heat"
+        delta: 1
+      - do: spread_belief
+        claim: "c:wagon-burned"
+        witnesses: ["a:weck"]
+    scope:
+      world: true
+
+  # After a week, the stopped wagons become a plot someone can take up.
+  - id: the-wagons-stop
+    every_days: 7
+    when:
+      kind: thread_state
+      thread: "t:salt-road"
+      state: dormant
+    then:
+      - do: set_thread_state
+        thread: "t:salt-road"
+        to: offered
+    scope:
+      thread: "t:salt-road"

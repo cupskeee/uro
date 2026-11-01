@@ -35,17 +35,21 @@ def parse_pack(root: str | Path) -> WorldPack:
     root = Path(root)
     if not root.is_dir():
         raise PackError(f"{root} is not a directory")
-    return WorldPack(
-        manifest=_manifest(root / "world.toml"),
-        places=_seeds(root, "places.yaml", PlaceSeed),
-        factions=_seeds(root, "factions.yaml", FactionSeed),
-        actors=_seeds(root, "actors.yaml", ActorSeed),
-        threads=_seeds(root, "threads.yaml", ThreadSeed),
-        claims=_seeds(root, "claims.yaml", ClaimSeed),
-        lore=_read_tree(root / "lore", ".md"),
-        prompts=_read_dir(root / "prompts", ".j2"),
-        rule_pack=_rule_pack(root),
-    )
+    parts = {
+        "manifest": _manifest(root / "world.toml"),
+        "places": _seeds(root, "places.yaml", PlaceSeed),
+        "factions": _seeds(root, "factions.yaml", FactionSeed),
+        "actors": _seeds(root, "actors.yaml", ActorSeed),
+        "threads": _seeds(root, "threads.yaml", ThreadSeed),
+        "claims": _seeds(root, "claims.yaml", ClaimSeed),
+        "lore": _read_tree(root / "lore", ".md"),
+        "prompts": _read_dir(root / "prompts", ".j2"),
+        "rule_pack": _rule_pack(root),
+    }
+    try:  # the cross-references between seeds (a `knows` naming nobody, D-76)
+        return WorldPack(**parts)  # type: ignore[arg-type]
+    except ValidationError as exc:
+        raise PackError(f"pack failed validation: {exc}") from exc
 
 
 def _rule_pack(root: Path) -> RulePack | None:
@@ -62,7 +66,20 @@ def _rule_pack(root: Path) -> RulePack | None:
         raw = _load_yaml(path) or {}
         if not isinstance(raw, dict):
             raise PackError(f"{path.name} must be a YAML mapping (with rules_api_version + {key})")
-        data.setdefault("rules_api_version", raw.get("rules_api_version"))
+        # Any other key would be read by nothing: an `agendas:` list written into rules.yaml was
+        # accepted and never ran (found authoring D-76's content). Refuse it, naming the right file.
+        stray = sorted(set(raw) - {"rules_api_version", key})
+        if stray:
+            where = {"rules": "rules.yaml", "agendas": "agendas.yaml"}
+            hint = "; ".join(f"`{k}` goes in {where[k]}" for k in stray if k in where)
+            raise PackError(
+                f"{path.name} has {', '.join(f'`{k}`' for k in stray)}, which it doesn't read"
+                + (f" ({hint})" if hint else "")
+            )
+        version = raw.get("rules_api_version")
+        if "rules_api_version" in data and data["rules_api_version"] != version:
+            raise PackError("rules.yaml and agendas.yaml declare different rules_api_version")
+        data["rules_api_version"] = version
         data[key] = raw.get(key, [])
     try:
         # RulePack's model validator enforces the supported-version set (v1..v3; v3 adds multi-ref

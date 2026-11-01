@@ -525,3 +525,15 @@ logged-in CLIs; no role binding was changed.
 | A word only the intent said recalls the beat | **proven** | `test_a_word_only_the_intent_said_recalls_the_beat` (the live fear case, deterministic). |
 | Old memories re-embedded | **proven (operator step)** | `uro memory reembed` (`test_reembed_moves_old_memories_to_the_intent_vector`: correct, idempotent, scoped to a world). Until it runs, a mixed index recalls old memories worse (16/21 measured). |
 
+## Post-PoC — off-screen simulation (2026-11-01, D-76, OQ-4 narrowed)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| The world moves while nobody watches | **proven (deterministic), at explicit time-skips only** | `test_the_world_moved_while_you_were_away`: a 30-day skip on Ashfall heats the Saltborn feud once, surfaces the salt-road plot, and carries a rumor from the docks to a roadhouse two regions inland (0.9 / 0.495 / 0.272, stopping at the floor); a fork from before the skip has none of it; export/import keeps it. |
+| Rumors spread in ordinary play | **only where a world defines it** | along authored `knows` edges, from a world rule's or agenda's `spread_belief` or a Chronicler outcome's witnesses. A rumor an NPC tells the player, or a deed witnessed in a normal beat, spreads to no one (deferred, D-76). |
+| The clock follows play | **no** | only an explicit time-skip moves it (one ever, measured); play rarely passes time (~3 of 209 narrations). Deferred with a gate (D-76). |
+| `world_time.segment` | **schema-only** | never written: every stored event says "morning" (3,692 of 3,692). |
+| Per-event day stamps | **stale for ordinary beats** | beat events are stamped day 0 whatever the clock says (a beat after a skip to day 2 says day 0); every reader uses the chain's maximum day, which is right. |
+| Time in the prompts | **not told** | no prompt template mentions the day. |
+| Rule files read what they hold | **proven** | a key `rules.yaml`/`agendas.yaml` doesn't read is refused (`test_an_agenda_written_into_rules_yaml_is_refused`); a `knows` ref to nobody is refused (`test_a_knows_ref_to_nobody_is_refused`). Faction/location refs on seeds are still not checked (pre-existing). |
+
