@@ -279,3 +279,37 @@ async def test_a_streamed_beat_names_its_commit_before_its_reactions_run(
         pass
     head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
     assert order == [head, "react"]
+
+
+async def test_a_stream_can_mark_where_the_narration_ends(store: PostgresEventStore) -> None:
+    # D-71: with mark_narrated, the stream says the story is told BEFORE the beat is extracted and
+    # committed, so a server can free its player's prompt during the extractor's few seconds.
+    from collections.abc import AsyncIterator
+
+    from uro_core.pipeline.engine import NARRATION_DONE, Engine
+    from uro_core.providers.adapters.stub import hashing_embedding
+    from uro_core.providers.base import CompletionRequest
+    from uro_core.providers.router import ProviderRouter
+
+    class _Quiet:
+        async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
+            yield "Rain."
+
+        async def complete(self, req: CompletionRequest) -> str:
+            return '{"actors": [], "claims": []}'
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [hashing_embedding(t) for t in texts]
+
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Quiet()))
+    world = await store.create_world(f"outbox-{new_id()}")
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    seen: list[str] = []
+    stream = engine.run_beat_stream(
+        campaign, "p1", "I wait", on_commit=lambda c: seen.append("commit"), mark_narrated=True
+    )
+    async for chunk in stream:
+        seen.append("DONE" if chunk == NARRATION_DONE else chunk)
+    assert seen == ["Rain.", "DONE", "commit"]
+    plain = [c async for c in engine.run_beat_stream(campaign, "p1", "I wait again")]
+    assert NARRATION_DONE not in plain  # an embedder that didn't ask sees only narration

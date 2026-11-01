@@ -137,6 +137,11 @@ class _Shared:
         self.react_locks: dict[str, asyncio.Lock] = {}
 
 
+# Yielded by `run_beat_stream(mark_narrated=True)` between the narration and the commit (D-71). No
+# provider emits a NUL, so it can't collide with narration text.
+NARRATION_DONE = "\x00narration-done"
+
+
 class Engine:
     """Embeddable engine entry point. Wired with concrete adapters by the CLI/server."""
 
@@ -301,6 +306,7 @@ class Engine:
         *,
         plan: BeatPlan | None = None,
         on_commit: Callable[[str], None] | None = None,
+        mark_narrated: bool = False,
     ) -> AsyncIterator[str]:
         """Stream narration to the caller, then extract + commit once the stream ends.
 
@@ -309,6 +315,10 @@ class Engine:
         enters the append-only log, so a resumed session simply never saw that beat.
 
         Pass `plan` to drive the mechanics gate deterministically without the LLM planner (B9).
+
+        With `mark_narrated`, the stream yields `NARRATION_DONE` once the narration is complete and
+        before the beat is extracted and committed (D-71): a server can let its player type while
+        the extractor works. The beat still commits only when the stream is read to its end.
         """
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
@@ -319,6 +329,8 @@ class Engine:
         ):
             collected.append(chunk)
             yield chunk
+        if mark_narrated:
+            yield NARRATION_DONE
         # a streaming caller learns the commit the MOMENT it's appended — before the post-commit
         # work (memory, reactions), during which a relay could already publish it (D-67 review)
         await self._finish(

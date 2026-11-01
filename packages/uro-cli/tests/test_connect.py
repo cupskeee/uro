@@ -131,3 +131,50 @@ def test_another_players_identical_intent_never_settles_ours() -> None:
     ours = out.index("✓ [player-1] 'look around'")  # ...but our prompt waited for OUR beat
     prompts = [i for i in range(len(out)) if out.startswith("> ", i)]
     assert len(prompts) == 2 and prompts[1] > ours, out
+
+
+def test_the_prompt_returns_when_the_story_is_told() -> None:
+    # D-71: a server that marks the end of the narration frees the prompt while the beat is still
+    # being extracted; the next intent waits on the server until that beat commits.
+    from uro_core.pipeline.engine import NARRATION_DONE
+
+    started: list[str] = []
+
+    async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[str]:
+        started.append(text)
+        yield "The tide turns."
+        yield NARRATION_DONE
+        await asyncio.sleep(0.6)  # the extractor's seconds
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        return True
+
+    deps = ServerDeps(
+        resolve_participant={"tok": "player-1"}.get,
+        campaign_exists=campaign_exists,
+        run_beat=run_beat,
+    )
+    port = _free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(deps), host="127.0.0.1", port=port, log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    while not server.started:
+        time.sleep(0.02)
+    try:
+        result = CliRunner().invoke(
+            app,
+            ["connect", "camp-1", "--server", f"http://127.0.0.1:{port}", "--token", "tok"],
+            input="first\nsecond\n/quit\n",
+        )
+    finally:
+        server.should_exit = True
+        thread.join(5)
+    out = result.output
+    assert result.exit_code == 0, out
+    assert started == ["first", "second"]  # in order: the second waited for the first to commit
+    prompts = [i for i in range(len(out)) if out.startswith("> ", i)]
+    first_done = out.index("✓ [player-1] 'first'")
+    assert prompts[1] < first_done, out  # the prompt came back before the first beat committed
+    assert "\x00" not in out  # the marker itself is never shown

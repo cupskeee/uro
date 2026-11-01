@@ -53,8 +53,10 @@ class OpenAICompatProvider:
         api_key: str | None = None,
         timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._model = model
+        self._reasoning_effort = reasoning_effort  # D-71; None = the server's default
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout = timeout
@@ -77,6 +79,8 @@ class OpenAICompatProvider:
             body["temperature"] = req.temperature
             if req.max_tokens is not None:
                 body["max_tokens"] = req.max_tokens
+        if self._reasoning_effort:  # chat completions' field for a reasoning model (D-71)
+            body["reasoning_effort"] = self._reasoning_effort
 
     async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
         headers = {"Content-Type": "application/json"}

@@ -93,6 +93,7 @@ allows dangling `auth_id`s and orphaned live secrets.
 | `role`          | `TEXT` | PK                | `default` \| `narrator` \| `extractor` \| `planner` \| `embedder` \| `dialogue` \| `judge` |
 | `connection_id` | `TEXT` | NOT NULL, FK → `model_connections(id)` **ON DELETE CASCADE** | |
 | `model`         | `TEXT` | NOT NULL          | one of the connection's `cached_models` ids |
+| `reasoning_effort` | `TEXT` | NULL          | how hard a reasoning model thinks (`none`…`xhigh`, D-71, migration 026); NULL = the provider's default. Sent by the codex and OpenAI-style adapters only |
 | `updated_at`    | `timestamptz` | | |
 
 This is the piece the two catalog tables don't cover: the engine resolves providers **by role**
@@ -153,7 +154,7 @@ up (on stub) with no config. Adding the first connection via CLI/API takes over.
   `GET/POST/PATCH/DELETE /providers` (connections), `GET/POST/DELETE /providers/credentials`,
   `GET/PUT /providers/roles` (bindings), `POST /providers/{id}/refresh`, `POST /providers/{id}/test`.
 - **`uro-cli` (direct-DB, like `uro world`; operator with DB access):** `uro provider
-  add|list|rm|enable|disable`, `uro provider bind <role> <connection> <model>` / `unbind <role>`,
+  add|list|rm|enable|disable`, `uro provider bind <role> <connection> <model> [--reasoning-effort low]` / `unbind <role>`,
   `uro provider refresh|test <connection>`, `uro provider link <connection> <credential>` / `unlink`,
   `uro provider codex-login`, and `uro provider credential add|rotate|rm` (`rotate` replaces a key in
   place, so every connection linked to it uses the new one; `rm` refuses a credential a connection still uses unless `--force`, which unlinks those

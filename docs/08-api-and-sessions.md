@@ -195,6 +195,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 |---|---|
 | `participant_joined` / `participant_left` | `participant_id` |
 | `beat_started` | `participant_id`, `intent`, `intent_id`† |
+| `beat_narrated` | `participant_id`, `intent`, `intent_id`† *(D-71: the narration is complete; the beat is being extracted and will commit. `uro connect` frees its prompt here.)* |
 | `narration_chunk` | `participant_id`, `text` |
 | `beat_committed` | `participant_id`, `intent`, `narration`, `commit_id` *(D-67)*, `intent_id`† |
 | `beat_failed` | `participant_id`, `intent`, `error`, `intent_id`† |

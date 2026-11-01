@@ -1929,8 +1929,10 @@ class _FakeRegistryStore:
                 self._conns[cid] = c.model_copy(update={"auth_id": None})  # ON DELETE SET NULL
         return existed
 
-    async def set_role_binding(self, role, connection_id, model):  # type: ignore[no-untyped-def]
-        self._roles[role] = RoleBinding(role=role, connection_id=connection_id, model=model)
+    async def set_role_binding(self, role, connection_id, model, *, reasoning_effort=None):  # type: ignore[no-untyped-def]
+        self._roles[role] = RoleBinding(
+            role=role, connection_id=connection_id, model=model, reasoning_effort=reasoning_effort
+        )
 
     async def list_role_bindings(self):  # type: ignore[no-untyped-def]
         return list(self._roles.values())
@@ -2595,3 +2597,23 @@ def test_the_lifespan_runs_hooks_and_always_closes(recwarn: pytest.WarningsRecor
     ):
         pass
     assert calls == ["startup", "shutdown"]  # a half-done startup is still closed
+
+
+def test_a_role_binding_takes_a_reasoning_effort() -> None:
+    # D-71 over the API: stored with the binding, validated, and listed back.
+    client = _reg_client()
+    conn_id = client.post(
+        "/providers?token=tok-a", json={"name": "oai", "provider": "openai"}
+    ).json()["id"]
+    ok = client.put(
+        "/providers/roles/extractor?token=tok-a",
+        json={"connection_id": conn_id, "model": "gpt-5.6-luna", "reasoning_effort": "low"},
+    )
+    assert ok.status_code == 200 and ok.json()["reasoning_effort"] == "low"
+    roles = client.get("/providers?token=tok-a").json()["roles"]
+    assert any(r["role"] == "extractor" and r["reasoning_effort"] == "low" for r in roles)
+    bad = client.put(
+        "/providers/roles/extractor?token=tok-a",
+        json={"connection_id": conn_id, "model": "gpt-5.6-luna", "reasoning_effort": "turbo"},
+    )
+    assert bad.status_code == 400

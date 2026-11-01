@@ -39,8 +39,10 @@ class CodexResponsesProvider:
         base_url: str = CODEX_BASE_URL,
         timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._model = model
+        self._reasoning_effort = reasoning_effort  # D-71; None = the backend's default
         self._token_provider = token_provider
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
@@ -75,6 +77,8 @@ class CodexResponsesProvider:
         }
         if instructions:
             body["instructions"] = instructions
+        if self._reasoning_effort:  # the backend accepts this one (D-71, verified live)
+            body["reasoning"] = {"effort": self._reasoning_effort}
         return body
 
     async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
