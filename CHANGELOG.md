@@ -9,6 +9,8 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-01
+
 Upgrading: run `uro db migrate` (migration 026 adds `reasoning_effort` to role bindings).
 
 ### Added
@@ -934,7 +936,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/cupskeee/uro/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cupskeee/uro/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cupskeee/uro/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/cupskeee/uro/compare/v0.7.0...v0.8.0
