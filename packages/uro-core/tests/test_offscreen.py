@@ -1,10 +1,11 @@
 """OQ-4 narrowed (D-76): the world moves while nobody watches — at a time-skip, deterministically.
 
-Ashfall now authors who knows whom along the salt road, a rumor nobody has heard, and two agendas:
-each week the Saltborn feud heats up and word of a burned wagon travels inland (Old Weck saw it →
-Hesk the carter → Brannoc at the Lantern, two regions from the docks), and after a week the stopped
-wagons become a plot. No LLM: agendas are data, rumors spread along `knows` edges with per-hop
-confidence decay, and a third-hand belief reaches the narrator as "has heard a rumor".
+Ashfall now authors who knows whom along the salt road, a rumor nobody has heard, and three
+agendas: the Saltborn feud heats up with each skip of a week or more, word of a burned wagon
+travels inland once (Old Weck saw it → Hesk the carter → Brannoc at the Lantern, two hops away in
+the next region), and after a week the stopped wagons become a plot. No LLM: agendas are data,
+rumors spread along `knows` edges with per-hop confidence decay, and a third-hand belief reaches
+the narrator as "has heard a rumor".
 """
 
 import shutil
@@ -35,6 +36,10 @@ async def test_the_world_moved_while_you_were_away(store: PostgresEventStore) ->
     before = (await store.get_branch(branch)).head_commit  # type: ignore[union-attr]
     # nobody has heard the rumor, the feud is cold, the salt-road plot sleeps
     assert await _belief(store, branch, "a:weck") == (0.0, None)
+    # ...and the narrator can't tell it either, however the Saltborn come up (review: with the
+    # Saltborn as its subject it was a scene rumor from day 0)
+    day0 = await assemble_recall(store, branch, "I ask Brannoc about the Saltborn raiders", 8)
+    assert RUMOR not in {c.claim_id for c in [*day0.claims, *day0.belief_claims]}
     assert {t.thread_id: t.state for t in await store.list_threads(branch)}["t:salt-road"] == (
         "dormant"
     )
@@ -54,7 +59,7 @@ async def test_the_world_moved_while_you_were_away(store: PostgresEventStore) ->
     # the rumor travelled inland, fading with each retelling, and stopped at the floor
     assert await _belief(store, branch, "a:weck") == (0.9, None)  # saw it
     assert await _belief(store, branch, "a:hesk") == (0.495, "a:weck")
-    assert await _belief(store, branch, "a:brannoc") == (0.272, "a:hesk")  # two regions away
+    assert await _belief(store, branch, "a:brannoc") == (0.272, "a:hesk")  # the next region
     assert await _belief(store, branch, "a:ysolde") == (0.0, None)  # 0.15 < the 0.2 floor
 
     # at the Lantern, the regular retells it as a rumor, not as fact
@@ -62,6 +67,13 @@ async def test_the_world_moved_while_you_were_away(store: PostgresEventStore) ->
     assert RUMOR in {c.claim_id for c in recall.belief_claims}
     narrator = "\n".join(m.content for m in build_narrator_messages(recall, "I ask Brannoc"))
     assert "Brannoc has heard a rumor: Saltborn raiders burned a salt wagon" in narrator
+
+    # the next week the feud heats again, but the rumor isn't told all over again (review: it
+    # re-witnessed and re-spread the whole chain every skip)
+    await engine.agenda_tick(branch, 7)
+    (again,) = await store.lineage(branch, 1)
+    assert "BeliefChanged" not in again.event_types
+    assert await store.get_counter(branch, "f:saltborn", "war_heat") == 2
 
     # a timeline forked before the skip never moved
     fork = await store.fork_branch(world.world_id, before, "stayed-home")
@@ -95,4 +107,26 @@ def test_an_agenda_written_into_rules_yaml_is_refused(tmp_path: Path) -> None:
     with (pack / "rules.yaml").open("a") as f:
         f.write(agendas)
     with pytest.raises(PackError, match=r"`agendas` goes in agendas\.yaml"):
+        parse_pack(pack)
+
+
+def test_rule_files_may_leave_the_version_to_each_other(tmp_path: Path) -> None:
+    # Review: before D-76 an agendas.yaml with no version line took rules.yaml's; keep that.
+    pack = tmp_path / "ashfall"
+    shutil.copytree(WORLDS / "ashfall", pack)
+    agendas = pack / "agendas.yaml"
+    agendas.write_text(agendas.read_text().split("\n", 1)[1])  # drop `rules_api_version: 7`
+    assert parse_pack(pack).rule_pack.agendas  # type: ignore[union-attr]
+    agendas.write_text("rules_api_version: 6\n" + agendas.read_text())
+    with pytest.raises(PackError, match=r"\(7 and 6\)"):
+        parse_pack(pack)
+
+
+def test_a_rule_file_with_odd_keys_is_a_pack_error(tmp_path: Path) -> None:
+    # Review: two non-string top-level keys made the stray-key check raise TypeError (a 500).
+    pack = tmp_path / "ashfall"
+    shutil.copytree(WORLDS / "ashfall", pack)
+    with (pack / "rules.yaml").open("a") as f:
+        f.write("1: x\nfoo: y\n")
+    with pytest.raises(PackError, match="doesn't read"):
         parse_pack(pack)

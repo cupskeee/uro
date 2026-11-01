@@ -12,7 +12,7 @@
   kind: "site"
   parent: "p:vel"
   description: "A low tavern by the pier, smelling of tar and old fish."
-# Two regions inland (D-76): where word from the coast arrives late, if at all.
+# Inland, the next region over (D-76): where word from the coast arrives late, if at all.
 - id: "p:greyreach"
   name: "Greyreach"
   kind: "region"

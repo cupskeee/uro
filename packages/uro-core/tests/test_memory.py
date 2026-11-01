@@ -369,8 +369,8 @@ async def test_reembed_moves_old_memories_to_the_intent_vector(store: PostgresEv
     async def embed(texts: list[str]) -> list[list[float]]:
         return [hashing_embedding(t) for t in texts]
 
-    assert await store.reembed_memories(embed, world_id=world.world_id) == 1  # this world only
-    assert await store.reembed_memories(embed, world_id=world.world_id) == 0  # idempotent
+    assert await store.reembed_memories(embed, world_id=world.world_id) == (1, 0)  # this world
+    assert await store.reembed_memories(embed, world_id=world.world_id) == (0, 0)  # idempotent
     want = hashlib.sha256(memory_embed_text("I admit my fear", narration).encode()).hexdigest()
     async with store.pool.acquire() as conn:
         rows = {
@@ -382,3 +382,58 @@ async def test_reembed_moves_old_memories_to_the_intent_vector(store: PostgresEv
         }
     assert rows[world.main_branch_id] == (want, narration)  # new vector, same shown text
     assert rows[other.main_branch_id][0] != want  # the other world was left alone
+
+
+async def test_reembed_never_mixes_two_dimensions_on_a_branch(store: PostgresEventStore) -> None:
+    # Review: the registry's embedder re-embedding a world played with another one (a stub world's
+    # 256-dim vectors replaced by 3072-dim ones) leaves a branch that can't be searched at all.
+    from uro_core.domain.events import beat_resolved
+
+    world = await store.create_world(f"test-{new_id()}")
+    narration = f"The tide comes in at {new_id()}."  # vectors are shared by text across worlds
+    commit = await store.append_beat(
+        world.main_branch_id,
+        [beat_resolved(beat_id="b", participant_id="p", intent_text="I wait", narration=narration)],
+    )
+    await store.add_memory(
+        branch_id=world.main_branch_id,
+        commit_id=commit.commit_id,
+        kind="beat",
+        text=narration,
+        vector=[0.5] * 8,  # embedded by some 8-dimension model
+        entity_refs=[],
+    )
+
+    async def other_model(texts: list[str]) -> list[list[float]]:
+        return [hashing_embedding(t) for t in texts]  # 256 dimensions
+
+    assert await store.reembed_memories(other_model, world_id=world.world_id) == (0, 1)
+    hits = await store.search(world.main_branch_id, [0.5] * 8, 4)  # still searchable as before
+    assert [h.text for h in hits] == [narration]
+
+
+async def test_semantic_k_zero_turns_semantic_recall_off(store: PostgresEventStore) -> None:
+    # Review: the over-fetch (k + recency window) let memories through when k was 0.
+    branch = await _branch(store)
+    old = "The oracle warned of a great flood in the third season of drought."
+    await store.add_memory(
+        branch_id=branch,
+        commit_id="c-old",
+        kind="beat",
+        text=old,
+        vector=hashing_embedding(old),
+        entity_refs=[],
+    )
+    from uro_core.domain.events import beat_resolved
+
+    for i in range(3):  # recent beats: the over-fetch asks for k + their count
+        await store.append_beat(
+            branch,
+            [
+                beat_resolved(
+                    beat_id=f"b{i}", participant_id="p", intent_text="x", narration=f"n{i}"
+                )
+            ],
+        )
+    engine = Engine(store, ProviderRouter(bindings={}, default=ScriptedProvider()), semantic_k=0)
+    assert (await engine._recall(branch, "the oracle's flood")).memories == []

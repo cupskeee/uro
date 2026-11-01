@@ -259,6 +259,8 @@ class Engine:
             participant_id=participant_id,
             world_ref=world_ref,
         )
+        if self._semantic_k <= 0:  # semantic recall off (review: the over-fetch let k=0 through)
+            return recall
         recent_texts = {b.narration for b in recall.recent_beats}
         try:
             vectors = await self._router.embed(

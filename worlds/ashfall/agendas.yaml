@@ -1,19 +1,38 @@
 rules_api_version: 7
 # Off-screen (D-76): agendas run when in-fiction time passes (a time-skip), whether or not anyone
-# watches. Deterministic data, no LLM. Each fires at most once per skip.
+# watches. Deterministic data, no LLM. Each fires at most once per skip, however long the skip, and
+# every `when` reads the world as it stood before the skip's agendas ran.
 agendas:
-  # The feud grows each week, and word of the burned wagon travels the salt road: Old Weck saw it,
-  # Hesk the carter hears it from him, Brannoc at the Lantern hears it third-hand, as a rumor.
-  - id: word-travels-the-salt-road
+  # The feud heats up with each time-skip of a week or more.
+  - id: the-feud-simmers
     every_days: 7
     then:
       - do: adjust_counter
         scope_ref: "f:saltborn"
         key: "war_heat"
         delta: 1
+    scope:
+      world: true
+
+  # Word of the burned wagon travels the salt road, once: Old Weck saw it, Hesk the carter hears it
+  # from him, Brannoc at the Lantern hears it third-hand, as a rumor. The counter makes it one-off,
+  # so a later skip doesn't tell everyone again.
+  - id: word-travels-the-salt-road
+    every_days: 7
+    when:
+      kind: counter
+      scope_ref: "f:saltborn"
+      key: "wagon_told"
+      op: "=="
+      value: 0
+    then:
       - do: spread_belief
         claim: "c:wagon-burned"
         witnesses: ["a:weck"]
+      - do: set_counter
+        scope_ref: "f:saltborn"
+        key: "wagon_told"
+        value: 1
     scope:
       world: true
 

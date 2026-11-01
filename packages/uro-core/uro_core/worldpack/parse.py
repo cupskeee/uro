@@ -68,7 +68,7 @@ def _rule_pack(root: Path) -> RulePack | None:
             raise PackError(f"{path.name} must be a YAML mapping (with rules_api_version + {key})")
         # Any other key would be read by nothing: an `agendas:` list written into rules.yaml was
         # accepted and never ran (found authoring D-76's content). Refuse it, naming the right file.
-        stray = sorted(set(raw) - {"rules_api_version", key})
+        stray = sorted(set(raw) - {"rules_api_version", key}, key=str)  # YAML keys may be ints
         if stray:
             where = {"rules": "rules.yaml", "agendas": "agendas.yaml"}
             hint = "; ".join(f"`{k}` goes in {where[k]}" for k in stray if k in where)
@@ -76,10 +76,17 @@ def _rule_pack(root: Path) -> RulePack | None:
                 f"{path.name} has {', '.join(f'`{k}`' for k in stray)}, which it doesn't read"
                 + (f" ({hint})" if hint else "")
             )
-        version = raw.get("rules_api_version")
-        if "rules_api_version" in data and data["rules_api_version"] != version:
-            raise PackError("rules.yaml and agendas.yaml declare different rules_api_version")
-        data["rules_api_version"] = version
+        # A file may leave the version to the other one (as before D-76); two that both declare one
+        # must agree.
+        if "rules_api_version" in raw:
+            if data.get("rules_api_version") not in (None, raw["rules_api_version"]):
+                raise PackError(
+                    f"rules.yaml and agendas.yaml declare different rules_api_version "
+                    f"({data['rules_api_version']} and {raw['rules_api_version']})"
+                )
+            data["rules_api_version"] = raw["rules_api_version"]
+        else:
+            data.setdefault("rules_api_version", None)
         data[key] = raw.get(key, [])
     try:
         # RulePack's model validator enforces the supported-version set (v1..v3; v3 adds multi-ref

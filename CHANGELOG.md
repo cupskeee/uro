@@ -9,14 +9,16 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
-Upgrading: run `uro memory reembed` once (cents of embeddings): beat memories are now embedded
-with the player's intent, and memories from earlier versions are recalled worse until re-embedded.
+Upgrading: run `uro memory reembed` once (cents of embeddings), on the worlds you play with the
+registry's embedder (`--world` to pick them): beat memories are now embedded with the player's
+intent, and memories from earlier versions are recalled worse until re-embedded. A world whose
+memories have another dimension is skipped and reported.
 
 ### Fixed
 - **A rule file's misplaced section is refused instead of ignored** (D-76). `rules.yaml` reads only
   `rules` and `agendas.yaml` only `agendas`; an `agendas:` list written into `rules.yaml` was
-  accepted and never ran. Any key a file doesn't read is now an error naming where it goes, and
-  the two files must declare the same `rules_api_version`.
+  accepted and never ran. Any key a file doesn't read is now an error naming where it goes; if both
+  files declare a `rules_api_version`, they must agree.
 - **Semantic recall no longer loses its slots to recent beats** (D-75). It took the 4 nearest
   memories and then dropped the ones still in the recency window, so mid-scene it brought back 0–2
   older beats instead of 4.
@@ -26,7 +28,8 @@ with the player's intent, and memories from earlier versions are recalled worse 
   commits a `knows` edge each way, the relation rumors travel along. A ref to no actor is refused.
 - **Ashfall's world moves while you're away** (D-76). A second region along the salt road, three
   actors, a rumor and two weekly agendas: across a time-skip the Saltborn feud heats up, a new
-  plot surfaces, and word of a burned wagon reaches a roadhouse two regions inland as a rumor.
+  plot surfaces, and word of a burned wagon travels two hops inland, into the next region, reaching
+  a roadhouse as a rumor.
 
 ### Changed
 - **Memories remember what the player did** (D-75). Each beat's memory is embedded as the
