@@ -877,10 +877,17 @@ def create_app(
         auth_id = body.get("auth_id")
         if auth_id is not None and all(c.id != auth_id for c in await store.list_credentials()):
             raise HTTPException(status_code=400, detail=f"no such credential: {auth_id}")
+        from uro_core.providers.registry import check_cli_command
+
+        provider, base_url = str(_require(body, "provider")), body.get("base_url") or None
+        try:
+            check_cli_command(provider, base_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         cid = await store.add_connection(
             name=str(_require(body, "name")),
-            provider=str(_require(body, "provider")),
-            base_url=body.get("base_url") or None,
+            provider=provider,
+            base_url=base_url,
             auth_id=auth_id,
         )
         return {"id": cid}

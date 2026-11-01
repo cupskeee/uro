@@ -172,9 +172,12 @@ Two kinds run a locally installed, logged-in CLI once per call instead of callin
 `claude_cli` runs `claude -p` (Claude Code) and `codex_cli` runs `codex exec` (Codex). The
 **credential is the CLI's own login** on the machine running Uro (a Claude or ChatGPT subscription,
 or whatever the CLI holds), so the connection links no credential; `base_url`, if set, names the
-executable (default: found on `PATH`). The model is any id the CLI accepts (`claude_cli` lists the
-`haiku`/`sonnet`/`opus` aliases; `codex_cli` lists `default`, the model the CLI is configured to use),
-a role may carry a reasoning effort (`--effort` / `model_reasoning_effort`), and neither embeds.
+executable (default: found on `PATH`). Its file name must be `claude` or `codex` (`.exe`/`.cmd` on
+Windows): it picks WHICH install runs, never what program. The model is any id the CLI accepts
+(`claude_cli` lists the `haiku`/`sonnet`/`opus` aliases; `codex_cli` lists `default`, Codex's
+built-in default, since the user's Codex config isn't read), a role may carry a reasoning effort
+(`--effort`, which takes `low`…`max`; `model_reasoning_effort`), and neither embeds. A call times out
+after 300 s spent waiting on the CLI; a slow reader of the narration doesn't count against it.
 
 ```
 uro provider add claude --provider claude_cli
@@ -184,19 +187,35 @@ uro provider bind extractor <connection> gpt-5.6-luna --reasoning-effort low
 ```
 
 **Locked down.** Both CLIs are coding agents with tools, and player text reaches their prompts.
-Every call runs in an empty private directory with the prompt on stdin (never in `argv`, where `ps`
-shows it) and Uro's system prompt from a temporary file in place of the agent's own:
+Every call runs in a fresh, empty directory that is removed afterwards, with the prompt on stdin
+(never in `argv`, where `ps` shows it) and Uro's system prompt from a file beside that directory, in
+place of the agent's own. A multi-turn prompt (a re-ask) is written as a transcript whose turn
+markers carry a random token per call, so player text can't forge a turn. The CLI gets only the
+environment it needs to find its own login and the network (`PATH`, `HOME`, the user and locale,
+`TMPDIR`, `CODEX_HOME`/`CLAUDE_CONFIG_DIR`, `XDG_*`, proxy and CA settings). Otherwise an
+`ANTHROPIC_API_KEY` in Uro's environment would take precedence over Claude's subscription login
+(checked live), and `URO_SECRET_KEY` and the database URL would be readable by the agent. So a CLI
+that authenticates through environment variables (an API key, Bedrock, Vertex) won't log in here;
+those are what the HTTP kinds are for.
 
-- `claude -p` with `--tools ""` (no tools at all), `--strict-mcp-config` (no MCP servers),
-  `--setting-sources ""` (no user or project settings, so no hooks), `--no-session-persistence`,
-  `--disable-slash-commands`. (`--bare` is not used: it reads only an API key, never a login.)
+- `claude -p` with `--tools ""` (Claude Code's built-in tool set emptied), `--strict-mcp-config` (no
+  MCP servers), `--setting-sources ""` (no user or project settings, so no hooks),
+  `--no-session-persistence`, `--disable-slash-commands`. (`--bare` is not used: it reads only an
+  API key, never a login.)
 - `codex exec` with `--sandbox read-only`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`,
-  `-c web_search="disabled"` and `--disable` for `shell_tool`, `browser_use`, `browser_use_external`,
-  `computer_use`, `in_app_browser`, `image_generation`, `apps` and `plugins`. Measured live
-  (2026-11-01): with only the read-only sandbox, `codex exec` ran `sed` on a planted file outside its
-  directory and quoted it back; with the shell tool off it could not. A feature name the installed
-  Codex doesn't know makes it exit with an error, so a renamed shell tool fails closed. A tool event
-  in its output is refused anyway.
+  `-c web_search="disabled"` and a `--disable` for each Codex 0.163 feature that gives the agent a
+  tool or runs something on its own (`CODEX_DISABLED_FEATURES` in `providers/adapters/cli.py`: the
+  shell and `unified_exec`, image viewing, browsers and computer use, image generation, apps and
+  plugins, sub-agents, sleep, goals, skills, tool suggestions, hooks and the code-mode host).
+  Measured live (2026-11-01): with only the read-only sandbox, `codex exec` ran `sed` on a planted
+  file outside its directory and quoted it back; with the shell tool off it could not. Codex accepts
+  `--disable` of a RETIRED feature name and does nothing, so before its first call the adapter reads
+  `codex features list` and refuses to run if any of those features is gone or `removed`. A tool
+  added under a new feature name in a later Codex is not on the list; the backstop is that any tool
+  event in the output (anything but a message, reasoning or a notice) makes the call fail.
+
+The operator still chooses which `claude`/`codex` runs and what that login can reach; the
+connection endpoints are operator-only (D-44).
 
 **Costs.** Measured live on a three-beat Ashfall session (narrator and planner on `claude_cli`,
 extractor on `codex_cli` at `low`): each call pays ~1.5–3 s of CLI start-up, so the player could type

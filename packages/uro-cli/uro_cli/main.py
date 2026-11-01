@@ -1819,6 +1819,9 @@ def provider_add(
     async def _run() -> None:
         if api_key and credential:
             raise ValueError("pass either --api-key or --credential, not both")
+        from uro_core.providers.registry import check_cli_command
+
+        check_cli_command(provider, base_url)
         store = build_store()
         await connect_store(store)
         try:

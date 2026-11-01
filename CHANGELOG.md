@@ -14,11 +14,13 @@ Upgrading: run `uro db migrate` (migration 026 adds `reasoning_effort` to role b
 ### Added
 - **Play on your Claude or ChatGPT subscription through their CLIs** (D-72). Two new connection
   kinds, `claude_cli` (`claude -p`) and `codex_cli` (`codex exec`), run the installed, logged-in
-  CLI once per call: no API key is stored, and `--base-url` names the executable if it isn't on
-  `PATH`. Every call runs with all of the agent's tools off, in an empty directory, with the
-  prompt on stdin. A live check had an unlocked `codex exec` read a file outside its directory, so
-  this is enforced rather than optional. Chat only; `codex_cli` doesn't stream. Measured live,
-  a beat takes about twice as long as with the HTTP providers.
+  CLI once per call: no API key is stored, and `--base-url` may point at the `claude`/`codex`
+  executable if it isn't on `PATH`. Every call runs with the agent's tools off (Claude Code's tool
+  set emptied; each Codex tool feature disabled, checked against the installed Codex first), in a
+  fresh empty directory, with the prompt on stdin and none of Uro's environment beyond what the CLI
+  needs to find its login. A live check had an unlocked `codex exec` read a file outside its
+  directory, so this is enforced rather than optional. Chat only; `codex_cli` doesn't stream.
+  Measured live, a beat takes about twice as long as with the HTTP providers.
 - **A reasoning effort per role** (D-71). `uro provider bind <role> <conn> <model>
   --reasoning-effort low`, or `reasoning_effort` on `PUT /providers/roles/{role}`. Measured on
   replayed sessions, the extractor at `low` was about 40% faster and kept the same key news; we
