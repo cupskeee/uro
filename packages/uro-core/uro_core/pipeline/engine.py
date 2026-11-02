@@ -26,6 +26,7 @@ from uro_core.domain.events import (
     item_transferred,
     mode_changed,
     sheet_updated,
+    time_advanced,
 )
 from uro_core.domain.ids import new_id
 from uro_core.engines.rules import evaluate_agendas, evaluate_rules
@@ -73,6 +74,7 @@ from uro_core.rulesets.base import (
     ruleset_contract_problem,
 )
 from uro_core.rulesets.rng import Rng
+from uro_core.timeline.clock import day_cue
 from uro_core.timeline.models import Campaign, Commit
 from uro_core.worldpack.rules import RulePack
 
@@ -121,6 +123,12 @@ class _Context(BaseModel):
     # The PC the ACTING participant drives this beat (OQ-7) — resolved once from participant_id and
     # reused by planning, the mechanics gate, and the encounter aggressor. "" = no bound PC.
     pc_actor_id: str = ""
+    # The whole days the intent passes and the sentence that passes them (D-77), and the branch's
+    # day when the beat began — read only when the intent passes a day (the advance's
+    # compare-and-set base, so a skip or another advance during the beat isn't stacked on).
+    cue_days: int = 0
+    cue_evidence: str = ""
+    world_day: int = 0
 
 
 class _Shared:
@@ -430,6 +438,8 @@ class Engine:
         A caller may supply `plan` (docs/18 B9): the DETERMINISTIC path into the mechanics gate — it
         is validated exactly like an LLM plan (affordance fence + D-21 trigger coverage) but the
         model planner is skipped — CI + keyless consumers resolve checks with no LLM."""
+        cue_days, cue_evidence = (0, "") if self._bare else day_cue(intent_text)
+        world_day = await self._store.current_world_time(campaign.branch_id) if cue_days else 0
         recall = await self._recall(
             campaign.branch_id, intent_text, participant_id, campaign.world_id
         )
@@ -440,7 +450,13 @@ class Engine:
                     "supplied plan ignored: %s, so there is no mechanics gate to drive it (B9)",
                     "no ruleset is bound" if self._ruleset is None else "the engine is --bare",
                 )
-            return _Context(recall=recall, pc_actor_id=pc_actor_id)
+            return _Context(
+                recall=recall,
+                pc_actor_id=pc_actor_id,
+                cue_days=cue_days,
+                cue_evidence=cue_evidence,
+                world_day=world_day,
+            )
         if plan is None:
             plan = await self._plan(campaign, intent_text, recall, pc_actor_id)
         else:  # client-supplied plan: validate it (same fence as the LLM plan), skip the model
@@ -459,6 +475,9 @@ class Engine:
             directives=plan.narration_directives,
             suggestions=plan.suggestions,
             pc_actor_id=pc_actor_id,
+            cue_days=cue_days,
+            cue_evidence=cue_evidence,
+            world_day=world_day,
         )
 
     async def _acting_pc(self, campaign: Campaign, participant_id: str) -> str:
@@ -509,9 +528,23 @@ class Engine:
             role, messages, branch_id=campaign.branch_id, recorder=self._recorder
         )
         narration = "".join([chunk async for chunk in stream]).strip()
-        events, _, _ = await self._beat_events(
+        events, _, beat_id = await self._beat_events(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
         )
+        days = await self._days_passed(campaign, ctx, encounter_events)
+        if days:  # the would-be advance (D-77) — its own commit in a real beat, nothing here
+            events.append(
+                time_advanced(
+                    from_day=ctx.world_day,
+                    to_day=ctx.world_day + days,
+                    reason="play",
+                    evidence=ctx.cue_evidence,
+                    beat_id=beat_id,
+                    caused_by=CausedBy(
+                        kind="player_action", participant_id=participant_id, beat_id=beat_id
+                    ),
+                )
+            )
         return events
 
     async def _finish(
@@ -544,6 +577,7 @@ class Engine:
             # to CounterChanged-triggered rules (C6, D-54). It is
             # exception-isolated (react() never raises) — the beat is already durable.
             await self.react(campaign, commit.commit_id, events)
+            await self._pass_time(campaign, participant_id, ctx, beat_id, encounter_events)
         return BeatResult(
             beat_id=beat_id,
             narration=narration,
@@ -698,10 +732,18 @@ class Engine:
         caused_by=module beat after the TimeAdvanced commit (decided-OQ #1: separate ordered beat).
         Deterministic: no wall-clock (day derived from the log), no ambient random; the whole
         effect is events, so replay never re-runs it. No LLM — safe to run without a provider."""
-        from_day = await self._store.current_world_time(branch_id)
         # the primary durable action; `reason` says why (a fork's skip says so — an in-place one
         # used to be recorded as "time-skip on fork" too, live run 2026-10-31)
         skip_commit = await self._store.time_skip(branch_id, days, reason=reason)
+        # The days the skip committed, read from its own TimeAdvanced (the branch lock picked
+        # them): a day read before the skip could be stale under a concurrent skip or play advance
+        detail = await self._store.commit_detail(skip_commit.world_id, skip_commit.commit_id)
+        events = detail.events if detail else []
+        advanced = next((e.payload for e in events if e.event_type == "TimeAdvanced"), None)
+        if advanced is None:
+            logger.warning("time-skip %s has no TimeAdvanced; no downtime, no agendas", skip_commit)
+            return
+        from_day, to_day = int(advanced["from_day"]), int(advanced["to_day"])
         # The downtime and agenda passes are best-effort over the already-committed time-skip — like
         # react(), a fault here must not fail the skip (which stands). Under the same per-branch
         # lock so their read-modify-writes don't interleave with a concurrent react() (D-34 review).
@@ -710,28 +752,89 @@ class Engine:
                 await self._downtime(branch_id, days)
             except Exception as exc:
                 logger.warning("downtime failed; the time-skip stands, no rest: %s", exc)
-            try:
-                raw = await self._store.world_rule_pack(branch_id)
-                if not raw:
-                    return
-                pack = RulePack(**raw)
-                if not pack.agendas:
-                    return
-                to_day = from_day + days
-                fired = await evaluate_agendas(
-                    self._store, branch_id, agendas=pack.agendas, from_day=from_day, to_day=to_day
+            await self._agenda_pass(branch_id, from_day, to_day, skip_commit.commit_id)
+
+    async def _agenda_pass(
+        self, branch_id: str, from_day: int, to_day: int, trigger_commit: str
+    ) -> None:
+        """Fire the world's agenda rules whose cadence boundary (from_day, to_day] crosses, as one
+        caused_by=module beat after the commit that moved the clock. Shared by an explicit skip and
+        time passed in play (D-77). Never raises: the clock's commit is already durable. The caller
+        holds the branch's react lock."""
+        try:
+            raw = await self._store.world_rule_pack(branch_id)
+            if not raw:
+                return
+            pack = RulePack(**raw)
+            if not pack.agendas:
+                return
+            fired = await evaluate_agendas(
+                self._store, branch_id, agendas=pack.agendas, from_day=from_day, to_day=to_day
+            )
+            if not fired:
+                return
+            result = await run_rules_gauntlet(
+                self._store, branch_id, fired, trigger_commit=trigger_commit
+            )
+            _log_drops("agenda tick", result)
+            if result.events:
+                commit = await self._store.append_beat(branch_id, result.events)
+                await self._cascade(branch_id, pack, result.events, commit.commit_id, to_day)
+        except Exception as exc:  # the clock's commit is durable — an agenda fault must not fail it
+            logger.warning("agenda pass failed; the time passed stands, no agendas: %s", exc)
+
+    async def _days_passed(
+        self, campaign: Campaign, ctx: _Context, encounter_events: list[DomainEvent] | None
+    ) -> int:
+        """The days this beat moves the clock (D-77): the intent's cue, for a free-roam beat of
+        solo play. A fight passes no day; neither does a party's beat — one player's night isn't
+        the table's (merging a round's turns needs arbiter state the engine can't see, D-31), so a
+        party passes time with an explicit skip."""
+        if not ctx.cue_days or encounter_events is not None:
+            return 0
+        if len(await self._store.campaign_pcs(campaign.campaign_id)) > 1:
+            logger.info("party play: the intent's %d day(s) aren't recorded (D-77)", ctx.cue_days)
+            return 0
+        return ctx.cue_days
+
+    async def _pass_time(
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        ctx: _Context,
+        beat_id: str,
+        encounter_events: list[DomainEvent] | None,
+    ) -> None:
+        """Time passed in play (D-77): after the beat and its reactions commit, move the clock by
+        the days the intent passed, as its own TimeAdvanced commit caused by the player — only if
+        the branch is still on the day the beat began (a concurrent skip or advance wins, and this
+        commits nothing) — then fire the agendas the new day crossed. No downtime: a night in play
+        isn't a ruleset's rest (that stays with explicit skips, D-63/D-76). Never raises: the beat
+        is already durable."""
+        try:
+            days = await self._days_passed(campaign, ctx, encounter_events)
+            if not days:
+                return
+            async with self._react_lock(campaign.branch_id):
+                commit = await self._store.advance_day(
+                    campaign.branch_id,
+                    based_on_day=ctx.world_day,
+                    days=days,
+                    reason="play",
+                    evidence=ctx.cue_evidence,
+                    beat_id=beat_id,
+                    caused_by=CausedBy(
+                        kind="player_action", participant_id=participant_id, beat_id=beat_id
+                    ),
                 )
-                if not fired:
+                if commit is None:
+                    logger.info("the clock moved during the beat; its %d day(s) aren't added", days)
                     return
-                result = await run_rules_gauntlet(
-                    self._store, branch_id, fired, trigger_commit=skip_commit.commit_id
+                await self._agenda_pass(
+                    campaign.branch_id, ctx.world_day, ctx.world_day + days, commit.commit_id
                 )
-                _log_drops("agenda tick", result)
-                if result.events:
-                    commit = await self._store.append_beat(branch_id, result.events)
-                    await self._cascade(branch_id, pack, result.events, commit.commit_id, to_day)
-            except Exception as exc:  # the time-skip is durable — an agenda fault must not fail it
-                logger.warning("agenda tick failed; the time-skip stands, no agendas: %s", exc)
+        except Exception as exc:
+            logger.warning("time passed in play wasn't recorded; the beat stands: %s", exc)
 
     async def _downtime(self, branch_id: str, days: int) -> None:
         """Downtime (D-63): each of the bound ruleset's sheets on the branch after `days` of rest —

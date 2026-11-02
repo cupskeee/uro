@@ -530,6 +530,10 @@ class TimeAdvancedPayload(BaseModel):
     from_day: int
     to_day: int
     reason: str = ""
+    # Time passed in play (D-77): the words of the player's intent that passed it, and the beat.
+    # Absent on a time-skip (the payload is dumped without them, so skip events are unchanged).
+    evidence: str | None = None
+    beat_id: str | None = None
 
 
 class AdaptationAppliedPayload(BaseModel):
@@ -540,13 +544,22 @@ class AdaptationAppliedPayload(BaseModel):
 
 
 def time_advanced(
-    *, from_day: int, to_day: int, reason: str = "", caused_by: CausedBy | None = None
+    *,
+    from_day: int,
+    to_day: int,
+    reason: str = "",
+    evidence: str | None = None,
+    beat_id: str | None = None,
+    caused_by: CausedBy | None = None,
 ) -> DomainEvent:
+    payload = TimeAdvancedPayload(
+        from_day=from_day, to_day=to_day, reason=reason, evidence=evidence, beat_id=beat_id
+    )
     return DomainEvent(
         event_type="TimeAdvanced",
         world_time=WorldTime(day=to_day),
         caused_by=_default_cause(caused_by),
-        payload=TimeAdvancedPayload(from_day=from_day, to_day=to_day, reason=reason).model_dump(),
+        payload=payload.model_dump(exclude_none=True),
     )
 
 

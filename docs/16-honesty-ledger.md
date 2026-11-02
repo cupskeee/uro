@@ -535,7 +535,7 @@ logged-in CLIs; no role binding was changed.
 | Rumors spread in ordinary play | **only where a world defines it** | along `knows` edges a pack authors (seeds, or a rule's/agenda's `add_edge`; the extractor never adds one), from a world rule's or agenda's `spread_belief` or a Chronicler outcome's witnesses. A rumor an NPC tells the player, or a deed witnessed in a normal beat, spreads to no one (deferred, D-76). |
 | A re-told rumor | **overwrites, by design today** | each `spread_belief` (and each Chronicler outcome) seeds its witnesses at 0.9 and re-tells the chain, upserting every belief on it — a stronger belief can be lowered, and a dead witness still "sees" it. Packs keep a spread one-off themselves (Ashfall gates its own on a counter). |
 | Agenda outcomes never contradict | **by authorship, not checked** | no LLM generates an outcome, so a contradiction between places can only be the pack's own (two agendas setting one thread to different states both commit, the last wins). |
-| The clock follows play | **no** | only an explicit time-skip moves it (one ever, measured); play rarely passes time (~3 of 209 narrations). Deferred with a gate (D-76). |
+| The clock follows play | **solo play, since D-77** (below) | until D-77 only an explicit time-skip moved it (one ever, measured); play rarely passes time (~3 of 209 narrations). |
 | `world_time.segment` | **schema-only** | never written: every stored event says "morning" (3,692 of 3,692). |
 | Per-event day stamps | **stale for ordinary beats** | beat events are stamped day 0 whatever the clock says (a beat after a skip to day 2 says day 0); every reader uses the chain's maximum day, which is right. |
 | Time in the prompts | **not told** | no prompt template mentions the day. |
@@ -552,9 +552,47 @@ and called back 56-122 beats later with thematic or oblique intents (acts 3-4).
 | Capability | Status | Evidence |
 |---|---|---|
 | Recall of callbacks at campaign scale | **live-validated (one campaign)** | the planted fact reached the narrator in 12/12 callbacks. The plant's own beat ranked in the top 4 for 10/12 (mostly 1st or 2nd among 70-125 memories outside the window); the other two came through claims. Every callback got 4 of 4 memories (D-75). |
-| The narrator USES what recall brings | **partial: 8/12** | 8 used the planted detail (some in other words: the map as "the salt-stiffened chart… Grey Shoals"), 1 partly (the sword's notches, not its name), 3 not: it misread the letter errand (sent the player east, though "a sealed letter must be delivered to Orla in Vel" was an active thread in the prompt), sidestepped the nickname, and never tied the fear to Weck or the brother. The gap is narrator adherence, not retrieval. |
+| The narrator USES what recall brings | **partial: 8/12 (before D-78; see below)** | 8 used the planted detail (some in other words: the map as "the salt-stiffened chart… Grey Shoals"), 1 partly (the sword's notches, not its name), 3 not: it misread the letter errand (sent the player east, though "a sealed letter must be delivered to Orla in Vel" was an active thread in the prompt), sidestepped the nickname, and never tied the fear to Weck or the brother. The gap is narrator adherence, not retrieval. |
 | The rumor across a skip, in play | **live-validated** | after the first skip Brannoc told it hedged ("Only talk… no one who saw it has come in to swear by the tale"); beliefs Weck 0.9, Hesk 0.495, Brannoc 0.272 as designed. |
 | Bystander knowledge | **narrator-improvised, then recorded** | Ysolde, who holds no belief, told a garbled variant of what Brannoc had just said in the same room; the extractor then recorded it as her testimony and belief. Old Weck, 83 beats after witnessing Mera's tale, retold it consistently, from recall. No harm to play observed. |
 | Time passing in play | **measured: narrated every time, recorded never** | the narration passed time on all 8 beats where the player slept, waited, travelled or rested, and on 1 of the other 138 (where the intent said "at first light"); none of it came from speech. The fiction ran ~36 days; the clock, moved only by the skips, recorded 28. This is the labelled data the D-76 clock gate asked for. |
 | State over a long campaign | **healthy, one watch item** | 13 actors (no duplicates), 128 claims (30 narrator facts, all lasting clues, no atmosphere), 146 memories. 9 plot threads, all still live, none resolved: player commitments (the promise, the letter) became threads, and scene-level ones accumulate. Every thread reaches every narrator prompt. |
+
+## Post-PoC — the clock follows play (2026-11-02, D-77)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| The clock follows solo play | **proven (deterministic); live-validated on one campaign (the confirmation run below)** | `test_a_night_in_play_moves_the_clock`: "Then I sleep until dawn" commits day 0 → 1 as its own commit after the beat, caused by the player, the sentence as evidence; speech, a promise, a plan and someone else's night commit nothing; a fork before the advance stays on day 0. `test_days_in_play_fire_the_weekly_agendas`: crossing day 7 in play fires Ashfall's weekly agendas, and a fork and a re-import agree. Re-driving the long run's intents with its skips (stub provider) ends on day 35; the fiction ran ~36 and the clock said 28. |
+| The intent cue grammar | **measured on a labelled fixture, English only** | `tests/fixtures/day_cues.json`, gated in CI: a batch scored blind found 16/22 day-passing intents with 0/30 false positives; after one more widening 21/22 (no longer held out); the first targeted set 36/38 and the long run's 7 days are in-sample. 0 fires on 300 generated play intents, 154 of the instance's own and 30 adversarial rows; days exact on every cue found. A cue it misses passes no time (the narration still may), as before D-77. |
+| A clock moved mid-beat | **proven (compare-and-set)** | `advance_day` commits only if the branch is still on the beat's starting day (`test_a_clock_moved_mid_beat_isnt_stacked_on`); a skip's agendas read their window from the skip's own commit, not a read before the lock (`test_a_skip_reads_its_window_from_its_own_commit`). |
+| Party, fight, bare | **pass no day** | `test_a_party_a_fight_and_bare_play_pass_no_day`: a party passes time with a skip; a fight's beat never does; `--bare` never reads a cue. |
+| Rest in play | **not a ruleset's rest** | no downtime runs on a night in play (Uro Pool's strain stays); downtime stays with explicit skips. |
+| `world_time.segment`, per-event stamps, time in prompts | **unchanged** | still unwritten, day 0 on ordinary beats, and not told (D-76's rows above). |
+
+## Post-PoC — narrator adherence and thread accumulation (2026-11-02, D-78, D-79)
+
+Measured live through the registry (Codex `gpt-5.6-luna` narrating and judging, `gpt-4o-mini` for one replay arm), on forks of the long
+run's campaign taken just before each beat; every arm narrated the same sample's context.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| The narrator uses what recall brings | **live-validated on one campaign and one model (D-78), by policy** | the planted detail used in 53/60 design-callback samples (A2) against 35/60 and 34/60 for today's prompt twice; 21/25 against 16/25 on five fresh plant/callback pairs with oblique callbacks; the nickname said 5/5 against 1/5. The letter callback stays 1/5: the link it needs (the carter is Hesk) isn't in the data. One callback gained a `no` once (an invented sign); the baseline's second run had two. |
+| Ordinary beats with recall beside the intent | **a small rise, measured at scale** | 12 ordinary beats × 3: unrelated earlier detail dragged in 9/36 against 11 and 3; a small unstated act given to the player (keeping to cover, a plank shifting under the hand) 5/36 against 1 and 2. Over a whole campaign (the confirmation run below, same judge on both long runs' ordinary beats): 14/110 against 11/110. 0 leaks of the header or marker. |
+| Old facts re-recorded when a narration brings them back | **pre-existing, unchanged by D-78** | over 60 callback narrations the extractor re-recorded a known fact in other words 14 times (A2), 14 and 13 (today's prompt): the old claim isn't among its KNOWN CLAIMS. 0 quoted player lines recorded as narrator fact. |
+| A pack overriding the narrator template | **gets the recall header and layout** | built in code (`test_a_pack_overriding_the_narrator_template_keeps_the_recall_header`). |
+| The ACTIVE THREADS block carries callbacks | **measured: yes, commitments** | without it, 25/36 callback samples used the planted detail against 28/36, and the letter fell from 3/3 to 0/3 (2 `no`). |
+| Thread accumulation | **measured, nothing shipped (D-79)** | 9 live threads, none resolved, after 146 beats; the resolutions were correctly zero (nothing was settled). A creation-side fence in the extractor prompt, replayed twice per model, over-corrected on `gpt-5.6-luna` (8 and 6 threads → 2 and 3, the soldiers and hauling plots lost) and added fragments on `gpt-4o-mini` (3 and 3 → 6 and 6). The narrator-side cap stays shelved with its trigger (D-79). |
+
+## Post-PoC — the confirmation run (2026-11-02, D-77 + D-78 live, run by Claude)
+
+The long run's script again, on a fresh Ashfall campaign with all of this live: the same plants, callbacks, time intents and skips (7, 7,
+14), with an LLM player for the other 110 beats (so a different story). Codex `gpt-5.6-luna` for every chat role, `text-embedding-3-large`.
+852 calls, no errors, 15.2 s a beat, ~37 minutes.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| The clock follows play, live | **live-validated (one campaign)** | 6 advances, 7 days, all on the scripted time beats; every one landed on a beat whose narration reached a new day (0/6 refused, by a lexical detector over the narrator's own words that finds 5/7 of the first run's crossings with 0 false positives). No narration crossed a day the intent didn't (0), and no advance came from quoted speech. The clock ended on day 35 (28 skipped, 7 played) against 28 before; play's crossing of day 21 fired the weekly feud agenda (`war_heat` 4 = three skips + one from play). |
+| Callbacks used, at campaign scale | **10/12 (one campaign)** | the same judge on both long runs: 10 yes, 1 partial, 1 no against 8 yes, 4 partial. The `no` (the brother): recall had the plant, the narrator evoked a drowning without naming Tomas. |
+| Small unstated acts on ordinary beats | **11/110 → 14/110** | the same judge over every ordinary beat of each run. |
+| Threads | **4 (2 emergent), not comparable** | the first run had 9: a different story (the LLM player's beats), and nothing about thread extraction changed. The promise became a thread; the letter didn't, and its callback was used anyway. |
 

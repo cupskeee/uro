@@ -16,7 +16,7 @@ import math
 import re
 from collections.abc import AsyncIterator
 
-from uro_core.providers.base import CompletionRequest
+from uro_core.providers.base import PLAYER_ACTION, CompletionRequest
 
 _EMBED_DIM = 256
 
@@ -36,7 +36,7 @@ class StubProvider:
         last_user = next(
             (m.content for m in reversed(req.messages) if m.role == "user"),
             "",
-        )
+        ).rsplit(PLAYER_ACTION, 1)[-1]  # the intent, after what recall put beside it (D-78)
         prior = sum(1 for m in req.messages if m.role == "assistant")
         sentences = [
             "[stub] The Rusty Tankard's fire pops and settles.",

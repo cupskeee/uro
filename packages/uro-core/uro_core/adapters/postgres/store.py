@@ -24,6 +24,7 @@ from uro_core.adapters.postgres.projector import (
 )
 from uro_core.domain.events import (
     BeatResolvedPayload,
+    CausedBy,
     DomainEvent,
     actor_created,
     adaptation_applied,
@@ -783,6 +784,37 @@ class PostgresEventStore:
                 ),
             ]
             return await self._append(conn, branch_id, events)
+
+    async def advance_day(
+        self,
+        branch_id: str,
+        *,
+        based_on_day: int,
+        days: int,
+        reason: str,
+        evidence: str,
+        caused_by: CausedBy,
+        beat_id: str | None = None,
+    ) -> Commit | None:
+        if days <= 0:
+            raise ValueError("days must be positive")
+        async with self.pool.acquire() as conn, conn.transaction():
+            locked = await conn.fetchval(
+                "SELECT world_id FROM branches WHERE branch_id = $1 FOR UPDATE", branch_id
+            )
+            if locked is None:
+                raise KeyError(f"unknown branch {branch_id!r}")
+            if await self._current_day(conn, branch_id) != based_on_day:
+                return None  # the clock moved since the beat began: don't stack on it
+            event = time_advanced(
+                from_day=based_on_day,
+                to_day=based_on_day + days,
+                reason=reason,
+                evidence=evidence,
+                beat_id=beat_id,
+                caused_by=caused_by,
+            )
+            return await self._append(conn, branch_id, [event])
 
     async def is_pc(self, branch_id: str, actor_id: str) -> bool:
         """Per-branch PC-ness (docs/02): true iff the actor has an ACTIVE binding here."""
