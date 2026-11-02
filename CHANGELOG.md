@@ -9,6 +9,18 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **The clock follows solo play** (D-77). An intent that passes whole days ("I sleep until
+  morning", "I ride for two days", at most 3) moves the branch's day by its own `TimeAdvanced`
+  commit after the beat, caused by the player, and the world's agendas fire on the days it crosses;
+  a dry run shows it. It reads the intent with a closed English grammar, no model call: speech,
+  plans, promises, a fight, a party's beat and `--bare` pass no day, and a skip or another advance
+  during the beat wins. `EventStore.advance_day` is new (an embedder's own store implements it).
+
+### Fixed
+- **A time-skip's agendas see the days it committed** (D-77). `agenda_tick` read the day before the
+  skip took the branch lock, so an advance landing in between shifted the window its agendas saw.
+
 ## [0.13.0] - 2026-11-01
 
 Upgrading: no database migration. Run `uro memory reembed` once (cents of embeddings), on the

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from uro_core.domain.events import BeatResolvedPayload, DomainEvent
+from uro_core.domain.events import BeatResolvedPayload, CausedBy, DomainEvent
 from uro_core.export import (
     BundleCommit,
     BundleEvent,
@@ -107,6 +107,22 @@ class EventStore(Protocol):
 
     async def time_skip(self, branch_id: str, days: int, *, reason: str = "time-skip") -> Commit:
         """Advance in-fiction time on a branch (TimeAdvanced + AdaptationApplied header)."""
+        ...
+
+    async def advance_day(
+        self,
+        branch_id: str,
+        *,
+        based_on_day: int,
+        days: int,
+        reason: str,
+        evidence: str,
+        caused_by: CausedBy,
+        beat_id: str | None = None,
+    ) -> Commit | None:
+        """Time passed in play (D-77): commit one TimeAdvanced of `days`, but only if the branch is
+        still on `based_on_day` (compare-and-set under the branch lock) — a concurrent skip or
+        another beat's advance makes it commit nothing. No AdaptationApplied header (not a skip)."""
         ...
 
     async def current_world_time(self, branch_id: str) -> int: ...

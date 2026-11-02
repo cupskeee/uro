@@ -1,0 +1,1407 @@
+{
+ "_about": "Labelled intents for the D-77 day clock (uro_core.timeline.clock). Each labelled row is [intent, whole days it passes]. 'fresh' was generated after the grammar's second version and measured blind (21/22 found after one later widening, so it is no longer fully held out); 'targeted' was the first held-out set and the grammar was widened against it (in-sample); 'long_run' is the 146-beat run's intents (in-sample); 'play' are generated play intents that pass no day; 'adversarial' must never pass a day.",
+ "fresh": [
+  [
+   "I sleep through the night at the inn.",
+   1
+  ],
+  [
+   "I curl up by the fire and rest until morning.",
+   1
+  ],
+  [
+   "I wait out the storm in the old watchtower for a day.",
+   1
+  ],
+  [
+   "I spend the day recovering in a quiet room.",
+   0
+  ],
+  [
+   "I take a long nap and wake up after sunset.",
+   0
+  ],
+  [
+   "I camp here overnight and continue at first light.",
+   1
+  ],
+  [
+   "I stay put for two days to let my wounds heal.",
+   2
+  ],
+  [
+   "I sleep late and take it easy around town all day.",
+   0
+  ],
+  [
+   "I wait in the tavern until the roads are safe again.",
+   0
+  ],
+  [
+   "I travel north for three days to reach the distant capital.",
+   3
+  ],
+  [
+   "I spend the night in the woods under my cloak.",
+   1
+  ],
+  [
+   "I rest beside the river for the whole afternoon.",
+   0
+  ],
+  [
+   "I lie low here for a day while the guards move on.",
+   1
+  ],
+  [
+   "I make the long journey across the plains over two days.",
+   2
+  ],
+  [
+   "I book a room and sleep until dawn.",
+   1
+  ],
+  [
+   "I sit around camp and let the entire day pass.",
+   0
+  ],
+  [
+   "I wait another night before heading into the ruins.",
+   1
+  ],
+  [
+   "I travel by wagon for three days toward the coast.",
+   3
+  ],
+  [
+   "I take the day off and recover at the healer's.",
+   0
+  ],
+  [
+   "I doze in the stable until morning.",
+   1
+  ],
+  [
+   "I stay at the village for two days and regain my strength.",
+   2
+  ],
+  [
+   "I spend the night at the roadside shrine.",
+   1
+  ],
+  [
+   "I wait here through the night, listening to the rain.",
+   1
+  ],
+  [
+   "I make the long trek south and arrive after three days.",
+   3
+  ],
+  [
+   "I rest all day and only get moving tomorrow.",
+   1
+  ],
+  [
+   "I sleep in late, eat something, and spend the rest of the day relaxing.",
+   0
+  ],
+  [
+   "I camp on the hill for the night.",
+   1
+  ],
+  [
+   "I wait out the cold spell indoors for two days.",
+   2
+  ],
+  [
+   "I travel far west for a couple of days before stopping.",
+   2
+  ],
+  [
+   "I take a full day to recover before setting out again.",
+   1
+  ],
+  [
+   "I ask how long the journey to town will take.",
+   0
+  ],
+  [
+   "I plan to leave at first light.",
+   0
+  ],
+  [
+   "I promise I'll keep watch while everyone sleeps.",
+   0
+  ],
+  [
+   "I wonder what happened here last night.",
+   0
+  ],
+  [
+   "I tell the others about the strange dream I had yesterday.",
+   0
+  ],
+  [
+   "I watch the guard sleep by the fire.",
+   0
+  ],
+  [
+   "I ask whether we have enough food for the trip.",
+   0
+  ],
+  [
+   "I say, \"We should rest before heading into the ruins.\"",
+   0
+  ],
+  [
+   "I remember camping near this river years ago.",
+   0
+  ],
+  [
+   "I check the sundial to see how late it is.",
+   0
+  ],
+  [
+   "I ask who was on watch during the night.",
+   0
+  ],
+  [
+   "I promise to wake everyone before dawn.",
+   0
+  ],
+  [
+   "I listen to the innkeeper talk about her busiest days.",
+   0
+  ],
+  [
+   "I wonder how far we've traveled today.",
+   0
+  ],
+  [
+   "I tell my companion that I barely slept last night.",
+   0
+  ],
+  [
+   "I plan to take a short nap after we finish searching.",
+   0
+  ],
+  [
+   "I watch the moon through the window.",
+   0
+  ],
+  [
+   "I ask when the next caravan is leaving.",
+   0
+  ],
+  [
+   "I say, \"I'll travel with you until sunset.\"",
+   0
+  ],
+  [
+   "I remember the long journey that brought me here.",
+   0
+  ],
+  [
+   "I check whether the bed looks comfortable enough for resting.",
+   0
+  ],
+  [
+   "I ask if anyone heard footsteps during the night.",
+   0
+  ],
+  [
+   "I talk about the days I spent training with the rangers.",
+   0
+  ],
+  [
+   "I promise I'll return before nightfall.",
+   0
+  ],
+  [
+   "I wonder why the village is still asleep.",
+   0
+  ],
+  [
+   "I study the map and estimate tomorrow's route.",
+   0
+  ],
+  [
+   "I tell the party to save their strength for the journey ahead.",
+   0
+  ],
+  [
+   "I ask how long the wounded scout has been asleep.",
+   0
+  ],
+  [
+   "I recall seeing these ruins on a previous expedition.",
+   0
+  ],
+  [
+   "I say, \"Let's wait until morning before we open that door.\"",
+   0
+  ]
+ ],
+ "targeted": [
+  [
+   "I settle down by the fire and sleep through the night.",
+   1
+  ],
+  [
+   "I find a quiet room at the inn and rest until morning.",
+   1
+  ],
+  [
+   "I curl up in my bedroll and doze until dawn.",
+   1
+  ],
+  [
+   "I spend the night camping beneath the trees.",
+   1
+  ],
+  [
+   "I take a long, uninterrupted sleep to recover my strength.",
+   1
+  ],
+  [
+   "I turn in for the evening and wake up at sunrise.",
+   1
+  ],
+  [
+   "I make camp and rest here for the next day.",
+   1
+  ],
+  [
+   "I sleep soundly for two days before setting out again.",
+   2
+  ],
+  [
+   "I stay at the inn and recuperate for a couple of days.",
+   2
+  ],
+  [
+   "I retreat to my quarters and rest for three days.",
+   3
+  ],
+  [
+   "I lie down and let myself recover overnight.",
+   1
+  ],
+  [
+   "I spend the next day resting and tending to my wounds.",
+   1
+  ],
+  [
+   "I find shelter and sleep until I feel fully refreshed.",
+   1
+  ],
+  [
+   "I take a well-earned break, resting here for the next two days.",
+   2
+  ],
+  [
+   "I bed down for the night and regain my energy.",
+   1
+  ],
+  [
+   "I remain in camp for three days, sleeping and recovering.",
+   3
+  ],
+  [
+   "I close my eyes and rest until the morning light.",
+   1
+  ],
+  [
+   "I rent a room and spend the night recovering.",
+   1
+  ],
+  [
+   "I take the next couple of days off to rest.",
+   2
+  ],
+  [
+   "I settle in somewhere safe and sleep through the night.",
+   1
+  ],
+  [
+   "I ride my horse toward the northern pass for a day.",
+   1
+  ],
+  [
+   "I march across the plains from dawn until dusk.",
+   0
+  ],
+  [
+   "I sail downriver and keep going through the night.",
+   1
+  ],
+  [
+   "I travel for two days along the old imperial road.",
+   2
+  ],
+  [
+   "I set out on foot and walk until tomorrow evening.",
+   1
+  ],
+  [
+   "I urge my mule onward for a day and a night.",
+   1
+  ],
+  [
+   "I take the coastal route and journey for three days.",
+   3
+  ],
+  [
+   "I cross the wilderness on horseback over the next two days.",
+   2
+  ],
+  [
+   "I board a merchant ship and sail south for a day.",
+   1
+  ],
+  [
+   "I march with the caravan for two full days.",
+   2
+  ],
+  [
+   "I follow the mountain trail for a day and a night.",
+   1
+  ],
+  [
+   "I travel eastward through the forest for three days.",
+   3
+  ],
+  [
+   "I row across the lake and continue onward until nightfall.",
+   0
+  ],
+  [
+   "I ride hard toward the frontier for two days.",
+   2
+  ],
+  [
+   "I leave at sunrise and trek through the hills for a day.",
+   1
+  ],
+  [
+   "I sail along the coast for two days and one night.",
+   2
+  ],
+  [
+   "I follow the river downstream on foot for a full day.",
+   1
+  ],
+  [
+   "I march through the desert for three days, stopping only to rest.",
+   3
+  ],
+  [
+   "I take the road west and travel through the night into the next day.",
+   1
+  ],
+  [
+   "I journey across the kingdom by wagon for two days.",
+   2
+  ],
+  [
+   "I lie down for a brief rest beneath the old oak.",
+   0
+  ],
+  [
+   "I take a short nap beside the campfire without ending the day.",
+   0
+  ],
+  [
+   "I stretch my legs and rest for a few minutes before moving on.",
+   0
+  ],
+  [
+   "I ask the innkeeper how many days the journey to the capital usually takes.",
+   0
+  ],
+  [
+   "I study the travel map and plan tomorrow’s route.",
+   0
+  ],
+  [
+   "I watch the guards while the other travelers sleep.",
+   0
+  ],
+  [
+   "I check whether the road ahead is safe for night travel.",
+   0
+  ],
+  [
+   "I rest my injured ankle against a pack and wait briefly.",
+   0
+  ],
+  [
+   "I ask my companion where we should stop to rest during the journey.",
+   0
+  ],
+  [
+   "I make travel preparations for the next few days.",
+   0
+  ],
+  [
+   "I quietly wake the sentry but leave the sleeping camp undisturbed.",
+   0
+  ],
+  [
+   "I sit down to catch my breath before continuing the climb.",
+   0
+  ],
+  [
+   "I wonder aloud whether we can reach the village before nightfall.",
+   0
+  ],
+  [
+   "I inspect the bedrolls to see where everyone plans to sleep.",
+   0
+  ],
+  [
+   "I take a restorative pause without advancing the calendar.",
+   0
+  ],
+  [
+   "I ask the guide how far we can travel before needing a rest.",
+   0
+  ],
+  [
+   "I remain alert while my companions take a short sleep.",
+   0
+  ],
+  [
+   "I review the supplies needed for several days of travel.",
+   0
+  ],
+  [
+   "I rest in the shade and listen for signs of approaching travelers.",
+   0
+  ],
+  [
+   "I discuss plans for tomorrow but do not set out yet.",
+   0
+  ]
+ ],
+ "long_run": [
+  [
+   "I walk into the Brinehouse and tell Mera that my younger brother Tomas drowned off this coast three winters ago, and that I came to learn how.",
+   0
+  ],
+  [
+   "I lean closer and ask Mera who paid them to forget and what is happening on the docks now.",
+   0
+  ],
+  [
+   "I ask Mera whether she remembers the Grey Heron, the fishing boat Tomas crewed on.",
+   0
+  ],
+  [
+   "I ask Mera what she saw on the docks when the boat returned with black silt.",
+   0
+  ],
+  [
+   "I promise Mera that I will find out what happened to the missing boats before the next new moon.",
+   0
+  ],
+  [
+   "I borrow twelve silver from Mera to pay for a room, and swear that I will pay her back.",
+   0
+  ],
+  [
+   "I follow the dock road to the Brinehouse, listening for the submerged bell.",
+   0
+  ],
+  [
+   "I find Old Weck and ask for his advice; when he offers me a carved bone whistle to blow if the tide turns against me, I take it.",
+   0
+  ],
+  [
+   "I listen as Old Weck warns me that the north quay steps flood at the third bell after midnight.",
+   0
+  ],
+  [
+   "I admit to Old Weck that I have been afraid of deep water ever since Tomas died.",
+   0
+  ],
+  [
+   "I thank Old Weck and head inland toward the Brinehouse, watching the dockworkers for signs of trouble.",
+   0
+  ],
+  [
+   "I show Mera my father's sword, a notched old blade he named Saltbiter, and ask whether she knows a smith.",
+   0
+  ],
+  [
+   "While Old Weck listens from his corner, I ask Mera quietly what she has heard about the Duke's soldiers.",
+   0
+  ],
+  [
+   "I ask Mera which dockworker last saw the unmarked soldiers and where I can find them.",
+   0
+  ],
+  [
+   "I head for the ropewalk and look for Nessa, keeping my hood low against the rain.",
+   0
+  ],
+  [
+   "I go up to my room and sleep until morning.",
+   1
+  ],
+  [
+   "I go downstairs and ask Mera what trouble has stirred on the docks.",
+   0
+  ],
+  [
+   "I head toward the east sluice, keeping to the alleys while I watch what is being hauled.",
+   0
+  ],
+  [
+   "I step into the forge and ask Harl what the chained sledge is carrying.",
+   0
+  ],
+  [
+   "I ask Harl which dock crew ordered the shackles and where the sledge is bound.",
+   0
+  ],
+  [
+   "I hurry after the haulers and ask where the tarred sledge is headed.",
+   0
+  ],
+  [
+   "I approach the hooded figure beneath the sluice arch and demand to know who hired the haulers.",
+   0
+  ],
+  [
+   "I ask the hooded figure how to reach the Brinehouse and what has gone wrong on Vel’s docks.",
+   0
+  ],
+  [
+   "I wait on the seawall until nightfall to watch who comes to the old pier.",
+   0
+  ],
+  [
+   "I approach the nearest unmarked figure and ask what the crews are hauling east.",
+   0
+  ],
+  [
+   "I follow the eastbound crews at a discreet distance to learn who pays them.",
+   0
+  ],
+  [
+   "I shadow the cloaked clerk and haulers toward the derelict watchhouse, keeping low among the salt pans.",
+   0
+  ],
+  [
+   "I edge closer to the opening, listening for who is taking the purse and what the chains conceal.",
+   0
+  ],
+  [
+   "I memorize the watchhouse’s location, then retreat toward Vel to find lodging and question dockworkers.",
+   0
+  ],
+  [
+   "I quietly ask the dockhand what happened to Pell Rusk and the missing men.",
+   0
+  ],
+  [
+   "I pay for the upstairs room, then quietly ask which dockworker still dares speak about the east sluice.",
+   0
+  ],
+  [
+   "I seek out Nessa Quill along the loudest stretch of quay and cautiously tell her I want to know what happened to the dockworkers.",
+   0
+  ],
+  [
+   "I tell Nessa no one sent me and ask what she saw at the east sluice.",
+   0
+  ],
+  [
+   "I ask Nessa where the tide runs loudest and whether Pell Rusk left any trace there.",
+   0
+  ],
+  [
+   "I slip toward the east sluice before the flood, keeping to the shadows beneath the fish cranes.",
+   0
+  ],
+  [
+   "I crouch behind a crate and watch the hooded figures, waiting for them to move before inspecting the red wool.",
+   0
+  ],
+  [
+   "I find a bed and sleep through the night.",
+   1
+  ],
+  [
+   "I dress, gather my things, and head for the Brinehouse to ask the keeper what has troubled the docks.",
+   0
+  ],
+  [
+   "I set out along the salt road inland toward Saltroad; it takes the whole day.",
+   0
+  ],
+  [
+   "I enter the Lantern roadhouse and ask the keeper when the salt wagons last passed through.",
+   0
+  ],
+  [
+   "I meet Hesk the carter; when he asks me to carry a sealed letter to his sister Orla in Vel, I agree.",
+   0
+  ],
+  [
+   "I ask the keeper who escorted the last wagons and where along the salt road they vanished.",
+   0
+  ],
+  [
+   "I leave the roadhouse and follow the wagon tracks east toward the drowned milestone and old salt pits.",
+   0
+  ],
+  [
+   "At the Lantern I ask Brannoc what news has come up the road from the coast lately.",
+   0
+  ],
+  [
+   "I ask Ysolde the barmaid what news she has heard from the coast.",
+   0
+  ],
+  [
+   "I scratch a mark into the Lantern's door frame, a gull with a broken wing, so Hesk will know I passed.",
+   0
+  ],
+  [
+   "I buy a map of the Grey Shoals from Ysolde for three silver.",
+   0
+  ],
+  [
+   "I tell Brannoc that back home people called me Little Gull.",
+   0
+  ],
+  [
+   "I ask Brannoc which inland track the salt wagons used and when the last one passed.",
+   0
+  ],
+  [
+   "I thank Brannoc, sling my pack, and set out along the eastern track toward the sluice arch.",
+   0
+  ],
+  [
+   "I crouch beside the chain-post to examine the red scrap and fresh rope-scars for clues to the missing wagons.",
+   0
+  ],
+  [
+   "I take a room at the Lantern and sleep until dawn.",
+   1
+  ],
+  [
+   "I slip outside and follow the fading wagon bell east along the salt road, watching for fresh tracks.",
+   0
+  ],
+  [
+   "I kneel by the freshest wheel ruts near the sluice, searching for anything the wind has missed.",
+   0
+  ],
+  [
+   "I pocket the iron hook and follow the narrower tracks beneath the sluice arch.",
+   0
+  ],
+  [
+   "I crouch at the gap and peer into the lantern-lit darkness, readying my knife as the chain drags again.",
+   0
+  ],
+  [
+   "I answer the three knocks with one tap and wait, knife ready.",
+   0
+  ],
+  [
+   "I ease past the tarred canvas with my knife ready, following the chain’s scrape into the hidden passage.",
+   0
+  ],
+  [
+   "I hurry around the bend toward the fading lantern-glow, keeping my knife raised.",
+   0
+  ],
+  [
+   "I press my ear to the iron-braced door, listening for clues about the missing salt wagons.",
+   0
+  ],
+  [
+   "I ease through the unbarred door with my knife ready, following the chain and the rising rush toward the hidden sluice.",
+   0
+  ],
+  [
+   "I rest at the Lantern for two days to let my bruises heal.",
+   2
+  ],
+  [
+   "I leave the Lantern at first light and follow the eastern salt road, watching for signs of the missing wagons.",
+   0
+  ],
+  [
+   "I crouch by the sluice to examine the crushed salt and black-painted splinter for wagon tracks or other clues.",
+   0
+  ],
+  [
+   "I crawl beneath the sluice arch and follow the dark trickle east, searching for the canvas fiber’s source.",
+   0
+  ],
+  [
+   "I take the canvas-wrapped hook and follow the wagon bell east across the flats, watching for fresh wheel ruts.",
+   0
+  ],
+  [
+   "I skirt the drowned milestone and follow the freshest wagon impressions toward the old salt pits, listening for the bell.",
+   0
+  ],
+  [
+   "I crouch by the sluice to examine the hand-dragged tracks before following them beneath the crust.",
+   0
+  ],
+  [
+   "I draw my knife and slip beneath the arch toward the lantern-light, following the chain’s scrape.",
+   0
+  ],
+  [
+   "I crouch beside the iron-braced door, knife ready, and listen for the speaker and whatever is being dragged.",
+   0
+  ],
+  [
+   "I flatten into the shadows beside the arch and watch through the opening as the barred door swings inward.",
+   0
+  ],
+  [
+   "I ride a salt wagon back toward the coast; the journey takes a day and a night.",
+   1
+  ],
+  [
+   "I dismount and follow the fresh wheel cuts toward the hidden boats, keeping low as I search for whoever halted the salt wagons.",
+   0
+  ],
+  [
+   "I slip behind a dune, draw my knife, and listen for the hidden men’s plan before revealing myself.",
+   0
+  ],
+  [
+   "I creep from the dune toward the nearest boat, ready to cut its mooring before the tide carries it off.",
+   0
+  ],
+  [
+   "I drop behind the boat’s hull and sprint inland toward the salt road while the guard’s lantern blinds him.",
+   0
+  ],
+  [
+   "I veer off the salt road into a drainage ditch, then circle back to watch where the pursuers lead the boats.",
+   0
+  ],
+  [
+   "I shadow the salt wagon inland, keeping low while listening for the source of the knocking beneath its tarred bundles.",
+   0
+  ],
+  [
+   "I stand at the harbor edge and think about why I really came to this coast.",
+   0
+  ],
+  [
+   "I leave the harbor and trail the salt wagon toward the sluice road, keeping the black-painted marker between me and its waiting rider.",
+   0
+  ],
+  [
+   "I duck behind the sluice wall and ready my knife while listening for what the salt wagon is carrying.",
+   0
+  ],
+  [
+   "I hold my breath and creep toward the wagon’s rear to see what is knocking inside.",
+   0
+  ],
+  [
+   "I look for anyone on the docks who sailed with my brother's old boat.",
+   0
+  ],
+  [
+   "I beckon the wary deckhand closer and whisper that someone is trapped beneath the wagon.",
+   0
+  ],
+  [
+   "I seize the rusted boat hook and edge toward the wagon’s iron-bound compartment.",
+   0
+  ],
+  [
+   "I jam the boat hook beneath the compartment’s rear hinge and pry hard.",
+   0
+  ],
+  [
+   "I remind myself of the vow I made at the Brinehouse, and count the nights left.",
+   0
+  ],
+  [
+   "I drop behind the sluice stones and watch the hooded men for a chance to free whoever is inside.",
+   0
+  ],
+  [
+   "I lunge for the exposed iron compartment, striking the nearest hooded man aside as I reach for its latch.",
+   0
+  ],
+  [
+   "I seize the hanging latch and wrench open the iron compartment.",
+   0
+  ],
+  [
+   "I feel the weight of what I still owe someone in this town.",
+   0
+  ],
+  [
+   "I plant my shoulder against the compartment door and call for the prisoner to brace while I force it open.",
+   0
+  ],
+  [
+   "I wedge my knife into the warped latch and strain to break it before the approaching boots reach us.",
+   0
+  ],
+  [
+   "I ask Old Weck whether he heard what Mera told me about the Duke's soldiers.",
+   0
+  ],
+  [
+   "I wrench free of the hooded figure’s grasp and drive my shoulder into the locked door.",
+   0
+  ],
+  [
+   "I remember the errand I promised the carter, and go to see it done.",
+   0
+  ],
+  [
+   "I follow the fresh track toward the lantern, keeping to cover and listening for whoever waits there.",
+   0
+  ],
+  [
+   "I circle the cart through the reeds, watching for its driver and any sign of what it carries.",
+   0
+  ],
+  [
+   "I pry open the iron-bound case, ready to retreat if the chain sounds again.",
+   0
+  ],
+  [
+   "I sleep the rest of the night at the Brinehouse.",
+   1
+  ],
+  [
+   "I ask Mera who passed beneath the window and whether she knows anything about the missing boats.",
+   0
+  ],
+  [
+   "I ask Mera who can guide me to the east sluice and where Pell Rusk was last seen.",
+   0
+  ],
+  [
+   "I head to the ropewalk and seek out Nessa Quill, asking her to guide me to the east sluice.",
+   0
+  ],
+  [
+   "“I tell her Mera sent me, and that I’m seeking Pell Rusk and the missing boats.”",
+   0
+  ],
+  [
+   "It is late and the tide is turning; I keep clear of the place I was told floods at night.",
+   0
+  ],
+  [
+   "I crouch behind the embankment and watch the hooded figure approach, ready to challenge it if it comes closer.",
+   0
+  ],
+  [
+   "I rise from cover with one hand open and demand the hooded stranger name its business.",
+   0
+  ],
+  [
+   "I ask the stranger what it knows about the buried cargo and the missing boats, offering to trade what I learned in Vel.",
+   0
+  ],
+  [
+   "I draw my father's blade and check its edge.",
+   0
+  ],
+  [
+   "I lower the blade and tell the stranger about the false freight route and the boats’ disappearance at the east sluice, then ask where Pell was to meet his paymasters.",
+   0
+  ],
+  [
+   "I ask Nessa to help me search the chain-post for signs of Pell before the soldiers return.",
+   0
+  ],
+  [
+   "I kneel beside the churned silt to compare the bootprints and examine the pale fibers before the tide erases them.",
+   0
+  ],
+  [
+   "I draw my knife and slip beneath the arch, following the dragging sound while Nessa covers my back.",
+   0
+  ],
+  [
+   "I stay silent and signal Nessa to circle wide while I study the hooded stranger and the canvas-wrapped shape.",
+   0
+  ],
+  [
+   "I signal Nessa to draw the soldiers away while I quietly examine the breathing bundle.",
+   0
+  ],
+  [
+   "I raise my empty hands and whisper that I mean to help before the soldiers reach the arch.",
+   0
+  ],
+  [
+   "I nod toward the bundle and whisper that we must carry it to the old pier before the ritual begins.",
+   0
+  ],
+  [
+   "I pull the salt-crusted captive through the sluice toward the old pier while the stranger holds off the approaching soldier.",
+   0
+  ],
+  [
+   "I grab the canvas and let the current carry me toward the lantern, keeping the captive between me and whoever waits at the pier.",
+   0
+  ],
+  [
+   "I hesitate at the water's edge; it still frightens me.",
+   0
+  ],
+  [
+   "I brace against the submerged post, haul the captive’s bundle toward me, and climb for the lantern-bearer.",
+   0
+  ],
+  [
+   "I seize the lantern-bearer’s wrist and wrench the canvas hook free.",
+   0
+  ],
+  [
+   "I unfold what I bought from the barmaid inland and study the route.",
+   0
+  ],
+  [
+   "I wrench the fallen soldier’s weapon away and demand he reveal where the ritualists went.",
+   0
+  ],
+  [
+   "I secure the captive against the pier rail and follow the fresh bootprints east, ready to confront whoever left them.",
+   0
+  ],
+  [
+   "I crouch low and follow the bootprints toward the shuttered lantern and groaning wagon.",
+   0
+  ],
+  [
+   "The water rises around my knees, and I reach for the charm I was given for exactly this moment.",
+   0
+  ],
+  [
+   "I slip past the wagon with my knife drawn and wade toward the murmuring voices beyond the dunes.",
+   0
+  ],
+  [
+   "I step from the reeds with my knife raised and demand that the hooded figure show its face.",
+   0
+  ],
+  [
+   "I lunge to pin the figure’s knife arm while shouting toward the creaking boats, “Who is performing the ritual?”",
+   0
+  ],
+  [
+   "I wonder whether anyone found the sign I left at the roadhouse.",
+   0
+  ],
+  [
+   "I wrench the hooded figure toward the defenders and sprint for the old watchhouse, following the churning water before the ritual ends.",
+   0
+  ],
+  [
+   "I draw my knife and squeeze through the broken foundation toward the wet breathing below.",
+   0
+  ],
+  [
+   "I tell the cultist the name my family used to call me, so he knows who has come for him.",
+   0
+  ],
+  [
+   "I wade toward the lamplight with my knife raised, ready to face whoever waits beyond the stones.",
+   0
+  ],
+  [
+   "I seize the lantern, raise my knife, and wrench open the iron-braced door before whatever waits beyond can strike.",
+   0
+  ],
+  [
+   "I thrust the lantern into the blackness and brace my knife to meet whatever emerges.",
+   0
+  ],
+  [
+   "I shove the canvas bundle aside and demand that the mud-pale stranger lead me to the ritual site.",
+   0
+  ],
+  [
+   "I press my knife to the bars and demand the quickest route beneath the old boats.",
+   0
+  ],
+  [
+   "I force the bars aside and urge the mud-pale stranger toward the old boats before the armed men arrive.",
+   0
+  ],
+  [
+   "I plunge into the culvert after the stranger, racing the chant toward the old pier.",
+   0
+  ],
+  [
+   "I duck beneath the nearest piling and follow the stranger’s trail toward the darkened light.",
+   0
+  ],
+  [
+   "I surge from cover, blade raised, and demand that the hooded figures halt the ritual.",
+   0
+  ],
+  [
+   "I throw my knife at the hooded lamp to plunge the pier into darkness, then rush toward the faltering chant below.",
+   0
+  ],
+  [
+   "I grip the nearest timber and lunge toward the faltering chant, ready to drag its speaker into the open.",
+   0
+  ],
+  [
+   "I seize the pale hand and haul its owner beneath the boat toward the broken chant.",
+   0
+  ]
+ ],
+ "play": [
+  "I check the cart wheels and tighten the harness before we set out.",
+  "I climb onto the driver's bench and urge the horses across the moor.",
+  "I study the distant hills for the safest route to the city.",
+  "I wrap myself in my cloak as the cold wind sweeps over the heath.",
+  "I stop beside a stream to water the horses and refill our barrels.",
+  "I scan the horizon for smoke, travelers, or signs of bandits.",
+  "I repair a loose strap while the cart rests on a patch of firm ground.",
+  "I mark our position on the map using the ruined standing stones as landmarks.",
+  "I share dried meat and bread with the other travelers during a midday halt.",
+  "I steer around a stretch of boggy ground hidden beneath the heather.",
+  "I sing an old road song to keep everyone’s spirits up.",
+  "I light a lantern as thick gray fog rolls across the moorland.",
+  "I examine the muddy tracks of another wagon to see which way it went.",
+  "I offer a lift to a weary traveler walking along the road.",
+  "I take the reins while my companion sleeps in the back of the cart.",
+  "I search the abandoned roadside shrine for shelter from the gathering rain.",
+  "I count our remaining provisions and calculate how many days remain before the city.",
+  "I draw my weapon when a flock of startled crows rises from the grass.",
+  "I climb a low hill to look for the city’s towers in the distance.",
+  "I guide the cart toward the lights that appear beyond the darkening moor.",
+  "I pace along the frozen palisade, scanning the darkness for movement.",
+  "I pull my cloak tighter and keep my eyes fixed on the enemy campfires.",
+  "I quietly wake the next sentry and ask whether they heard anything unusual.",
+  "I crouch beside the battlements to inspect the snow for fresh tracks.",
+  "I warm my hands over a covered brazier without letting its glow reveal my position.",
+  "I notch an arrow and watch the road leading toward the besieged keep.",
+  "I whisper a prayer for the defenders inside and resume my watch.",
+  "I signal to the nearby guards when I spot a flicker of movement beyond the walls.",
+  "I brush frost from the stones and check that my sword is ready.",
+  "I listen closely for the rumble of siege engines beneath the howling wind.",
+  "I make a slow circuit of the watch posts to ensure no one has fallen asleep.",
+  "I peer through the darkness with a hooded lantern held low at my side.",
+  "I stamp my feet against the cold while studying the enemy's silent trenches.",
+  "I quietly test the alarm bell's rope to make sure it has not frozen solid.",
+  "I use a spyglass to examine the distant siege lines for changes.",
+  "I share a mouthful of hot broth with the exhausted sentry beside me.",
+  "I kneel behind the parapet when I hear a faint scrape below the wall.",
+  "I mark the passing hours on the frost-covered guard rail with my dagger.",
+  "I call a soft challenge into the darkness and wait for the proper response.",
+  "I remain motionless beneath the icy wind, ready to raise the alarm at the first sign of an attack.",
+  "I lie still in bed and let my wounds heal.",
+  "I ask the healer to change my bandages.",
+  "I drink the herbal tonic the healer gives me.",
+  "I thank the healer for saving my life.",
+  "I inspect my wounds to see whether they are closing.",
+  "I eat a small meal to regain my strength.",
+  "I ask how long I must rest before traveling again.",
+  "I sleep through the afternoon.",
+  "I carefully stretch my injured limbs.",
+  "I listen quietly to the healer's advice.",
+  "I offer to pay for the medicine and treatment.",
+  "I search the room for anything that might help me recover.",
+  "I meditate to calm my mind and endure the pain.",
+  "I ask the healer about the herbs hanging by the window.",
+  "I practice breathing slowly while my injuries ache.",
+  "I write down what happened before I forget the details.",
+  "I request a walking stick for when I am allowed to stand.",
+  "I look out the window while waiting for my strength to return.",
+  "I apologize for bringing trouble to the healer's home.",
+  "I rise cautiously from the bed to test my legs.",
+  "I keep my voice low and ask the smuggler who sent them.",
+  "I slide a coin across the table and demand the truth.",
+  "I scan the crowded tavern for anyone listening in.",
+  "I lean closer and quietly name the forbidden cargo.",
+  "I fold my arms and refuse to be intimidated by the smuggler.",
+  "I spill my drink deliberately to create a distraction.",
+  "I ask the smuggler what happened to the missing courier.",
+  "I signal the bartender to watch the tavern doors.",
+  "I place one hand near my weapon without drawing it.",
+  "I accuse the smuggler of selling us out to the guards.",
+  "I offer a larger payment in exchange for immediate passage.",
+  "I interrupt the smuggler and warn them not to lie again.",
+  "I study their expression for any sign that they recognize my name.",
+  "I shift my chair to block the nearest path of escape.",
+  "I whisper a password and wait to see how the smuggler reacts.",
+  "I pretend to agree while secretly memorizing every detail they reveal.",
+  "I gesture toward a noisy group of patrons and suggest we continue elsewhere.",
+  "I threaten to expose the smuggler unless they answer my question.",
+  "I ask whether the guards are already searching the tavern.",
+  "I rise slowly and challenge the smuggler to make the next move.",
+  "I sprint across the rooftops, keeping the thief in sight as dusk settles over the city.",
+  "I leap across the narrow alley and roll hard on the opposite roof.",
+  "I shout for the thief to stop while drawing my grappling hook.",
+  "I cut toward the next building, hoping to intercept the thief at the far stairwell.",
+  "I vault over a chimney and close the distance between us.",
+  "I skid to a halt at the roof’s edge and jump onto a lower balcony.",
+  "I fling a loose roof tile behind me to distract anyone following my path.",
+  "I scan the rooftops for a shortcut while the thief disappears behind a tower.",
+  "I grab a hanging laundry line and swing across the gap.",
+  "I climb the sloped roof on all fours to avoid slipping on the evening dew.",
+  "I whistle sharply to alert the city watch below.",
+  "I throw a small pouch of sand toward the thief’s feet.",
+  "I duck beneath a clothesline and accelerate toward the flickering rooftop lanterns.",
+  "I circle around a rooftop water tank to cut off the thief’s escape.",
+  "I pause long enough to spot where the thief landed, then drop down after them.",
+  "I use a chimney for leverage and launch myself onto the next roof.",
+  "I draw my dagger but keep my eyes fixed on the thief’s retreating silhouette.",
+  "I slam open a rooftop access door and race through the building to get ahead.",
+  "I call out a warning that the thief is cornered, even though the chase is still uncertain.",
+  "I crouch behind a parapet and wait for the thief to reveal their next move.",
+  "I grip the rail and scan the dark waves for any sign of danger.",
+  "I haul the loose fishing nets farther across the deck before they wash overboard.",
+  "I shout to the skipper, asking which direction will keep us safest.",
+  "I drop below deck to check whether the bilge is filling with seawater.",
+  "I secure the crates and barrels with ropes as the boat lurches violently.",
+  "I reef the sail to keep the wind from tearing it apart.",
+  "I take the wheel and steer us across the waves while the skipper rests.",
+  "I throw a bucket overboard and bail water from the flooded deck.",
+  "I tie myself to the mast so a sudden wave cannot sweep me away.",
+  "I search the storage locker for flares, a compass, and emergency supplies.",
+  "I help a frightened deckhand back to his feet after he slips.",
+  "I release the tangled fishing line before it drags the boat sideways.",
+  "I peer through the rain for the faint outline of a lighthouse or coastline.",
+  "I lash the hatch shut to stop waves from pouring into the cabin.",
+  "I climb carefully toward the mast to repair a whipping length of rigging.",
+  "I light a storm lantern and place it where everyone can see it.",
+  "I check the crew for injuries and bandage the worst cuts.",
+  "I cast the damaged gear loose rather than risk capsizing the boat.",
+  "I pray silently while keeping both hands locked around the wheel.",
+  "I suggest turning into the waves at an angle to reduce the boat's rolling.",
+  "I inspect the market square to decide where the festival stalls should go.",
+  "I help hang colorful banners between the town buildings.",
+  "I purchase fresh fruit and spices from the local merchants.",
+  "I volunteer to sweep and decorate the main street.",
+  "I practice a lively tune on my instrument for the festival crowd.",
+  "I help a baker prepare trays of sweet festival pastries.",
+  "I ask the town guard about crowd control and safety plans.",
+  "I gather flowers from the countryside to decorate the festival stage.",
+  "I repair a wooden stall that collapsed during setup.",
+  "I visit the tavern to spread word about the festival schedule.",
+  "I barter with a cloth merchant for bright ribbons and flags.",
+  "I organize a group of children to rehearse a parade performance.",
+  "I check the lanterns and replace the ones with broken wicks.",
+  "I help a farmer unload barrels of cider near the celebration grounds.",
+  "I search the market for a suitable costume to wear during the festivities.",
+  "I paint a sign announcing the festival’s contests and performances.",
+  "I taste several dishes to help choose the menu for the communal feast.",
+  "I meet with local performers to coordinate the evening entertainment.",
+  "I set aside a small emergency supply of food and water for the workers.",
+  "I join the townsfolk in decorating the central fountain with garlands.",
+  "I hold my breath and stay perfectly still beneath the cellar stairs.",
+  "I press my ear to the wall and listen for the soldiers’ footsteps.",
+  "I crawl behind the stacked wine barrels and pull a dusty tarp over myself.",
+  "I quietly search the cellar for a hidden exit or loose floorboard.",
+  "I extinguish the lantern and let the darkness conceal me.",
+  "I peek through a crack in the shutters to track the soldiers outside.",
+  "I grip my dagger and prepare to defend myself if the cellar is discovered.",
+  "I carefully move a few crates to block the cellar door.",
+  "I whisper a prayer and wait for the patrol to pass.",
+  "I inspect the shelves for supplies I can use during a longer hiding place.",
+  "I slip into an empty barrel and lower the lid without making a sound.",
+  "I scatter some dust near the stairs to reveal whether anyone enters.",
+  "I examine the stone walls for signs of a concealed passage.",
+  "I slowly inch toward the back corner whenever the soldiers’ voices fade.",
+  "I cover my mouth with my sleeve to suppress a cough.",
+  "I memorize the soldiers’ voices and commands in case I need to evade them later.",
+  "I retrieve a short length of rope from the cellar and keep it ready.",
+  "I signal silently to any companions hiding nearby.",
+  "I wait until the patrol moves away before testing the cellar door.",
+  "I plan a route through the neighboring buildings in case I need to flee.",
+  "I study the wounded beast’s tracks in the soft earth for signs of its direction.",
+  "I crouch beside the campfire and sharpen my hunting knife.",
+  "I wrap a strip of cloth around a low branch to mark the trail.",
+  "I listen carefully for cries, snapping twigs, or heavy breathing in the darkness.",
+  "I gather dry kindling and reinforce the campfire before night fully falls.",
+  "I inspect the beast’s blood trail without disturbing the surrounding evidence.",
+  "I set a simple snare near the edge of camp in case the beast doubles back.",
+  "I climb a sturdy tree to scan the forest canopy and nearby clearings.",
+  "I prepare a small pack with water, bandages, and rations before resuming the hunt.",
+  "I sprinkle ash around the campsite to reveal any tracks made overnight.",
+  "I follow the trail slowly while keeping one hand near my weapon.",
+  "I examine claw marks on a tree trunk to estimate the beast’s size and condition.",
+  "I leave a bowl of water near the trail to see whether the wounded creature returns.",
+  "I circle the camp and check for signs that something has been watching me.",
+  "I clean and bind my own minor cuts before venturing deeper into the woods.",
+  "I extinguish most of the fire and move the camp to a more concealed location.",
+  "I mimic the beast’s call to test whether it responds from the undergrowth.",
+  "I inspect a nearby cave for tracks before approaching its entrance.",
+  "I wait silently beside the trail and watch for movement between the trees.",
+  "I return to camp before sunset and record the beast’s trail on a rough map.",
+  "I bow respectfully and present my proposal to the noble.",
+  "I compliment the noble's wisdom before asking for a favorable decision.",
+  "I calmly explain how this agreement would benefit the realm.",
+  "I offer the noble a generous trade in exchange for their support.",
+  "I ask what terms would satisfy the noble's concerns.",
+  "I reveal evidence that strengthens my negotiating position.",
+  "I appeal to the noble's sense of honor and duty.",
+  "I counter the noble's demand with a carefully calculated offer.",
+  "I request a private audience to discuss more sensitive details.",
+  "I warn that rejecting my proposal could create unrest among the nobles.",
+  "I invoke the authority of the crown to reinforce my position.",
+  "I offer a compromise that grants the noble a greater share of the profits.",
+  "I remain silent and let the noble speak first.",
+  "I study the noble's expression for signs of hesitation or deception.",
+  "I promise political support in return for the noble's cooperation.",
+  "I challenge the fairness of the noble's demands without raising my voice.",
+  "I produce a sealed letter from an influential ally to support my case.",
+  "I suggest postponing the decision until both sides can review the terms.",
+  "I threaten to take my proposal to a rival faction if negotiations fail.",
+  "I accept the noble's revised terms and seal the agreement with a handshake.",
+  "I raise my lantern higher and scan the flooded corridor for signs of movement.",
+  "I wade slowly through the murky water, testing each step with my boot.",
+  "I inspect the waterline for footprints, drag marks, or anything recently disturbed.",
+  "I hold my breath and listen for sounds beneath the water.",
+  "I shine the lantern through a broken archway to see what lies beyond.",
+  "I search the crumbling walls for hidden switches or carved inscriptions.",
+  "I use a loose plank to probe the dark pool ahead.",
+  "I climb onto a partially submerged statue to get a better view of the ruin.",
+  "I carefully open the swollen door and brace myself for whatever is inside.",
+  "I examine the floating debris for useful tools or clues.",
+  "I mark the wall with chalk so I can find my way back.",
+  "I dip my lantern closer to the water and watch for ripples.",
+  "I pull a rusted chest from the flooded floor and inspect its lock.",
+  "I follow a faint current toward what may be a lower chamber.",
+  "I check my pack and secure anything that could be ruined by the water.",
+  "I call out into the darkness to see whether anything answers.",
+  "I squeeze through the collapsed passage while keeping my lantern protected.",
+  "I study the shadows cast by the lantern for shapes that do not belong.",
+  "I search the submerged altar for a hidden compartment.",
+  "I retreat to higher ground after spotting something moving beneath the surface.",
+  "I nurse my drink by the window and watch the road for any sign of my contact.",
+  "I ask the innkeeper whether anyone matching my contact’s description has arrived.",
+  "I move to a table with a clear view of both entrances and settle in to wait.",
+  "I step outside and inspect the crossroads for approaching riders or suspicious movement.",
+  "I casually question the other patrons about recent travelers passing through the area.",
+  "I check the time, then leave a discreet message for my contact with the innkeeper.",
+  "I order another meal and pretend to be unconcerned while listening to nearby conversations.",
+  "I scan the common room for anyone who seems to be watching me.",
+  "I walk around the inn, looking for a back entrance or a quiet place to meet.",
+  "I send a stablehand down each road to see whether my contact is delayed nearby.",
+  "I sit in the corner and review the details of our planned meeting in my head.",
+  "I approach a merchant and ask whether the roads have been blocked or attacked today.",
+  "I slip upstairs to check whether my contact rented a room under another name.",
+  "I sharpen my knife beneath the table while keeping one eye on the front door.",
+  "I step into the yard and search the ground for fresh tracks leading toward the inn.",
+  "I buy a round for the room and listen carefully for rumors about trouble on the roads.",
+  "I write a brief note warning that I will leave soon if my contact does not appear.",
+  "I take a seat near the fireplace and study every newcomer who enters the inn.",
+  "I quietly ask the barkeep to alert me if anyone arrives asking for a person matching my description.",
+  "I prepare to leave through the rear door while giving the crossroads one final watch.",
+  "I inspect my bruises and test which muscles still ache after the week of drills.",
+  "I volunteer for an early-morning sparring match with one of the veteran mercenaries.",
+  "I clean and sharpen my weapons until they are ready for another campaign.",
+  "I ask the company captain where my performance still needs improvement.",
+  "I practice formation changes with the squad until I can move without hesitation.",
+  "I visit the quartermaster to replace my worn boots and damaged gloves.",
+  "I challenge another recruit to a friendly wrestling match.",
+  "I study the mercenary company’s maps and ask about the regions where we might be deployed.",
+  "I spend the evening repairing my armor and stitching tears in my clothing.",
+  "I demonstrate the combat technique I learned during the final training exercise.",
+  "I offer to stand the first watch while the others recover from the week’s exertions.",
+  "I compare notes with my fellow recruits about the instructors and their methods.",
+  "I test my endurance by running the perimeter of the training camp.",
+  "I ask a field medic to examine a persistent pain in my shoulder.",
+  "I help unload supplies from the company wagon.",
+  "I practice drawing my weapon quickly from different positions.",
+  "I listen quietly while the veterans trade stories about battles they have survived.",
+  "I request a private lesson in mounted combat from the company’s cavalryman.",
+  "I spend the afternoon recovering, eating a heavy meal, and treating my sore muscles.",
+  "I report to the captain and declare that I am ready for my first real assignment.",
+  "I ride ahead of the caravan to scout the winding trail for ambushes.",
+  "I examine the hillside for fresh tracks, disturbed stones, or other signs of bandits.",
+  "I keep my weapon ready while watching the ridgelines above the road.",
+  "I help guide the wagons around a steep, rocky bend.",
+  "I speak with the merchant to learn which cargo might attract unwanted attention.",
+  "I organize the guards into a tighter formation through the narrow pass.",
+  "I stop the caravan and investigate a suspicious pile of branches blocking the trail.",
+  "I climb a nearby hill to survey the surrounding valleys.",
+  "I reassure the nervous teamsters and urge them to keep moving steadily.",
+  "I check the wagon wheels, harnesses, and axles for damage before the next ascent.",
+  "I offer a fair toll to a local shepherd in exchange for news about dangerous roads ahead.",
+  "I prepare a signal system so the scouts can warn us of trouble from a distance.",
+  "I search an abandoned roadside shelter for signs that someone has been watching the caravan.",
+  "I take the rear position to make sure no wagon or straggler falls behind.",
+  "I draw the caravan off the main road when I spot smoke rising beyond the ridge.",
+  "I challenge a group of armed travelers approaching from the opposite direction.",
+  "I help push a stalled wagon up the muddy slope.",
+  "I choose a defensible campsite near the trail before nightfall.",
+  "I set watches and place hidden alarms around the caravan’s camp.",
+  "I encourage the merchants to share supplies while we wait out the approaching storm.",
+  "I inspect the murder scene again for overlooked clues.",
+  "I question the victim’s family about their relationships and recent arguments.",
+  "I visit the village tavern to listen for rumors about the killing.",
+  "I compare the villagers’ alibis and note any contradictions.",
+  "I search the victim’s home for hidden letters, valuables, or signs of struggle.",
+  "I examine the body for wounds, poisons, and unusual marks.",
+  "I follow a trail of footprints leading away from the village.",
+  "I ask the village healer whether anyone sought treatment after the murder.",
+  "I speak privately with the blacksmith about suspicious visitors or weapons.",
+  "I patrol the roads around the village to find anyone trying to flee.",
+  "I inspect the well and nearby fields for discarded evidence.",
+  "I question the village guard about what they saw on the night of the murder.",
+  "I check the victim’s records for debts, rivals, or secret dealings.",
+  "I discreetly observe the villagers to see who reacts nervously to my questions.",
+  "I search the local shrine for signs that someone used it as a hiding place.",
+  "I reconstruct the timeline of the murder from each witness’s account.",
+  "I confront the most suspicious witness with the inconsistencies in their story.",
+  "I ask neighboring villages whether anyone matching a suspect’s description passed through.",
+  "I set a harmless trap to see who returns to the murder scene.",
+  "I gather the key suspects together and announce the evidence I have uncovered."
+ ],
+ "adversarial": [
+  "I promise to return in two days.",
+  "I ask how many days the ride to Saltroad takes.",
+  "I tell Mera I slept until morning yesterday.",
+  "I say, \"Three days pass before the tide turns.\"",
+  "\"We sleep until dawn,\" I suggest to Ysolde.",
+  "I don't sleep tonight; I keep watch on the pier.",
+  "I never rest until the debt is paid.",
+  "I try to sleep until morning but the bells keep ringing.",
+  "I attempt to rest through the night.",
+  "I pretend to sleep until dawn so the thief thinks I'm out.",
+  "I count the nights since Tomas drowned.",
+  "I swear I'll be back before the new moon.",
+  "I rest for a week at the Lantern.",
+  "I travel for five days toward the capital.",
+  "I leave at first light.",
+  "I wake at first light and saddle the horse.",
+  "I wonder whether we should camp for the night.",
+  "I plan to ride for two days once the storm passes.",
+  "I offer to stand watch through the night.",
+  "If we ride through the night, we reach the pass by dawn, I tell her.",
+  "I ask Mera to wake me at dawn.",
+  "I watch the guard sleep until morning.",
+  "I wait until nightfall on the seawall.",
+  "I spend the whole day mending nets.",
+  "I set out along the salt road; it takes the whole day.",
+  "I remember the three days we spent lost in the fog.",
+  "I tell the boy, \"Rest for two days, then come find me.\"",
+  "I refuse to stay the night.",
+  "I grin and answer, \"We camp here through the night.\"",
+  "I shrug: “We sleep until morning,” and keep walking."
+ ]
+}
