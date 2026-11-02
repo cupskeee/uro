@@ -17,6 +17,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   plans, promises, a fight, a party's beat and `--bare` pass no day, and a skip or another advance
   during the beat wins. `EventStore.advance_day` is new (an embedder's own store implements it).
 
+### Changed
+- **The narrator gets what it recalls beside the player's action** (D-78). The recalled earlier
+  beats and the beat's direction now come in the final user message, before `PLAYER'S ACTION:`,
+  under a header that asks for the specific name, object or words a callback refers to; with
+  neither, the last message is the plain intent as before. In a live A/B the narrator used the
+  planted detail in 88% of callbacks against 58%. It is built in code, so a pack overriding
+  `narrator.system.j2` gets it too; a custom provider that reads the last user message as the
+  intent should read the text after `PLAYER_ACTION` (`uro_core.providers.base`).
+
 ### Fixed
 - **A time-skip's agendas see the days it committed** (D-77). `agenda_tick` read the day before the
   skip took the branch lock, so an advance landing in between shifted the window its agendas saw.

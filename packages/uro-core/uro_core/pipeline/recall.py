@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from uro_core.domain.events import BeatResolvedPayload
 from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.ports.projections import EngineStore
-from uro_core.providers.base import Message
+from uro_core.providers.base import PLAYER_ACTION, Message
 from uro_core.timeline.models import (
     ActorView,
     BeliefView,
@@ -212,6 +212,21 @@ def _certainty(confidence: float) -> str:
     return "has heard a rumor"
 
 
+# The recalled beats' header (D-78). Built in code, so it reaches a pack that overrides
+# narrator.system.j2. The long run's narrator had the planted fact in hand for 12/12 callbacks and
+# used it for 8: it dodged a nickname the player said aloud (the template's "never speak for the
+# player") and gestured at details instead of naming them.
+RECALL_HEADER = (
+    "YOU RECALL (from earlier in the campaign). If the player's action refers back to one of "
+    "these, bring back its specific name, object or words. Saying aloud words the player's intent "
+    "says they speak (a name, an oath) is narrating their action, not speaking for them:"
+)
+# What recall brought back and the beat's DIRECTION sit in the final user message, beside the
+# intent, which follows this marker (D-78): the anthropic, codex and CLI adapters join every system
+# message into one block at the top, so only the last turn keeps its place next to the action.
+# With neither, the final message is the bare intent. (`PLAYER_ACTION` is the marker.)
+
+
 def build_narrator_messages(
     recall: RecallBundle,
     intent_text: str,
@@ -248,11 +263,9 @@ def build_narrator_messages(
             f"ACTING CHARACTER: the player's intent below is {acting_name}'s action — "
             f"narrate it as {acting_name}."
         )
+    beside_intent = []  # D-78: the final user message, before the intent
     if recall.memories:
-        context_lines.append(
-            "YOU RECALL (from earlier in the campaign):\n"
-            + "\n".join(f"- {m}" for m in recall.memories)
-        )
+        beside_intent.append(RECALL_HEADER + "\n" + "\n".join(f"- {m}" for m in recall.memories))
     # The player's out-of-world notes (B8): the player's PRIVATE edge across loops/lives. Addressed
     # to the player, explicitly walled off from canon — the narrator may let it inform the player's
     # choices but must NOT state it as public fact or put it in an NPC's mouth.
@@ -298,7 +311,7 @@ def build_narrator_messages(
             + "\n".join(f"- {t}" for t in mechanics_traces)
         )
     if directives:
-        context_lines.append(f"DIRECTION: {directives}")
+        beside_intent.append(f"DIRECTION: {directives}")
 
     system = (env or DEFAULT_ENV).render("narrator.system.j2", style=style)
     messages = [Message(role="system", content=system)]
@@ -309,5 +322,7 @@ def build_narrator_messages(
             continue
         messages.append(Message(role="user", content=beat.intent_text))
         messages.append(Message(role="assistant", content=beat.narration))
+    if beside_intent:
+        intent_text = "\n\n".join([*beside_intent, PLAYER_ACTION + intent_text])
     messages.append(Message(role="user", content=intent_text))
     return messages

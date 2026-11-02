@@ -20,6 +20,12 @@ from pydantic import BaseModel
 Role = Literal["system", "user", "assistant"]
 
 
+# The narrator prompt's last user message puts what recall brought back (and the beat's direction)
+# before the player's intent, which follows this marker (D-78, pipeline/recall.py). A provider that
+# answers the intent itself (the stub) reads the text after it.
+PLAYER_ACTION = "PLAYER'S ACTION: "
+
+
 class Message(BaseModel):
     role: Role
     content: str

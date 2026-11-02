@@ -552,7 +552,7 @@ and called back 56-122 beats later with thematic or oblique intents (acts 3-4).
 | Capability | Status | Evidence |
 |---|---|---|
 | Recall of callbacks at campaign scale | **live-validated (one campaign)** | the planted fact reached the narrator in 12/12 callbacks. The plant's own beat ranked in the top 4 for 10/12 (mostly 1st or 2nd among 70-125 memories outside the window); the other two came through claims. Every callback got 4 of 4 memories (D-75). |
-| The narrator USES what recall brings | **partial: 8/12** | 8 used the planted detail (some in other words: the map as "the salt-stiffened chart… Grey Shoals"), 1 partly (the sword's notches, not its name), 3 not: it misread the letter errand (sent the player east, though "a sealed letter must be delivered to Orla in Vel" was an active thread in the prompt), sidestepped the nickname, and never tied the fear to Weck or the brother. The gap is narrator adherence, not retrieval. |
+| The narrator USES what recall brings | **partial: 8/12 (before D-78; see below)** | 8 used the planted detail (some in other words: the map as "the salt-stiffened chart… Grey Shoals"), 1 partly (the sword's notches, not its name), 3 not: it misread the letter errand (sent the player east, though "a sealed letter must be delivered to Orla in Vel" was an active thread in the prompt), sidestepped the nickname, and never tied the fear to Weck or the brother. The gap is narrator adherence, not retrieval. |
 | The rumor across a skip, in play | **live-validated** | after the first skip Brannoc told it hedged ("Only talk… no one who saw it has come in to swear by the tale"); beliefs Weck 0.9, Hesk 0.495, Brannoc 0.272 as designed. |
 | Bystander knowledge | **narrator-improvised, then recorded** | Ysolde, who holds no belief, told a garbled variant of what Brannoc had just said in the same room; the extractor then recorded it as her testimony and belief. Old Weck, 83 beats after witnessing Mera's tale, retold it consistently, from recall. No harm to play observed. |
 | Time passing in play | **measured: narrated every time, recorded never** | the narration passed time on all 8 beats where the player slept, waited, travelled or rested, and on 1 of the other 138 (where the intent said "at first light"); none of it came from speech. The fiction ran ~36 days; the clock, moved only by the skips, recorded 28. This is the labelled data the D-76 clock gate asked for. |
@@ -568,4 +568,18 @@ and called back 56-122 beats later with thematic or oblique intents (acts 3-4).
 | Party, fight, bare | **pass no day** | `test_a_party_a_fight_and_bare_play_pass_no_day`: a party passes time with a skip; a fight's beat never does; `--bare` never reads a cue. |
 | Rest in play | **not a ruleset's rest** | no downtime runs on a night in play (Uro Pool's strain stays); downtime stays with explicit skips. |
 | `world_time.segment`, per-event stamps, time in prompts | **unchanged** | still unwritten, day 0 on ordinary beats, and not told (D-76's rows above). |
+
+## Post-PoC — narrator adherence and thread accumulation (2026-11-02, D-78, D-79)
+
+Measured live through the registry (Codex `gpt-5.6-luna` narrating and judging, `gpt-4o-mini` for one replay arm), on forks of the long
+run's campaign taken just before each beat; every arm narrated the same sample's context.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| The narrator uses what recall brings | **live-validated on one campaign and one model (D-78), by policy** | the planted detail used in 53/60 design-callback samples (A2) against 35/60 and 34/60 for today's prompt twice; 21/25 against 16/25 on five fresh plant/callback pairs with oblique callbacks; the nickname said 5/5 against 1/5. The letter callback stays 1/5: the link it needs (the carter is Hesk) isn't in the data. One callback gained a `no` once (an invented sign); the baseline's second run had two. |
+| Ordinary beats with recall beside the intent | **one watch item** | 12 ordinary beats × 3: unrelated earlier detail dragged in 9/36 against 11 and 3; a small unstated act given to the player (keeping to cover, a plank shifting under the hand) 5/36 against 1 and 2 — above the noise, re-measured in the confirmation run. 0 leaks of the header or marker. |
+| Old facts re-recorded when a narration brings them back | **pre-existing, unchanged by D-78** | over 60 callback narrations the extractor re-recorded a known fact in other words 14 times (A2), 14 and 13 (today's prompt): the old claim isn't among its KNOWN CLAIMS. 0 quoted player lines recorded as narrator fact. |
+| A pack overriding the narrator template | **gets the recall header and layout** | built in code (`test_a_pack_overriding_the_narrator_template_keeps_the_recall_header`). |
+| The ACTIVE THREADS block carries callbacks | **measured: yes, commitments** | without it, 25/36 callback samples used the planted detail against 28/36, and the letter fell from 3/3 to 0/3 (2 `no`). |
+| Thread accumulation | **measured, nothing shipped (D-79)** | 9 live threads, none resolved, after 146 beats; the resolutions were correctly zero (nothing was settled). A creation-side fence in the extractor prompt, replayed twice per model, over-corrected on `gpt-5.6-luna` (8 and 6 threads → 2 and 3, the soldiers and hauling plots lost) and added fragments on `gpt-4o-mini` (3 and 3 → 6 and 6). The narrator-side cap stays shelved with its trigger (D-79). |
 
