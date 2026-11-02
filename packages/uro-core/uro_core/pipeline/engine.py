@@ -531,7 +531,7 @@ class Engine:
         events, _, beat_id = await self._beat_events(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
         )
-        days = await self._days_passed(campaign, ctx, encounter_events)
+        days = await self._days_passed(campaign, participant_id, ctx, encounter_events)
         if days:  # the would-be advance (D-77) — its own commit in a real beat, nothing here
             events.append(
                 time_advanced(
@@ -784,13 +784,22 @@ class Engine:
             logger.warning("agenda pass failed; the time passed stands, no agendas: %s", exc)
 
     async def _days_passed(
-        self, campaign: Campaign, ctx: _Context, encounter_events: list[DomainEvent] | None
+        self,
+        campaign: Campaign,
+        participant_id: str,
+        ctx: _Context,
+        encounter_events: list[DomainEvent] | None,
     ) -> int:
-        """The days this beat moves the clock (D-77): the intent's cue, for a free-roam beat of
-        solo play. A fight passes no day; neither does a party's beat — one player's night isn't
-        the table's (merging a round's turns needs arbiter state the engine can't see, D-31), so a
-        party passes time with an explicit skip."""
+        """The days this beat moves the clock (D-77): the intent's cue, for a free-roam beat by the
+        one seated player — a participant bound to a PC, on a branch with no other. A fight passes
+        no day; neither does a party's beat — one player's night isn't the table's (merging a
+        round's turns needs arbiter state the engine can't see, D-31), so a party passes time with
+        an explicit skip — nor a beat by someone without a seat (an unbound co-player driving the
+        solo PC, anyone on a campaign with no PC)."""
         if not ctx.cue_days or encounter_events is not None:
+            return 0
+        if await self._store.pc_for_participant(campaign.campaign_id, participant_id) is None:
+            logger.info("no seat: the intent's %d day(s) aren't recorded (D-77)", ctx.cue_days)
             return 0
         if len(await self._store.campaign_pcs(campaign.campaign_id)) > 1:
             logger.info("party play: the intent's %d day(s) aren't recorded (D-77)", ctx.cue_days)
@@ -812,7 +821,7 @@ class Engine:
         isn't a ruleset's rest (that stays with explicit skips, D-63/D-76). Never raises: the beat
         is already durable."""
         try:
-            days = await self._days_passed(campaign, ctx, encounter_events)
+            days = await self._days_passed(campaign, participant_id, ctx, encounter_events)
             if not days:
                 return
             async with self._react_lock(campaign.branch_id):

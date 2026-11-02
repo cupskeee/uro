@@ -1,5 +1,5 @@
 {
- "_about": "Labelled intents for the D-77 day clock (uro_core.timeline.clock). Each labelled row is [intent, whole days it passes]. 'fresh' was generated after the grammar's second version and measured blind (21/22 found after one later widening, so it is no longer fully held out); 'targeted' was the first held-out set and the grammar was widened against it (in-sample); 'long_run' is the 146-beat run's intents (in-sample); 'play' are generated play intents that pass no day; 'adversarial' must never pass a day.",
+ "_about": "Labelled intents for the D-77 day clock (uro_core.timeline.clock). Each labelled row is [intent, whole days it passes]. 'fresh' was generated after the grammar's second version and measured blind (21/22 found after one later widening, so it is no longer fully held out); 'targeted' was the first held-out set and the grammar was widened against it (in-sample); 'long_run' is the 146-beat run's intents (in-sample); 'play' are generated play intents that pass no day; 'adversarial' must never pass a day. 'review' are the shapes the D-77 review found missed (each must pass exactly its days); the review's false-positive shapes joined 'adversarial'.",
  "fresh": [
   [
    "I sleep through the night at the inn.",
@@ -1402,6 +1402,65 @@
   "I tell the boy, \"Rest for two days, then come find me.\"",
   "I refuse to stay the night.",
   "I grin and answer, \"We camp here through the night.\"",
-  "I shrug: “We sleep until morning,” and keep walking."
+  "I shrug: “We sleep until morning,” and keep walking.",
+  "I head back to where we camped two days before.",
+  "I spend a day's wages on a good horse.",
+  "I head to the docks to catch the ship that sails the next day.",
+  "I walk the market on a day like this.",
+  "I follow the tracks, which are a day old.",
+  "I slept until morning yesterday.",
+  "I wish I could rest for two days.",
+  "I think we should camp until morning.",
+  "We sleep until dawn?",
+  "I hear Mera whisper ‘we rest here for two days’.",
+  "I hear Mera mutter that we rest here for two days.",
+  "I read the sign: we sail in three days.",
+  "I shout to Mera: 'I ride for two days, no more.'",
+  "I yell 'We rest until morning!'",
+  "I whisper to the guard that I will stay overnight.",
+  "I nod at Mera: ‘we camp here through the night’ and keep walking.",
+  "I grin: 'we camp here through the night' and keep walking."
+ ],
+ "review": [
+  [
+   "Exhausted, I sleep until dawn.",
+   1
+  ],
+  [
+   "Tonight I sleep until dawn.",
+   1
+  ],
+  [
+   "After the fight, I rest for two days.",
+   2
+  ],
+  [
+   "I stay the night at the inn.",
+   1
+  ],
+  [
+   "I rest at the inn's stables for two days.",
+   2
+  ],
+  [
+   "I sleep 'til dawn.",
+   1
+  ],
+  [
+   "I spend the next day resting.",
+   1
+  ],
+  [
+   "I rest for the next two days.",
+   2
+  ],
+  [
+   "I take a full day to recover.",
+   1
+  ],
+  [
+   "I ride for two days before I reach the pass.",
+   2
+  ]
  ]
 }

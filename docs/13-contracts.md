@@ -43,7 +43,7 @@ Stage graphs are assembled per mode (`05`). Rules:
 - **Concurrency (DESIGN; the enforcement is NOT built yet):** the intended rule is at most **one in-flight beat per campaign** after `TurnArbiter` admission (`08`), different campaigns/branches fully concurrent. *PoC status:* `append_beat` does NOT check an expected head or serialize per-campaign — single-writer safety currently rests on convention (the CLI/embedded loop is serial; the server serializes a connection's own beats but not across connections). An expected-head guard + per-campaign in-flight lock is the intended hardening.
 - **Plan validation (pre-narration, deterministic, no LLM):** between [2] and [3] the plan is checked against state and ruleset: referenced targets must exist, presupposed facts must not be `false`, and if the intent matches a ruleset-declared **trigger category** the plan must invoke that affordance (D-21). Violations re-ask the planner. This is the *only* point where replanning happens — nothing has streamed yet. *(Phase-3 status: the affordance-vocabulary fence + D-21 trigger coverage + **actor**-ref existence are enforced; place/item existence and the presupposed-facts check are deferred — there is no place/item registry yet.)*
 - **Post-narration validation is downgrade-only:** problems found at [5] can only downgrade a proposal (claim → belief) or drop it with a logged warning. No replanning, no prose regeneration after streaming begins — the player has already read it.
-- **Time:** the planner proposes `time_cost` (in segments); the commit stage emits `TimeAdvanced` when > 0.
+- **Time (D-77):** the planner doesn't cost time. After a free-roam beat by the seated solo player and its reactions commit, the engine reads the intent's day cue (`timeline/clock.py`) and commits one `TimeAdvanced` as its own commit (`advance_day`, compare-and-set); segments are unbuilt.
 
 ## Trust model (who gets to make things true)
 
@@ -86,7 +86,6 @@ Default sampling per role (deployment-overridable): narrator 0.9 · dialogue 0.8
                                                            //   below — deterministic D-21 check
   "mechanics": [{"affordance": "persuade", "actor": "...", "target": "...", "context": "..."}],
   "mode_transition": null,                                  // or {"to": "encounter", "cause": "..."}
-  "time_cost": 0,                                           // segments
   "narration_directives": "one line of pacing/tone guidance for [4]",
   "suggestions": ["2-4 short next-action hints, affordance-grounded — returned with the beat result (D-23)"]
 }

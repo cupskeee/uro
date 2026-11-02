@@ -21,8 +21,9 @@ Role = Literal["system", "user", "assistant"]
 
 
 # The narrator prompt's last user message puts what recall brought back (and the beat's direction)
-# before the player's intent, which follows this marker (D-78, pipeline/recall.py). A provider that
-# answers the intent itself (the stub) reads the text after it.
+# before the player's intent, which always follows this marker (D-78, pipeline/recall.py): engine
+# text only ever comes before the first one. A provider that answers the intent itself (the stub)
+# reads everything after the first marker.
 PLAYER_ACTION = "PLAYER'S ACTION: "
 
 
