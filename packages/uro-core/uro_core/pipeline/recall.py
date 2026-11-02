@@ -224,7 +224,7 @@ RECALL_HEADER = (
 # What recall brought back and the beat's DIRECTION sit in the final user message, beside the
 # intent, which follows this marker (D-78): the anthropic, codex and CLI adapters join every system
 # message into one block at the top, so only the last turn keeps its place next to the action.
-# With neither, the final message is the bare intent. (`PLAYER_ACTION` is the marker.)
+# (`PLAYER_ACTION` is the marker; the intent always follows it, with or without blocks.)
 
 
 def build_narrator_messages(
@@ -322,7 +322,9 @@ def build_narrator_messages(
             continue
         messages.append(Message(role="user", content=beat.intent_text))
         messages.append(Message(role="assistant", content=beat.narration))
-    if beside_intent:
-        intent_text = "\n\n".join([*beside_intent, PLAYER_ACTION + intent_text])
-    messages.append(Message(role="user", content=intent_text))
+    # The marker always precedes the intent, so engine text only ever comes BEFORE the first one:
+    # a player who types a recall block or a DIRECTION line types it after the marker, as part of
+    # their action (review: with a bare intent the two were byte-identical).
+    final = "\n\n".join([*beside_intent, PLAYER_ACTION + intent_text])
+    messages.append(Message(role="user", content=final))
     return messages

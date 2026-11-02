@@ -51,6 +51,11 @@ def test_the_grammar_meets_its_gate_on_the_labelled_intents() -> None:
     assert sum(d for _, d in passed) == 7
     for intent in FIXTURE["play"] + FIXTURE["adversarial"]:
         assert parse_day_cue(intent) == 0, intent
+    # the shapes the D-77 review found: dates and adjectives aren't durations, single-quoted and
+    # whispered or read words are speech, wishes and questions aren't acts — and ordinary
+    # openings ("Tonight I…", "Exhausted, I…") still pass their days
+    for intent, days in FIXTURE["review"]:
+        assert parse_day_cue(intent) == days, intent
 
 
 def test_the_evidence_is_the_sentence_that_passes_the_days() -> None:
@@ -179,8 +184,16 @@ async def test_a_party_a_fight_and_bare_play_pass_no_day(store: PostgresEventSto
     ctx = await engine._context(campaign, "p1", "I sleep until morning.")
     assert ctx.cue_days == 1
     fight: list[DomainEvent] = []
-    assert await engine._days_passed(campaign, ctx, fight) == 0
-    assert await engine._days_passed(campaign, ctx, None) == 1
+    assert await engine._days_passed(campaign, "p1", ctx, fight) == 0
+    assert await engine._days_passed(campaign, "p1", ctx, None) == 1
+
+    # someone without a seat (review): an unbound co-player drives the solo PC, but not the clock
+    await engine.run_beat(campaign, "spectator", "I sleep until morning.")
+    assert await _day(store, campaign) == 0
+    # ...and nobody has one on a campaign with no PC
+    no_pc = await store.create_campaign(campaign.world_id, campaign.branch_id)
+    await engine.run_beat(no_pc, "p1", "I sleep until morning.")
+    assert await _day(store, campaign) == 0
 
     # bare play (the ablation arm) never reads a cue
     bare = Engine(store, ProviderRouter(bindings={}, default=StubProvider()), bare=True)

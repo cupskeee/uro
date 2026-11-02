@@ -28,7 +28,8 @@ player intent
    │                        whether a thread advances. Structured output, always.
    ▼
 [3] MECHANICS GATE          if the plan implicates rules (persuade → check;
-   │  (ruleset, no LLM)     attack → encounter mode; travel → time cost):
+   │  (ruleset, no LLM)     attack → encounter mode; time isn't the gate's — the
+   │                        intent's day cue moves it after the commit, D-77):
    │                        ruleset resolves rolls/outcomes deterministically
    │                        with seeded RNG. Results become inputs to narration.
    ▼
