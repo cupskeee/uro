@@ -15,11 +15,15 @@ in its world pack); the engine only says which plots went quiet (D-80's split, a
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+import logging
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from uro_core.domain.events import BeatResolvedPayload
 from uro_core.ports.projections import EngineStore
 from uro_core.timeline.models import ThreadView
+
+logger = logging.getLogger(__name__)
 
 QUIET_AFTER = 25  # beats a live thread may go without coming up before it is named
 EVERY = 10  # at most one named thread in this many beats
@@ -46,7 +50,10 @@ class ThreadPacing(BaseModel):
     state: str
     provenance: str
     # Beats since the thread last came up or was named. With `at_least`, it didn't within the
-    # beats read (the window): it has been quiet at least this long, or longer.
+    # beats read (the window), so this is the window's length: a thread quiet longer than that, or
+    # one that became live outside a beat (a rule woke it, an author's commit added it). Either way
+    # the narration hasn't shown it, and the next eligible beat names it first: a woken plot reaches
+    # the story (D-95 review, pinned in test_a_thread_a_rule_wakes_is_named_next).
     quiet_beats: int
     at_least: bool = False
 
@@ -72,6 +79,19 @@ def pacing_line(stakes: str) -> str:
 def settings_from(raw: dict[str, object]) -> PacingSettings:
     """A world's stored `[pacing]` dict → settings ({} → the defaults). Raises on a bad value."""
     return PacingSettings.model_validate(raw)
+
+
+async def world_settings(store: object, branch_id: str) -> PacingSettings:
+    """A branch's world's `[pacing]` as settings. A store from before D-95 (no `world_pacing`)
+    gets the defaults; a stored setting that fails validation (only reachable by writing the event
+    log directly: world creation and import both check it) turns the director off, logged."""
+    read = getattr(store, "world_pacing", None)
+    raw = await read(branch_id) if read is not None else {}
+    try:
+        return settings_from(raw)
+    except ValidationError as exc:
+        logger.warning("pacing: the world's [pacing] is invalid, so it is off: %s", exc)
+        return PacingSettings(quiet_after=0)
 
 
 def thread_pacing(
@@ -128,7 +148,7 @@ async def pacing_report(
     beat would name (the CLI's `uro campaign pacing` and the server's `/pacing`, D-95). `settings`
     overrides the world's, as an Engine built with `pacing=` does."""
     if settings is None:
-        settings = settings_from(await store.world_pacing(branch_id))
+        settings = await world_settings(store, branch_id)
     threads = await store.list_threads(branch_id)
     recent = await store.recent_beats(branch_id, settings.window)
     paced = quiet_thread(threads, recent, settings)

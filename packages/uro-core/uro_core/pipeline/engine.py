@@ -56,7 +56,7 @@ from uro_core.pipeline.pacing import (
     PacingSettings,
     pacing_report,
     quiet_thread,
-    settings_from,
+    world_settings,
 )
 from uro_core.pipeline.plan import (
     BeatPlan,
@@ -244,12 +244,8 @@ class Engine:
             settings = self._pacing
             if settings is None:
                 cache = self._shared.pacing_cache
-                if branch_id not in cache:
-                    # an embedder's store from before D-95 has no world_pacing: the defaults
-                    read = getattr(self._store, "world_pacing", None)
-                    cache[branch_id] = (
-                        settings_from(await read(branch_id)) if read else PacingSettings()
-                    )
+                if branch_id not in cache:  # WorldGenesis is immutable, so cached
+                    cache[branch_id] = await world_settings(self._store, branch_id)
                 settings = cache[branch_id]
             if settings.quiet_after <= 0 or not threads:
                 return None

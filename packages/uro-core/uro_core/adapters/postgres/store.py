@@ -480,6 +480,15 @@ class PostgresEventStore:
                 problem = provenance_problem(e.event_type, e.caused_by.get("kind"), e.payload)
                 if problem is not None:
                     raise ExportError(f"bundle refused: {problem}")
+                if e.event_type == "WorldGenesis":  # checked like create_world does (D-95 review)
+                    from uro_core.pipeline.pacing import settings_from
+
+                    try:
+                        settings_from(e.payload.get("pacing") or {})
+                    except ValueError as exc:
+                        raise ExportError(
+                            f"bundle refused: its [pacing] is invalid: {exc}"
+                        ) from exc
         commit_map = {c.commit_id: new_id() for c in bundle.commits}
         remapped = [
             BundleCommit(

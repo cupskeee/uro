@@ -14,7 +14,8 @@ points; q2 is no worse than B by more than 2 in 80; and q3 judges at most 20% of
 forced.
 
 Live: narrator + judge calls on the registry's bindings (~320 calls). Nothing is committed but the
-forks themselves.
+forks themselves. The engine is built with the director off, so arm B carries no line; the D-95 run
+was made before the director existed, on the same prompt.
 
     uv run python scripts/pacing_ab.py <out.jsonl> <forkpoints.json> [--n 5]
 
@@ -32,6 +33,7 @@ from dotenv import find_dotenv, load_dotenv
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.engine import Engine
+from uro_core.pipeline.pacing import PacingSettings
 from uro_core.providers.base import PLAYER_ACTION, Message
 from uro_core.providers.registry import build_router_from_registry
 from uro_core.rulesets.registry import resolve_for_campaign
@@ -90,7 +92,13 @@ async def main(out_path: str, points_path: str, n: int) -> None:
             campaign = await store.get_campaign(p["campaign"])
             if campaign is None:
                 raise SystemExit(f"no campaign {p['campaign']}")
-            engine = Engine(store, router, ruleset=await resolve_for_campaign(store, campaign))
+            # the director itself off: arm B is the prompt with no line at all (D-95 review)
+            engine = Engine(
+                store,
+                router,
+                ruleset=await resolve_for_campaign(store, campaign),
+                pacing=PacingSettings(quiet_after=0),
+            )
             async with store.pool.acquire() as conn:
                 parent = await conn.fetchval(
                     LINEAGE + "SELECT ch.parent_id FROM chain ch JOIN events e"
@@ -114,6 +122,7 @@ async def main(out_path: str, points_path: str, n: int) -> None:
             messages, _ = await engine._prepare_narration(on, ctx, intent)
             last = messages[-1]
             assert last.content.count(PLAYER_ACTION) == 1
+            assert "A PLOT TO KEEP ALIVE" not in last.content  # a true no-line control
             line = LINE.format(stakes=thread.stakes.rstrip(".") + ".")
             with_line = [
                 *messages[:-1],

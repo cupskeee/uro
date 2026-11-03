@@ -15,11 +15,14 @@ from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import (
     BeatResolvedPayload,
     DomainEvent,
+    actor_created,
+    sheet_updated,
     thread_created,
     thread_state_changed,
 )
 from uro_core.domain.ids import new_id
-from uro_core.errors import PackError
+from uro_core.errors import ExportError, PackError
+from uro_core.export import stamp_chain
 from uro_core.pipeline.engine import Engine
 from uro_core.pipeline.extraction import Extraction, parse_extraction, touched_threads
 from uro_core.pipeline.pacing import (
@@ -28,13 +31,19 @@ from uro_core.pipeline.pacing import (
     pacing_report,
     quiet_thread,
     thread_pacing,
+    world_settings,
 )
+from uro_core.pipeline.plan import BeatPlan, PlanMechanic
 from uro_core.providers.adapters.stub import StubProvider
 from uro_core.providers.base import CompletionRequest
 from uro_core.providers.router import ProviderRouter
+from uro_core.rulesets.base import CharSpec
+from uro_core.rulesets.rng import Rng
+from uro_core.rulesets.uro_basic import UroBasic
 from uro_core.timeline.models import Campaign, ThreadView
 from uro_core.worldpack.create import import_pack
 from uro_core.worldpack.parse import parse_pack
+from uro_core.worldpack.rules import Rule
 
 WORLDS = Path(__file__).resolve().parents[3] / "worlds"
 
@@ -268,3 +277,108 @@ async def test_an_engine_can_set_pacing_over_the_worlds(store: PostgresEventStor
     assert "A PLOT TO KEEP ALIVE" in await _told(on, campaign)
     assert (await on.pacing(campaign.branch_id)).next_paced == "t:heron"
     assert "A PLOT TO KEEP ALIVE" not in await _told(engine, campaign)
+
+
+# --- review fixes (D-95 phase-end review) ---
+
+
+async def test_a_fight_beat_names_no_plot_and_records_none(store: PostgresEventStore) -> None:
+    rs = UroBasic()
+    world = await store.create_world(
+        f"pacing-fight-{new_id()}",
+        pacing={"quiet_after": 1, "every": 1},
+        extra_events=[
+            thread_created(thread_id="t:wagons", stakes="The salt wagons stopped.", state="active"),
+            actor_created(actor_id="a:grull", name="Grull", tier=2, role="brute"),
+            sheet_updated(
+                actor_id="a:grull",
+                sheet=rs.new_character(
+                    CharSpec(data={"abilities": {"STR": 20, "CON": 20}}), Rng(0)
+                ),
+                ruleset_id="uro-basic",
+            ),
+        ],
+    )
+    campaign = await store.start_campaign(
+        world.world_id,
+        world.main_branch_id,
+        participant_id="p1",
+        new_pc_name="Ada",
+        new_pc_id="a:ada",
+        pc_sheet=rs.new_character(CharSpec(data={"abilities": {"STR": 14}}), Rng(0)),
+        ruleset_id="uro-basic",
+        seed=7,
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Extracting()), ruleset=rs)
+    await engine.run_beat(campaign, "p1", "I look around.")
+    attack = BeatPlan(
+        triggers=["violence"],
+        mechanics=[PlanMechanic(affordance="attack", actor="a:ada", target="a:grull")],
+    )
+    ctx = await engine._context(campaign, "p1", "I swing at Grull", attack)
+    assert ctx.paced_thread is not None  # due, but…
+    messages, fight = await engine._prepare_narration(campaign, ctx, "I swing at Grull")
+    assert fight is not None and "A PLOT TO KEEP ALIVE" not in messages[-1].content
+    await engine.run_beat(campaign, "p1", "I swing at Grull", plan=attack)
+    assert (await store.recent_beats(campaign.branch_id, 1))[-1].paced_thread == ""
+
+
+async def test_the_streaming_path_records_what_run_beat_does(store: PostgresEventStore) -> None:
+    engine, campaign = await _world(store, {"quiet_after": 1, "every": 1})
+    await engine.run_beat(campaign, "p1", "I look around.")
+    assert (await engine.pacing(campaign.branch_id)).next_paced == "t:heron"
+    async for _ in engine.run_beat_stream(campaign, "p1", "I wait."):
+        pass
+    assert (await store.recent_beats(campaign.branch_id, 1))[-1].paced_thread == "t:heron"
+
+
+async def test_a_thread_a_rule_wakes_is_named_next(store: PostgresEventStore) -> None:
+    # A thread made live outside a beat (a rule wakes it) has not come up in the beats read, so
+    # the next eligible beat names it: the world's news reaches the story (pinned, D-95 review).
+    engine, campaign = await _world(store, {"quiet_after": 2, "every": 1})
+    for _ in range(2):
+        await engine.run_beat(
+            campaign, "p1", "I check on the wagons [t:wagons] and heron [t:heron]."
+        )
+    assert (await engine.pacing(campaign.branch_id)).next_paced == ""
+    await store.append_beat(
+        campaign.branch_id,
+        [thread_state_changed(thread_id="t:sleeper", to_state="active", from_state="dormant")],
+    )
+    report = await engine.pacing(campaign.branch_id)
+    assert report.next_paced == "t:sleeper"
+    woken = next(t for t in report.threads if t.thread_id == "t:sleeper")
+    assert woken.at_least and woken.quiet_beats == report.beats_read
+
+
+async def test_settings_fall_back_safely(store: PostgresEventStore) -> None:
+    class _Old:  # an embedder's store from before D-95
+        pass
+
+    class _Bad:
+        async def world_pacing(self, branch_id: str) -> dict[str, object]:
+            return {"quiet_after": -3}
+
+    assert await world_settings(_Old(), "b") == PacingSettings()
+    assert (await world_settings(_Bad(), "b")).quiet_after == 0  # invalid → off, not a crash
+
+
+async def test_an_import_refuses_a_bad_pacing_setting(store: PostgresEventStore) -> None:
+    _, campaign = await _world(store, {"quiet_after": 4})
+    bundle = await store.export_world(campaign.world_id)
+    genesis = next(e for c in bundle.commits for e in c.events if e.event_type == "WorldGenesis")
+    genesis.payload["pacing"] = {"quiet_after": -1}
+    stamp_chain(bundle)  # a self-consistent chain: only the setting is wrong
+    with pytest.raises(ExportError, match="pacing"):
+        await store.import_world(bundle)
+
+
+def test_a_rule_cannot_filter_on_a_list_field() -> None:
+    rule = {
+        "id": "on-wagons",
+        "trigger": {"event": "BeatResolved", "where": {"threads": "t:wagons"}},
+        "then": [{"do": "set_thread_state", "thread": "t:wagons", "to": "dormant"}],
+        "scope": {"world": True},
+    }
+    with pytest.raises(ValidationError, match="list or a dict"):
+        Rule.model_validate(rule)

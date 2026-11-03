@@ -30,6 +30,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   the old behavior.
 - **For an embedder's own store:** `create_world` takes a `pacing` dict and `ProjectionQueries`
   has `world_pacing(branch_id)`. A store without `world_pacing` gets the defaults.
+- **A reaction rule may no longer filter `where` on a list or dict field** (`BeatResolved.threads`,
+  `ClaimRecorded.subject_refs`, …): it could never match, so it is refused when the pack is parsed.
+- **An imported world bundle with an invalid `[pacing]` is refused**, as `create_world` refuses it.
 
 ### Fixed
 - **`uro serve --admin-token` alone no longer also opens the default `local` token** (D-94). Two
