@@ -9,15 +9,25 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-03
+
+Upgrading: no database migration. Two breaking changes. `uro serve` on any address other than
+127.0.0.1 now needs `--token` (the default `local` token is guessable). An embedder that stamped
+`external_cause` or `module_cause` on events those tiers can't make now gets a `ProvenanceError`:
+commit them under its own (`system`) cause. A game that drives its own clock can now set
+`[clock] from_intent = false` in `world.toml` and call `Engine.pass_time`. If you embed the engine
+with your own `EventStore`, it gains `days_since_last_beat`, and `advance_day` takes
+`based_on_day=None`.
+
 ### Added
 - **The narrator is told when days went by off-screen** (D-84). On the first beat after a time-skip,
   a game's `pass_time` or a time-skip fork, a line beside the intent says how many days passed since
   the turns it's shown. In a live A/B the narration treated the gap as passed 43/60 times with it,
   18/60 without, and never overrode the player's action.
-- **Closed-tier provenance is checked** (D-89; breaking for embedders). The store and `import_world` refuse an event stamped
-  `external` that Chronicler distillation can't make, or `module` that the rules gauntlet can't
-  make. An embedder that stamped `external_cause` on its own events now gets a `ProvenanceError`:
-  use its own (`system`) cause. A world whose log already holds such an event (committed before
+- **Closed-tier provenance is checked** (D-89; breaking for embedders). The store and
+  `import_world` refuse an event stamped `external` that Chronicler distillation can't make, or
+  `module` that the rules gauntlet can't make. An embedder that stamped `external_cause` on its own
+  events now gets a `ProvenanceError`: use its own (`system`) cause. A world whose log already holds such an event (committed before
   this) still exports, but this version won't import it.
 - **A container image, published only when the owner runs it** (D-94). `docker build -t uro-server
   .` builds `uro serve`; the `image` workflow pushes it to ghcr on demand.
