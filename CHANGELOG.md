@@ -27,6 +27,8 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   never move the day (the D-77 default stays on).
 
 ### Fixed
+- **`uro serve` refuses a public bind without `--token`** (D-94). With no `--token` it binds the
+  guessable token `local`, fine on 127.0.0.1 and nowhere else.
 - **Probes read the judge's verdict from its first word** (D-92). "not refused" counted as a
   refusal; each distinct planner/extractor model, and a separately bound dialogue model, is now
   probed, and a judge grading its own model is labelled self-judged.

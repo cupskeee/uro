@@ -4,7 +4,9 @@
 # secret is baked in (.dockerignore keeps .env, uro.toml and local data out).
 #
 #   docker build -t uro-server .
-#   docker run --rm -p 8000:8000 -e URO_DATABASE_URL=postgresql://uro:uro@db:5432/uro uro-server
+#   docker run --rm -p 8000:8000 -e URO_DATABASE_URL=postgresql://uro:uro@db:5432/uro \
+#     uro-server serve --host 0.0.0.0 --token "$TOKEN=player-1"
+# `serve` refuses a non-loopback bind without --token (the default 'local' token is guessable).
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir "uv==0.13.4"
@@ -22,4 +24,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
 ENTRYPOINT ["uro"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["--help"]

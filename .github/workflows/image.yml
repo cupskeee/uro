@@ -28,7 +28,10 @@ jobs:
           docker build -t "$image:${{ steps.version.outputs.version }}" -t "$image:latest" .
           echo "IMAGE=$image" >> "$GITHUB_ENV"
       - name: Smoke
-        run: docker run --rm "$IMAGE:latest" --help
+        run: |
+          docker run --rm "$IMAGE:latest" --help
+          # a public bind without a token is refused (the default 'local' token is guessable)
+          ! docker run --rm "$IMAGE:latest" serve --host 0.0.0.0
       - name: Push
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin

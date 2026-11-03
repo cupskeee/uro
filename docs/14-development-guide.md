@@ -176,7 +176,9 @@ three publishers before the first run so it completes in one pass. **The contain
 CLI) from the locked workspace; the store stays external (`URO_DATABASE_URL`, plus `URO_SECRET_KEY`
 for the model registry), nothing secret is baked in (`.dockerignore` keeps `.env`, `uro.toml` and
 `data/` out), and it runs as a non-root user. `docker build -t uro-server .` then
-`docker run -p 8000:8000 -e URO_DATABASE_URL=... uro-server`. Pushing it to `ghcr.io` is
+`docker run -p 8000:8000 -e URO_DATABASE_URL=... uro-server serve --host 0.0.0.0 --token
+"$TOKEN=player-1"` (`serve` refuses a non-loopback bind without `--token`: its default `local` token
+is guessable). Pushing it to `ghcr.io` is
 owner-activated like PyPI: Actions → **image** → *Run workflow* on a release tag builds, smoke-tests
 and pushes `ghcr.io/<owner>/uro-server:<version>` and `:latest` with the job's own token (a first
 push creates the package; set its visibility in the package settings). The CLI-backed provider
