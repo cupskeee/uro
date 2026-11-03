@@ -9,16 +9,24 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-03
+Upgrading: no database migration. Two breaking changes. `uro serve` on any address other than
+127.0.0.1 now needs `--token` (the default `local` token is guessable). An embedder that stamped
+`external_cause` or `module_cause` on events those tiers can't make now gets a `ProvenanceError`:
+commit them under its own (`system`) cause. A game that drives its own clock can now set `[clock]
+from_intent = false` in `world.toml` and call `Engine.pass_time`. If you embed the engine with your
+own `EventStore`, it gains `days_since_last_beat`, and `advance_day` takes `based_on_day=None`.
+
 ### Added
 - **The narrator is told when days went by off-screen** (D-84). On the first beat after a time-skip,
   a game's `pass_time` or a time-skip fork, a line beside the intent says how many days passed since
   the turns it's shown. In a live A/B the narration treated the gap as passed 43/60 times with it,
   18/60 without, and never overrode the player's action.
-- **Closed-tier provenance is checked** (D-89; breaking for embedders). The store and `import_world` refuse an event stamped
-  `external` that Chronicler distillation can't make, or `module` that the rules gauntlet can't
-  make. An embedder that stamped `external_cause` on its own events now gets a `ProvenanceError`:
-  use its own (`system`) cause. A world whose log already holds such an event (committed before
-  this) still exports, but this version won't import it.
+- **Closed-tier provenance is checked** (D-89; breaking for embedders). The store and `import_world`
+  refuse an event stamped `external` that Chronicler distillation can't make, or `module` that the
+  rules gauntlet can't make. An embedder that stamped `external_cause` on its own events now gets a
+  `ProvenanceError`: use its own (`system`) cause. A world whose log already holds such an event
+  (committed before this) still exports, but this version won't import it.
 - **A container image, published only when the owner runs it** (D-94). `docker build -t uro-server
   .` builds `uro serve`; the `image` workflow pushes it to ghcr on demand.
 - **A game decides what moves its world's day** (D-80). `Engine.pass_time(campaign, days)` passes
@@ -28,9 +36,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   never move the day (the D-77 default stays on).
 
 ### Fixed
-- **`uro serve` refuses a public bind without `--token`** (D-94; breaking for a public bind with
-  no `--token`). With no `--token` it binds the
-  guessable token `local`, fine on 127.0.0.1 and nowhere else.
+- **`uro serve` refuses a public bind without `--token`** (D-94; breaking for a public bind with no
+  `--token`). With no `--token` it binds the guessable token `local`, fine on 127.0.0.1 and nowhere
+  else.
 - **Probes read the judge's verdict from its first word** (D-92). "not refused" counted as a
   refusal; each distinct planner/extractor model, and a separately bound dialogue model, is now
   probed, and a judge grading its own model is labelled self-judged.
@@ -41,9 +49,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - **`generate_population = true` is honest** (D-81). It means the world's people are made in play,
   so it now counts only while the instance's extraction policy lets play create actors; with that
   off, a pack that relies on it is refused as insufficient, saying why.
-- **`scripts/extraction_replay.py` replays the campaign, not a longer fork.** It took the branch with
-  the most beats, so a fork that played on past the campaign became the source; it now takes the
-  played campaign's branch, and `--branch` picks one.
+- **`scripts/extraction_replay.py` replays the campaign, not a longer fork.** It took the branch
+  with the most beats, so a fork that played on past the campaign became the source; it now takes
+  the played campaign's branch, and `--branch` picks one.
 - **Rules triggered on `TimeAdvanced` fire** (D-80). No engine path that moved the clock ran them;
   now a time-skip, an intent's days and `pass_time` do, and a rule tells them apart by `reason`
   (`time-skip`, `play`, `game`, `operator`). A rule and an agenda can no longer share an id.
