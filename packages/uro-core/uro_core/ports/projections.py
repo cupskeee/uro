@@ -86,6 +86,11 @@ class ProjectionQueries(Protocol):
         from its WorldGenesis. An empty pin for a world with none → the registry default."""
         ...
 
+    async def world_clock(self, branch_id: str) -> dict[str, Any]:
+        """The branch's world's `[clock]` settings (D-80), from its WorldGenesis. {} = the
+        defaults, for a world with none (or created before D-80)."""
+        ...
+
     async def world_rule_pack(self, branch_id: str) -> dict[str, Any]:
         """The branch's world's Reaction-Layer rule pack (docs/17), from its WorldGenesis, inline.
         {} for a world with no rule pack — the caller short-circuits (no reactions)."""

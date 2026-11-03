@@ -262,7 +262,7 @@ class ServerDeps:
     # ports) powers the CRUD/read endpoints; `advance_time` runs an engine-backed time-skip+agendas.
     # None → those endpoints return 501 (a fake-deps test that only exercises play/outcome).
     store: EngineStore | None = None
-    advance_time: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None
+    advance_time: Callable[[str, int, bool], Awaitable[dict[str, Any]]] | None = None
     # Branch-scoped time-skip + downtime agendas (BE-2 fork `--time-skip-days`): engine.agenda_tick
     # on a raw branch id (a fork has no campaign), returning the new in-fiction day. None → fork's
     # optional time-skip leg returns 501.
@@ -417,14 +417,17 @@ def engine_deps(
             "receipt": [r.model_dump() for r in result.receipt],
         }
 
-    async def advance_time(campaign_id: str, days: int) -> dict[str, Any]:
+    async def advance_time(campaign_id: str, days: int, downtime: bool = True) -> dict[str, Any]:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
-        # time-skip, then the ruleset's downtime (D-63) and the world's agendas (D-33), under the
-        # campaign's own ruleset and settings
         playing = await time_engine(lambda: engine_for(campaign), f"campaign {campaign_id}")
-        await playing.agenda_tick(campaign.branch_id, days)
+        if downtime:
+            # time-skip, then the ruleset's downtime (D-63) and the world's agendas (D-33), under
+            # the campaign's own ruleset and settings
+            await playing.agenda_tick(campaign.branch_id, days)
+        else:  # time passes in play (D-80): the world's rules and agendas, no rest, no header
+            await playing.pass_time(campaign, days, reason="operator")
         world_day = await store.current_world_time(campaign.branch_id)
         return {"branch_id": campaign.branch_id, "world_day": world_day}
 
@@ -1339,7 +1342,11 @@ def create_app(
                 parsed = parse_pack(root)
             except PackError as exc:  # a malformed pack is bad INPUT → 400, not a 500
                 raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
-            report = check_sufficiency(parsed)
+            # a server with a store knows whether play may create actors (generate_population, D-49)
+            makes_people = (
+                (await deps.store.get_extraction_policy()).extract_actors if deps.store else True
+            )
+            report = check_sufficiency(parsed, play_creates_actors=makes_people)
             rid = parsed.manifest.ruleset.id
             problem = ruleset_problem(parsed)  # an unknown id, or settings it refuses (D-62)
             return {
@@ -1456,12 +1463,16 @@ def create_app(
                 parsed = parse_pack(root)
             except PackError as exc:  # a malformed pack is bad INPUT → 400
                 raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
-            before = check_sufficiency(parsed)
+            # graded as /worlds/validate and /worlds/create grade it (generate_population, D-81)
+            makes_people = (
+                (await deps.store.get_extraction_policy()).extract_actors if deps.store else True
+            )
+            before = check_sufficiency(parsed, play_creates_actors=makes_people)
             try:
                 augmented, added = await deps.backfill(parsed)
             except ProviderError as exc:  # a live-model failure is upstream, not bad input → 502
                 raise HTTPException(status_code=502, detail=f"provider error: {exc}") from exc
-            after = check_sufficiency(augmented)
+            after = check_sufficiency(augmented, play_creates_actors=makes_people)
             seeds = [t.model_dump() for t in augmented.threads if t.provenance == "ai_backfill"]
             return {
                 "name": parsed.manifest.name,
@@ -2077,7 +2088,12 @@ def create_app(
             raise HTTPException(status_code=400, detail="days must be a positive integer")
         if days > _MAX_TIMESKIP_DAYS:
             raise HTTPException(status_code=400, detail=f"days must be <= {_MAX_TIMESKIP_DAYS}")
-        return await deps.advance_time(campaign_id, days)
+        # `downtime: false` passes the days in play instead (D-80): no ruleset rest, no adaptation
+        # header — what a game uses when it, not a skip, decides that time went by
+        downtime = body.get("downtime", True)
+        if not isinstance(downtime, bool):
+            raise HTTPException(status_code=400, detail="downtime must be true or false")
+        return await deps.advance_time(campaign_id, days, downtime)
 
     @app.post("/campaigns/{campaign_id}/dry-run", **_out(S.DryRun))
     async def dry_run_beat(

@@ -94,7 +94,10 @@ day), `is_pc(branch, actor)`, `active_pcs(branch)`, `recent_beats(branch, n)`,
 fork = await store.fork_branch(world.world_id, from_ref, "what-if")  # from_ref = a commit id or marker
 await store.time_skip(branch_id, days)          # advance in-fiction time (TimeAdvanced + a header)
 await engine.agenda_tick(branch_id, days)       # time-skip AND fire downtime Reaction-Layer agendas
+await engine.pass_time(campaign, days)          # time passes IN PLAY (D-80): rules + agendas, no rest
 ```
+A world whose `world.toml` sets `[clock] from_intent = false` never moves its day from a player's
+words (D-77); the game moves it with `pass_time`.
 A fork is a full copy-on-write of world state at that commit; both lines then diverge
 independently and each rebuilds by replay. `commit_id` comes from any `BeatResult`.
 

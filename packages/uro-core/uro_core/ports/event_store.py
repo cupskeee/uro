@@ -39,6 +39,7 @@ class EventStore(Protocol):
         rule_pack: dict[str, Any] | None = None,
         extra_events: list[DomainEvent] | None = None,
         ruleset_config: dict[str, Any] | None = None,
+        clock: dict[str, Any] | None = None,
     ) -> World:
         """Create a world: its `main` branch and a `WorldGenesis` genesis commit (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, plus any `extra_events` —
@@ -113,16 +114,17 @@ class EventStore(Protocol):
         self,
         branch_id: str,
         *,
-        based_on_day: int,
+        based_on_day: int | None,
         days: int,
         reason: str,
         evidence: str,
         caused_by: CausedBy,
         beat_id: str | None = None,
     ) -> Commit | None:
-        """Time passed in play (D-77): commit one TimeAdvanced of `days`, but only if the branch is
-        still on `based_on_day` (compare-and-set under the branch lock) — a concurrent skip or
-        another beat's advance makes it commit nothing. No AdaptationApplied header (not a skip)."""
+        """Time passed in play (D-77): commit one TimeAdvanced of `days`. With `based_on_day`, only
+        if the branch is still on that day (compare-and-set under the branch lock) — a concurrent
+        skip or another beat's advance makes it commit nothing; with None, from whatever day the
+        branch is on (D-80, a game's own call). No AdaptationApplied header (not a skip)."""
         ...
 
     async def current_world_time(self, branch_id: str) -> int: ...

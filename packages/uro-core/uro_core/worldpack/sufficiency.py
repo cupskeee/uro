@@ -38,7 +38,23 @@ class SufficiencyReport(BaseModel):
         return [d.detail for d in self.dimensions if not d.ok]
 
 
-def check_sufficiency(pack: WorldPack) -> SufficiencyReport:
+def _population_note(pack: WorldPack, play_creates_actors: bool) -> str:
+    if not pack.manifest.generate_population:
+        return ""
+    if play_creates_actors:
+        return " + generate_population (the people are made in play)"
+    return (
+        " + generate_population, but this instance's extraction policy keeps play from creating"
+        " actors"
+    )
+
+
+def check_sufficiency(pack: WorldPack, *, play_creates_actors: bool = True) -> SufficiencyReport:
+    """Grade a pack against the runtime rubric (docs/09). `generate_population = true` means the
+    world's people are made in play — the narrator names them and the extractor records them
+    (D-49/D-50); nothing is generated up front. So it stands in for seeded actors only while play
+    may create actors (`play_creates_actors`: the instance's extraction policy, when the caller has
+    it; a pure parse assumes the default, on)."""
     kinds = {p.kind for p in pack.places}
     n_actors = len(pack.actors)
     has_ruler = any(any(r in a.role.lower() for r in _RULER_ROLES) for a in pack.actors)
@@ -54,10 +70,10 @@ def check_sufficiency(pack: WorldPack) -> SufficiencyReport:
         ),
         _dim(
             "population",
-            n_actors >= 3 or pack.manifest.generate_population,
-            f"{n_actors} seeded actors"
-            + (" + generate_population" if pack.manifest.generate_population else ""),
-            "needs ≥3 seeded actors or generate_population=true — no one to meet",
+            n_actors >= 3 or (pack.manifest.generate_population and play_creates_actors),
+            f"{n_actors} seeded actors" + _population_note(pack, play_creates_actors),
+            f"{n_actors} seeded actors{_population_note(pack, play_creates_actors)}: needs ≥3, or "
+            "generate_population=true with play allowed to create actors — no one to meet",
         ),
         _dim(
             "power",

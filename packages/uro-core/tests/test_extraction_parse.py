@@ -1,8 +1,10 @@
 """Extractor response parsing + the whitelist-by-schema property (no DB)."""
 
 import logging
+from collections.abc import AsyncIterator
 
 import pytest
+from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.pipeline.extraction import (
     _is_common_noun,
     build_extractor_messages,
@@ -10,6 +12,7 @@ from uro_core.pipeline.extraction import (
     parse_extraction,
 )
 from uro_core.pipeline.recall import RecallBundle
+from uro_core.providers.base import CompletionRequest
 from uro_core.timeline.models import FactionView, ThreadView
 
 
@@ -187,3 +190,50 @@ def test_a_null_trust_field_fails_closed() -> None:
     ]
     assert len(ex.claims) == 2  # the speakerless null-provenance claim is dropped
     assert ex.claims[1].durable is False  # unknown durability → flavor, which the gauntlet drops
+
+
+async def test_the_extractor_knows_about_whoever_the_narration_names(
+    store: PostgresEventStore,
+) -> None:
+    # D-82: recall is built from the intent before the prose exists. When a narration brings back
+    # someone the intent didn't name, their facts must still reach the extractor as KNOWN, or it
+    # records them again in new words (14 of 60 callback narrations in a replay).
+    from uro_core.domain.events import actor_created, claim_recorded
+    from uro_core.domain.ids import new_id
+    from uro_core.pipeline.engine import Engine
+    from uro_core.providers.router import ProviderRouter
+
+    world = await store.create_world(f"known-{new_id()}")
+    branch = world.main_branch_id
+    await store.append_beat(
+        branch,
+        [
+            actor_created(actor_id="a:ysolde", name="Ysolde", tier=2, role="chartmaker"),
+            claim_recorded(
+                claim_id=f"c:{new_id()}",
+                statement="Ysolde owns a salt-stiffened chart of the Grey Shoals.",
+                subject_refs=["a:ysolde"],
+                truth="true",
+            ),
+        ],
+    )
+    seen: list[str] = []
+
+    class Narrates:
+        async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
+            yield "Ysolde unrolls her salt-stiffened chart across the table."
+
+        async def complete(self, req: CompletionRequest) -> str:
+            seen.append(req.messages[-1].content)
+            return '{"claims": []}'
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0] for _ in texts]
+
+    campaign = await store.create_campaign(world.world_id, branch)
+    engine = Engine(store, ProviderRouter(bindings={}, default=Narrates()))
+    await engine.run_beat(campaign, "p1", "I ask to see the map.")  # the intent names nobody
+    (extractor_prompt,) = seen
+    known = extractor_prompt.split("KNOWN CLAIMS:")[1].split("NARRATION:")[0]
+    assert "salt-stiffened chart of the Grey Shoals" in known
+    assert "Ysolde [a:ysolde]" in extractor_prompt.split("KNOWN PLACES:")[0]

@@ -324,10 +324,10 @@ async def act(loop: Loop, beat: Beat, *, tick: bool = True) -> str:
 async def advance(loop: Loop) -> None:
     """One segment. `agenda_tick` = time_skip + the downtime agendas (rising dread).
 
-    NB `store.time_skip` alone runs NO rules (store.py:577-607 commits TimeAdvanced +
-    AdaptationApplied and nothing else), and `Engine.react` is never called on a time_skip commit
-    — so a `Rule` triggering on `TimeAdvanced` can never fire. Day-driven logic MUST be an
-    agenda, and agendas only fire through `Engine.agenda_tick`.
+    NB `store.time_skip` alone runs NO rules (it commits TimeAdvanced + AdaptationApplied and
+    nothing else); `Engine.agenda_tick` runs the rules and agendas. (When this game was written a
+    `Rule` triggering on `TimeAdvanced` could never fire; since D-80 it fires on every engine path
+    that moves the clock — this game still drives its dread ladder with an agenda.)
     """
     if loop.segment >= DOOM_SEGMENT:
         return

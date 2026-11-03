@@ -34,3 +34,27 @@ async def test_a_previous_replay_is_never_the_source(store: PostgresEventStore) 
     for n in range(2):
         await store.append_beat(replay.branch_id, beat(n))
     assert await _beat_branch(store, world.world_id) == (main, 2)
+
+
+async def test_the_source_is_the_campaigns_branch_not_a_longer_fork(
+    store: PostgresEventStore,
+) -> None:
+    # 2026-11-02: a held-out fork that played on past the campaign had more beats, so a replay took
+    # it as its source. The played campaign's branch wins; `--branch` picks one explicitly.
+    world = await store.create_world(f"forked-{new_id()}")
+    main = world.main_branch_id
+    await store.create_campaign(world.world_id, main)
+    for n in range(2):
+        beat = beat_resolved(
+            beat_id=new_id(), participant_id="p1", intent_text=f"i{n}", narration="n"
+        )
+        await store.append_beat(main, [beat])
+    head = (await store.get_branch(main)).head_commit  # type: ignore[union-attr]
+    longer = await store.fork_branch(world.world_id, head, "held-out")  # type: ignore[arg-type]
+    for n in range(3):
+        beat = beat_resolved(
+            beat_id=new_id(), participant_id="p1", intent_text=f"h{n}", narration="n"
+        )
+        await store.append_beat(longer.branch_id, [beat])
+    assert await _beat_branch(store, world.world_id) == (main, 2)
+    assert await _beat_branch(store, world.world_id, "held-out") == (longer.branch_id, 5)

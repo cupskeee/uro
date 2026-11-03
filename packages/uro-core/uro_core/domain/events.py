@@ -73,6 +73,9 @@ class WorldGenesisPayload(BaseModel):
     # exported world stays self-contained: reactions still fire after import on a host lacking the
     # pack files. {} = no rule pack. Serialized RulePack (rules_api_version + rules + agendas).
     rule_pack: dict[str, Any] = Field(default_factory=dict)
+    # The pack's `[clock]` settings (D-80): which of the engine's policies move the world's day.
+    # {} = the defaults (an intent that passes days moves it, D-77).
+    clock: dict[str, Any] = Field(default_factory=dict)
 
 
 class BeatResolvedPayload(BaseModel):
@@ -97,6 +100,7 @@ def world_genesis(
     ruleset_version: str = "",
     ruleset_config: dict[str, Any] | None = None,
     rule_pack: dict[str, Any] | None = None,
+    clock: dict[str, Any] | None = None,
 ) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
@@ -109,6 +113,7 @@ def world_genesis(
             ruleset_version=ruleset_version,
             ruleset_config=ruleset_config or {},
             rule_pack=rule_pack or {},
+            clock=clock or {},
         ).model_dump(),
     )
 

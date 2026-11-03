@@ -9,6 +9,28 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **A game decides what moves its world's day** (D-80). `Engine.pass_time(campaign, days)` passes
+  time in play: its own `TimeAdvanced`, the world's rules and agendas react, nothing rests. It's
+  also `POST /campaigns/{c}/time-skip` with `"downtime": false` and `uro campaign time-skip
+  --no-downtime`. A pack can set `[clock] from_intent = false` in `world.toml` so a player's words
+  never move the day (the D-77 default stays on).
+
+### Fixed
+- **Old facts aren't recorded again when a narration brings them back** (D-82). The extractor's
+  KNOWN lists were built from the player's intent alone, so someone only the narration named had
+  none of their facts there, and the extractor re-recorded them in new words: 14 restatements over
+  60 callback narrations in a replay. Recall now covers the intent and the narration: 2.
+- **`generate_population = true` is honest** (D-81). It means the world's people are made in play,
+  so it now counts only while the instance's extraction policy lets play create actors; with that
+  off, a pack that relies on it is refused as insufficient, saying why.
+- **`scripts/extraction_replay.py` replays the campaign, not a longer fork.** It took the branch with
+  the most beats, so a fork that played on past the campaign became the source; it now takes the
+  played campaign's branch, and `--branch` picks one.
+- **Rules triggered on `TimeAdvanced` fire** (D-80). No engine path that moved the clock ran them;
+  now a time-skip, an intent's days and `pass_time` do, and a rule tells them apart by `reason`
+  (`time-skip`, `play`, `game`, `operator`). A rule and an agenda can no longer share an id.
+
 ## [0.14.0] - 2026-11-02
 
 Upgrading: no database migration. If you embed the engine with your own `EventStore`, implement

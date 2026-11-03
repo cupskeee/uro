@@ -34,7 +34,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### World & places
 | event_type | payload (beyond `v`) | emit | notes |
 |---|---|---|---|
-| `WorldGenesis` | world_name, tone[], prompt_overrides{}, ruleset_id, ruleset_version, ruleset_config{}, rule_pack{} | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) + its declared ruleset (`06`, D-30 — a campaign started on the world binds it) and that ruleset's settings (`ruleset_config`, D-62 — every ruleset built for the world's campaigns gets them) |
+| `WorldGenesis` | world_name, tone[], prompt_overrides{}, ruleset_id, ruleset_version, ruleset_config{}, rule_pack{}, clock{} | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) + its declared ruleset (`06`, D-30 — a campaign started on the world binds it) and that ruleset's settings (`ruleset_config`, D-62 — every ruleset built for the world's campaigns gets them), and its `[clock]` settings (`clock`, D-80 — `{}` = the defaults) |
 | `PlaceCreated` | place entity, tier of detail | X H S | extractor may create Sites only |
 | `PlaceStateChanged` | place_id, changes{} | X H A | population, government ref, economy flavor |
 | `TerrainChanged` | place_id, description, effects[] | H R S | the meteor crater; slow-layer physical change. Mid-play, History emits it as a **thread's consequence-on-resolution** (`02`), `caused_by=player_action` — this is how a player-triggered cataclysm is recorded during a campaign (not extractor/pipeline) |
@@ -100,7 +100,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | `SceneEntered` | place_id, present_actors[], mode | P | |
 | `ModeChanged` | from, to (`freeroam|encounter|downtime`), cause | P R | |
 | `BeatResolved` | beat_id, participant_id, intent_text, synopsis, narration | P | exactly one per beat commit; the chronicle's raw material |
-| `TimeAdvanced` | from, to, reason (+ evidence, beat_id when play passed it) | P H | P: a free-roam beat by the seated solo player whose intent passes whole days (D-77): reason `play`, its own commit after the beat and its reactions, evidence = the intent's sentence, caused by `player_action`; H: `time-skip` (in place) / `time-skip on fork` |
+| `TimeAdvanced` | from, to, reason (+ evidence, beat_id when play passed it) | P H S | P: a free-roam beat by the seated solo player whose intent passes whole days (D-77): reason `play`, its own commit after the beat and its reactions, evidence = the intent's sentence, caused by `player_action`; S: a game's `Engine.pass_time` (D-80), reason `play`, caused by `system` unless the game passes a cause; H: `time-skip` (in place) / `time-skip on fork`. A reaction rule may trigger on it on every path (D-80). |
 
 ### Encounter (ruleset-driven)
 | event_type | payload | emit | notes |

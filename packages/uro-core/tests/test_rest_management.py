@@ -90,6 +90,18 @@ async def test_management_surface_world_campaign_join_reads(store: PostgresEvent
         r = await client.post(_q(f"/campaigns/{campaign_id}/time-skip"), json={"days": 5})
         assert r.status_code == 200, r.text
         assert r.json()["world_day"] == 5
+        # ...or passes days in play (D-80): its own TimeAdvanced, no adaptation header
+        play = {"days": 2, "downtime": False}
+        r = await client.post(_q(f"/campaigns/{campaign_id}/time-skip"), json=play)
+        assert r.status_code == 200 and r.json()["world_day"] == 7
+        branch = (await store.get_campaign(campaign_id)).branch_id  # type: ignore[union-attr]
+        (head,) = await store.lineage(branch, 1)
+        assert head.event_types == ["TimeAdvanced"]
+        detail = await store.commit_detail(world_id, head.commit_id)  # type: ignore[arg-type]
+        assert detail.events[0].payload["reason"] == "operator"  # type: ignore[union-attr]
+        bad = {"days": 1, "downtime": "no"}
+        r = await client.post(_q(f"/campaigns/{campaign_id}/time-skip"), json=bad)
+        assert r.status_code == 400
 
         # chronicle read returns a (possibly empty) beat list, not an error
         chron = (await client.get(_q(f"/campaigns/{campaign_id}/chronicle"))).json()

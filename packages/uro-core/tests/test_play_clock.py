@@ -6,12 +6,15 @@ fixture. Speech, plans, a fight, a party's beat and a clock that moved mid-beat 
 """
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.events import CausedBy, DomainEvent
+from uro_core.domain.ids import new_id
+from uro_core.errors import PackError
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.stub import StubProvider
 from uro_core.providers.router import ProviderRouter
@@ -258,3 +261,151 @@ async def test_advance_day_refuses_no_days(store: PostgresEventStore, days: int)
             evidence="",
             caused_by=CausedBy(kind="player_action"),
         )
+
+
+# --- D-80: the day is the world's; what moves it is the game's choice ---
+
+
+def _time_pack() -> dict[str, Any]:
+    count = {"do": "adjust_counter", "scope_ref": "w:clock", "delta": 1}
+    return {
+        "rules_api_version": 7,
+        "rules": [  # TimeAdvanced is a trigger like any other, on every path that moves time
+            {
+                "id": "nights-in-play",
+                "trigger": {"event": "TimeAdvanced", "where": {"reason": "play"}},
+                "then": [{**count, "key": "played"}],
+                "scope": {"world": True},
+            },
+            {
+                "id": "skips",
+                "trigger": {"event": "TimeAdvanced", "where": {"reason": "time-skip"}},
+                "then": [{**count, "key": "skipped"}],
+                "scope": {"world": True},
+            },
+            {
+                "id": "the-game-moved-it",
+                "trigger": {"event": "TimeAdvanced", "where": {"reason": "game"}},
+                "then": [{**count, "key": "game"}],
+                "scope": {"world": True},
+            },
+        ],
+        "agendas": [
+            {
+                "id": "weeks",
+                "every_days": 7,
+                "then": [{**count, "key": "weeks"}],
+                "scope": {"world": True},
+            },
+        ],
+    }
+
+
+async def _timed(store: PostgresEventStore, **clock: bool) -> tuple[Engine, Campaign]:
+    world = await store.create_world(f"timed-{new_id()}", rule_pack=_time_pack(), clock=clock)
+    campaign = await store.start_campaign(
+        world.world_id, world.main_branch_id, participant_id="p1", new_pc_name="Wren"
+    )
+    return Engine(store, ProviderRouter(bindings={}, default=StubProvider())), campaign
+
+
+async def _count(store: PostgresEventStore, campaign: Campaign, key: str) -> int:
+    return await store.get_counter(campaign.branch_id, "w:clock", key)
+
+
+async def test_a_game_passes_time_and_the_world_reacts_on_every_path(
+    store: PostgresEventStore,
+) -> None:
+    engine, campaign = await _timed(store)
+    # a game's own call: its own commit, caused by the host, no cap
+    commit = await engine.pass_time(campaign, 5, evidence="the caravan crosses the salt flats")
+    assert commit is not None and await _day(store, campaign) == 5
+    (advanced,) = (await store.commit_detail(campaign.world_id, commit.commit_id)).events  # type: ignore[union-attr]
+    assert advanced.payload["reason"] == "game" and advanced.caused_by["kind"] == "system"
+    assert await _count(store, campaign, "game") == 1  # the rule on TimeAdvanced fired
+    assert await _count(store, campaign, "played") == 0  # ...and only the one for its reason
+    assert await _count(store, campaign, "weeks") == 0  # day 7 not crossed yet
+
+    # an intent's days (D-77) take the same path, as `play`: the agenda crosses day 7
+    await engine.run_beat(campaign, "p1", "I rest at the inn for two days.")
+    assert await _day(store, campaign) == 7
+    assert await _count(store, campaign, "played") == 1
+    assert await _count(store, campaign, "weeks") == 1
+
+    # and so does a time-skip, which the rules tell apart by its reason
+    await engine.agenda_tick(campaign.branch_id, 3)
+    assert await _count(store, campaign, "skipped") == 1
+    assert (await _count(store, campaign, "played"), await _count(store, campaign, "game")) == (
+        1,
+        1,
+    )
+
+    # compare-and-set: a stale day commits nothing; no days is an error
+    assert await engine.pass_time(campaign, 1, based_on_day=0) is None
+    assert await _day(store, campaign) == 10
+    with pytest.raises(ValueError):
+        await engine.pass_time(campaign, 0)
+
+    # a player's cause can be passed through
+    played = await engine.pass_time(
+        campaign, 1, caused_by=CausedBy(kind="player_action", participant_id="p1", beat_id="b1")
+    )
+    detail = await store.commit_detail(campaign.world_id, played.commit_id)  # type: ignore[union-attr]
+    assert detail.events[0].payload["beat_id"] == "b1"  # type: ignore[union-attr]
+
+
+async def test_a_world_can_keep_intents_off_its_clock(store: PostgresEventStore) -> None:
+    engine, campaign = await _timed(store, from_intent=False)
+    await engine.run_beat(campaign, "p1", "I sleep until morning.")
+    assert await _day(store, campaign) == 0  # the game owns its time
+    previewed = await engine.preview_beat(campaign, "p1", "I rest for two days.")
+    assert "TimeAdvanced" not in {e.event_type for e in previewed}
+    await engine.pass_time(campaign, 1)  # ...and moves it itself
+    assert await _day(store, campaign) == 1 and await _count(store, campaign, "game") == 1
+
+
+def test_a_pack_declares_its_clock(tmp_path: Path) -> None:
+    pack = tmp_path / "ashfall"
+    shutil.copytree(WORLDS / "ashfall", pack)
+    toml = pack / "world.toml"
+    assert parse_pack(pack).manifest.clock.from_intent  # the default: intents move the day
+    toml.write_text(toml.read_text() + "\n[clock]\nfrom_intent = false\n")
+    assert not parse_pack(pack).manifest.clock.from_intent
+    toml.write_text(toml.read_text().replace("from_intent = false", "from_intnet = false"))
+    with pytest.raises(PackError, match="from_intnet"):
+        parse_pack(pack)  # a misspelt setting is an error, not a silent default
+
+
+async def test_a_packs_clock_setting_reaches_the_world(
+    store: PostgresEventStore, tmp_path: Path
+) -> None:
+    pack = tmp_path / "ashfall"
+    shutil.copytree(WORLDS / "ashfall", pack)
+    (pack / "world.toml").write_text(
+        (pack / "world.toml").read_text() + "\n[clock]\nfrom_intent = false\n"
+    )
+    world = (await import_pack(store, parse_pack(pack))).world
+    assert await store.world_clock(world.main_branch_id) == {"from_intent": False}
+    # a default pack stores no settings, so its genesis is as before D-80
+    plain = (await import_pack(store, parse_pack(WORLDS / "ashfall"))).world
+    assert await store.world_clock(plain.main_branch_id) == {}
+    # and it travels with the world
+    imported = await store.import_world(await store.export_world(world.world_id))
+    assert await store.world_clock(imported.main_branch_id) == {"from_intent": False}
+
+
+async def test_a_rule_and_an_agenda_cannot_share_an_id(
+    store: PostgresEventStore, tmp_path: Path
+) -> None:
+    # D-80 review: a TimeAdvanced rule and an agenda run on the same clock commit, and their
+    # consequences are keyed by the commit and the id — one would silently overwrite the other.
+    pack = _time_pack()
+    pack["agendas"][0]["id"] = "skips"  # the id of a rule
+    with pytest.raises(ValueError, match="skips"):
+        await store.create_world(f"dupe-{new_id()}", rule_pack=pack)
+    authored = tmp_path / "ashfall"
+    shutil.copytree(WORLDS / "ashfall", authored)
+    agendas = authored / "agendas.yaml"
+    agendas.write_text(agendas.read_text().replace("id: the-wagons-stop", "id: the-feud-simmers"))
+    with pytest.raises(PackError, match="the-feud-simmers"):
+        parse_pack(authored)

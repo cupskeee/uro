@@ -47,6 +47,11 @@ epoch_label = "After the Sundering"   # single epoch for date rendering. Named n
                                       # (e.g. history.seed_era below) are EVENT-driven, not arithmetic —
                                       # a History-layer concept, not derived from the day counter.
 
+[clock]                      # D-80: what moves the world's day besides an explicit time-skip
+from_intent = true           # an intent that passes whole days moves it (D-77); false = the game
+                             # moves it itself (Engine.pass_time, or the REST/CLI time-skip with
+                             # downtime off). The day stays world state either way.
+
 [ruleset]
 id = "uro-basic"             # resolved via the ruleset registry (06, D-30); "uro-pbta" for the
 version = ">=0.1"            #   alien PbtA build. A campaign started on the world PINS this, so
@@ -127,7 +132,7 @@ The **sufficiency check** scores the assembled world against a coverage rubric �
 | Dimension | Question | Minimum for "runnable" |
 |---|---|---|
 | Geography | Somewhere to be? | ≥1 region, ≥1 settlement, ≥1 site |
-| Population | Someone to meet? | ≥3 seeded actors or explicit "generate freely" flag |
+| Population | Someone to meet? | ≥3 seeded actors, or `generate_population = true` while the instance lets play create actors (D-81: the people are made in play — the narrator names them, the extractor records them; nothing is generated up front) |
 | Power | Who runs things? | ≥1 faction or ruler |
 | Conflict seeds | Anything to play about? | ≥1 tension/thread hook |
 | Tone | How should it sound? | tone tags or style template present |

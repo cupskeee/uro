@@ -258,6 +258,7 @@ class PostgresEventStore:
         rule_pack: dict[str, Any] | None = None,
         extra_events: list[DomainEvent] | None = None,
         ruleset_config: dict[str, Any] | None = None,
+        clock: dict[str, Any] | None = None,
     ) -> World:
         """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, docs/09, 17) plus any
@@ -267,9 +268,12 @@ class PostgresEventStore:
             # Validate the Reaction-Layer pack LOUDLY at creation (gap-report Hollowloop G-6): a bad
             # pack must not persist and then die silently at the first beat (react()/agenda_tick
             # swallow load errors as a warning, disabling the whole pack). Fail here instead.
-            from uro_core.worldpack.rules import RulePack
+            from uro_core.worldpack.rules import RulePack, duplicate_ids
 
-            RulePack(**rule_pack)  # raises on a bad version / unknown trigger / malformed action
+            # raises on a bad version / unknown trigger / malformed action
+            dupes = duplicate_ids(RulePack(**rule_pack))
+            if dupes:  # one would overwrite the other's consequences (D-80 review)
+                raise ValueError(f"rule and agenda ids must be unique; used twice: {dupes}")
         if ruleset_id or ruleset_config:
             # Same rule for the ruleset (D-62): an unknown id or a bad `[ruleset.config]` fails
             # here, not at the first campaign or beat.
@@ -288,6 +292,7 @@ class PostgresEventStore:
                 ruleset_version=ruleset_version,
                 ruleset_config=ruleset_config,
                 rule_pack=rule_pack,
+                clock=clock,
             ),
             *(extra_events or []),
         ]
@@ -789,7 +794,7 @@ class PostgresEventStore:
         self,
         branch_id: str,
         *,
-        based_on_day: int,
+        based_on_day: int | None,
         days: int,
         reason: str,
         evidence: str,
@@ -804,11 +809,12 @@ class PostgresEventStore:
             )
             if locked is None:
                 raise KeyError(f"unknown branch {branch_id!r}")
-            if await self._current_day(conn, branch_id) != based_on_day:
+            from_day = await self._current_day(conn, branch_id)
+            if based_on_day is not None and from_day != based_on_day:
                 return None  # the clock moved since the beat began: don't stack on it
             event = time_advanced(
-                from_day=based_on_day,
-                to_day=based_on_day + days,
+                from_day=from_day,
+                to_day=from_day + days,
                 reason=reason,
                 evidence=evidence,
                 beat_id=beat_id,
@@ -1951,6 +1957,17 @@ class PostgresEventStore:
             return "", {}
         payload = row["payload"]
         return ", ".join(payload.get("tone", [])), payload.get("prompt_overrides", {})
+
+    async def world_clock(self, branch_id: str) -> dict[str, Any]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT e.payload FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "JOIN branches b ON b.world_id = c.world_id "
+                "WHERE b.branch_id = $1 AND e.event_type = 'WorldGenesis' LIMIT 1",
+                branch_id,
+            )
+        return (row["payload"].get("clock") or {}) if row is not None else {}
 
     async def world_rule_pack(self, branch_id: str) -> dict[str, Any]:
         """The branch's world's Reaction-Layer rule pack (docs/17), read inline from WorldGenesis.

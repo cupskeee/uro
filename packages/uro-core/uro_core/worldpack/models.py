@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from uro_core.worldpack.rules import RulePack
 
@@ -35,6 +35,14 @@ class CalendarDecl(BaseModel):
     epoch_label: str = ""
 
 
+class ClockDecl(BaseModel):
+    """`[clock]` (D-80): what moves the world's day besides an explicit time-skip. The day itself is
+    world state the engine owns; which policies move it is the game's choice."""
+
+    model_config = ConfigDict(extra="forbid")  # a misspelt setting is an error, not a no-op
+    from_intent: bool = True  # an intent that passes whole days moves the day (D-77)
+
+
 class RulesetDecl(BaseModel):
     id: str = "uro-basic"
     version: str = ">=0"
@@ -52,6 +60,7 @@ class WorldManifest(BaseModel):
     generate_population: bool = False  # the "generate freely" flag (docs/09 sufficiency)
     content: ContentDecl = Field(default_factory=ContentDecl)
     calendar: CalendarDecl = Field(default_factory=CalendarDecl)
+    clock: ClockDecl = Field(default_factory=ClockDecl)
     ruleset: RulesetDecl = Field(default_factory=RulesetDecl)
     history: HistoryDecl = Field(default_factory=HistoryDecl)
     llm_roles: dict[str, str] = Field(default_factory=dict)  # [llm.roles] — suggestions
