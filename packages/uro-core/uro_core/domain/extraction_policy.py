@@ -8,7 +8,7 @@ Covers every category the extractor can propose: actors, places, factions, threa
 (beliefs ride claims). Emergent world is RELATIONAL (D-50) — an actor cascade-creates the faction
 it's `member_of` and the place it's `located_in` — so `extract_factions`/`extract_places` also gate
 those cascades. Claims/beliefs are toggleable but the engine NEEDS them (recall degrades without
-them), so a client (uro-loom) must disclaim that when offering the toggle. Default all-on.
+them), so a client must disclaim that when offering the toggle. Default all-on.
 """
 
 from __future__ import annotations

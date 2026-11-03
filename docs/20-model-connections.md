@@ -4,12 +4,12 @@
 > change: new operational tables (migration 020) + a registry adapter + a server/CLI surface; the
 > core ring is **untouched**. Built: the registry substrate + encrypted-credential store +
 > `build_router_from_registry` + `serve` resolution + the `uro provider` CLI (slice 1); the
-> operator-only `/providers` HTTP surface so uro-loom/any client configures it (slice 2). Slices 3–4 (model discovery/validation via `refresh`/`test`, reload-without-restart) are
+> operator-only `/providers` HTTP surface so any client configures it (slice 2). Slices 3–4 (model discovery/validation via `refresh`/`test`, reload-without-restart) are
 > also built.
 
 Move LLM provider configuration out of the deployment file (`uro.toml [llm.roles]` + `--provider`
 flag + env keys) and into the **database**, as an **instance-level** registry configurable over the
-`uro-server` API — so `uro-cli`, `uro-loom`, and any third-party API client edit the same source of
+`uro-server` API — so `uro-cli`, a web console, and any third-party API client edit the same source of
 truth, and one instance can have several providers connected at once.
 
 ## The principle
@@ -162,9 +162,9 @@ up (on stub) with no config. Adding the first connection via CLI/API takes over.
   and test are the same core functions the endpoints call (`refresh_connection_models`,
   `probe_connection`). These commands edit the database: a RUNNING server sees the change after
   `POST /providers/reload` — `uro provider reload --server URL --token T` — or a restart.
-- **`uro-loom`:** the same API — a non-technical operator connects a provider, pastes a key (stored
-  encrypted), picks models, and binds roles, all in the browser. (This is the instance operator's
-  key; *per-end-user* keys in a multi-tenant deploy remain a platform/BFF concern, `docs/05` of Loom.)
+- **A web console:** the same API — a non-technical operator connects a provider, pastes a key
+  (stored encrypted), picks models, and binds roles, all in the browser. (This is the instance
+  operator's key; *per-end-user* keys in a multi-tenant deploy remain a platform concern.)
 
 ## Headless CLI kinds (D-72)
 
@@ -234,12 +234,12 @@ instead of static (read file), but the seam the core sees is identical.
 
 ## What this unlocks now vs. deferred
 
-- **Now:** model-agnostic; several providers connected at once; role→model bindings; edit from CLI,
-  Loom, or any API client; encrypted operator keys (so Loom *can* accept a pasted key at the instance
-  level from v1, because the encrypted store exists).
+- **Now:** model-agnostic; several providers connected at once; role→model bindings; edit from the CLI
+  or any API client; encrypted operator keys (so a web console *can* accept a pasted key at the
+  instance level from v1, because the encrypted store exists).
 - **Deferred (named):** live **per-campaign** model selection (needs the engine to resolve a router
   per campaign — the one-provider-per-process work, out of scope here); **per-end-user** credentials
-  and org isolation (multi-tenant — rides the BFF/platform layer, Loom `docs/05`); OAuth runtime
+  and org isolation (multi-tenant — rides a platform layer); OAuth runtime
   resolvers (`auth_mode` reserves the schema; `oauth_pkce`/`oauth_device` wire in when a provider
   needs them); further provider *kinds* (each is one adapter — a native `google-genai` is the
   obvious next).
@@ -257,7 +257,7 @@ instead of static (read file), but the seam the core sees is identical.
 2. ✅ **Server API — SHIPPED:** the operator-only (D-44) `/providers` connections/credentials/bindings
    CRUD (`GET /providers` snapshot; `POST`/`PATCH`/`DELETE /providers[/{id}]`;
    `POST`/`DELETE /providers/credentials[/{id}]`; `PUT`/`DELETE /providers/roles/{role}`), so
-   uro-loom / any client configures the registry. Credentials arrive as plaintext over the
+   any client configures the registry. Credentials arrive as plaintext over the
    operator-only wire and are encrypted at rest; no read returns a secret. (`uro provider …`
    retargeting to a running server — like `uro token` — is a deferred nicety; the CLI stays direct-DB.)
 3. ✅ **Discovery + validation — SHIPPED:** `refresh` (per-adapter model listing + modality), `test` (live probe),

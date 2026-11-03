@@ -756,7 +756,7 @@ def create_app(
                 closed += 1
         return closed
 
-    # A browser SPA (uro-loom) lives on a DIFFERENT origin than the server, so without CORS the
+    # A browser SPA (a web console) lives on a DIFFERENT origin than the server, so without CORS the
     # browser blocks every cross-origin call (the request never reaches here — it fails preflight /
     # is dropped client-side). Off by default (the CLI/embed paths don't need it, and a permissive
     # default would be an unsafe surprise); a deployment opts in per allowed origin via
@@ -795,7 +795,7 @@ def create_app(
 
     @app.get("/version", **_out(S.Versions))
     async def server_version(request: Request) -> dict[str, str]:
-        """The server's package versions — what a client (uro-loom) is talking to. Any-authed: the
+        """The server's package versions — what a client is talking to. Any-authed: the
         unauthenticated `/healthz` stays a bare liveness probe that advertises nothing."""
         _auth(request)
         import uro_core
@@ -861,7 +861,7 @@ def create_app(
         return {"rulesets": deps.list_rulesets(), "unusable": registry.broken()}
 
     # --- Model-connection registry (D-47, docs/20 — slice 2). The instance-level LLM provider
-    # registry over HTTP, so uro-loom / any client configures it (uro-cli edits the DB directly).
+    # registry over HTTP, so any client configures it (uro-cli edits the DB directly).
     # ALL endpoints are OPERATOR-only (D-44 — provider config is a cost/structural concern), and no
     # read ever returns a secret (list_credentials is metadata; the plaintext leaves only via the
     # wiring layer's get_secret at serve startup). A credential's key arrives as plaintext over the

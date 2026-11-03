@@ -592,7 +592,7 @@ def serve(
         None,
         "--cors-origin",
         help="allow a browser origin to call this server, e.g. --cors-origin http://localhost:5173 "
-        "(repeatable). REQUIRED for the uro-loom web console (a cross-origin SPA); the browser "
+        "(repeatable). REQUIRED for a web console (a cross-origin SPA); the browser "
         "blocks calls with no CORS header. Pass '*' to allow any origin (dev only; disables "
         "credentials). Omit for CLI/embedded use.",
     ),
@@ -1851,7 +1851,7 @@ def codex_list(
 
 
 # --- Model-connection registry (D-47, docs/20) — direct-DB config of the LLM provider registry.
-# A server API mirror (for uro-loom / remote clients) lands in the next slice; today these edit the
+# A server API mirror (for remote clients) lands in the next slice; today these edit the
 # instance's DB directly (operator with DB access), like `uro world`/`uro campaign`.
 
 

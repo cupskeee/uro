@@ -1814,7 +1814,7 @@ def test_dry_run_rejects_a_foreign_scoped_token() -> None:
 
 def test_cors_disabled_by_default() -> None:
     # No --cors-origin → no CORS header, so a browser SPA on another origin is blocked (the symptom
-    # that surfaced this: uro-loom on :5173 → uro-server on :8000 showed all-red network calls).
+    # that surfaced this: a console on :5173 → uro-server on :8000 showed all-red network calls).
     client = TestClient(create_app(_fake_deps()))
     resp = client.get("/healthz", headers={"Origin": "http://localhost:5173"})
     assert resp.status_code == 200

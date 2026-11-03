@@ -90,7 +90,7 @@ POST /providers/reload                                            rebuild the in
 ```
 
 **Model-connection registry (D-47, `docs/20`).** The `/providers` surface configures the
-instance-level LLM provider registry over HTTP (so `uro-loom` / any client drives it; `uro provider …`
+instance-level LLM provider registry over HTTP (so any client drives it; `uro provider …`
 edits the DB directly). All of it is **operator-only** (D-44 — provider config is a cost/structural
 concern). A credential's `access_token` arrives as **plaintext over the (operator-only, TLS-in-prod)
 wire** and is **encrypted at rest** under `URO_SECRET_KEY`; **no read ever returns a secret**
@@ -227,7 +227,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 
 † `intent_id` echoes the `id` the client sent with that intent (absent if it sent none), so a client can tell its own outcome from another player's identical text.
 
-**Deliberately NOT emitted yet (a future GROW, not drift).** `scene_update` / `mode_change` (the highest-value add — Loom's Play surface can't show scene/mode) need the pipeline to surface within-beat mode state (encounters auto-resolve inside one beat under D-29, so between beats the mode is always free-roam — there is no persistent mode frame to send without new engine state). `mechanics_result` needs the same. `suggestions` (the planner's D-23 next-action hints) and a `beat_committed` `beat_id` (for deep-linking a committed beat) both need the `run_beat` streaming contract to yield structured frames, not only narration strings. `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
+**Deliberately NOT emitted yet (a future GROW, not drift).** `scene_update` / `mode_change` (the highest-value add — a client's play view can't show scene/mode) need the pipeline to surface within-beat mode state (encounters auto-resolve inside one beat under D-29, so between beats the mode is always free-roam — there is no persistent mode frame to send without new engine state). `mechanics_result` needs the same. `suggestions` (the planner's D-23 next-action hints) and a `beat_committed` `beat_id` (for deep-linking a committed beat) both need the `run_beat` streaming contract to yield structured frames, not only narration strings. `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
 
 Beat results may carry `suggestions[]` — 2–4 affordance-grounded next-action hints emitted by the planner at no extra LLM cost (D-23). **Free-text intent is canonical**; suggestions are hints clients may ignore entirely (the CLI renders them dimmed), never a constrained choice list. (Over the WS wire they are a future GROW, above; the embedded/CLI path already surfaces them.)
 
@@ -266,7 +266,7 @@ uro branch fork ashfall --at campaign-a-end --name aftermath
 uro log <world> [--branch B]              # chronicle view — commit lineage (defaults to main; per-branch, never a cross-branch merge — `02`)
 uro world export ashfall -o ashfall.uwp   # hash-chain-stamped bundle;  uro world import ashfall.uwp verifies + instantiates
 uro serve --token alice --token bob       # run the server;  uro connect <campaign> --server URL --token alice  (WS client)
-uro serve --token dev --cors-origin http://localhost:5173   # allow a browser SPA (uro-loom) — see "Browser access" below
+uro serve --token dev --cors-origin http://localhost:5173   # allow a browser SPA — see "Browser access" below
 uro serve --nats nats://localhost:4222    # push commits made by ANY process to clients live (D-67; run `uro outbox relay` too)
 uro world list | uro campaign list [--world W] | uro campaign show <campaign>   # what exists, who sits where
 uro state <campaign> | uro state --world W [--branch B | --at REF] [--sections …]   # projections now, or at any past commit
@@ -287,13 +287,12 @@ uro memory reembed [--world W]            # re-embed memories as intent + narrat
 
 `uro play` and `uro dry-run` are the two commands the whole roadmap's acceptance tests run through.
 
-**Browser access (CORS).** A browser SPA (the `uro-loom` console) is a *different origin* from the
+**Browser access (CORS).** A browser SPA (a web console) is a *different origin* from the
 server, so without a CORS header the browser blocks every cross-origin call — the request never
 reaches the app (a `curl` from the shell still works, which is the tell). The server sends **no CORS
 header by default** (CLI/embedded use needs none, and a permissive default would be an unsafe
 surprise); a deployment opts in with `uro serve --cors-origin <origin>` (repeatable — list each
 allowed origin; `*` allows any origin for pure dev and then drops credentials per the CORS spec).
-For a local Loom dev loop that's `--cors-origin http://localhost:5173`. A production deployment can
-instead (or additionally) terminate CORS at a reverse proxy, or route the browser through the
-optional M6 BFF (Loom's [`docs/05-bff-design.md`](https://github.com/cupskeee/uro-loom)) so calls are
-same-origin.
+For a local dev server on Vite's default port that's `--cors-origin http://localhost:5173`. A production deployment can
+instead (or additionally) terminate CORS at a reverse proxy, or route the browser through a
+backend-for-frontend so calls are same-origin.

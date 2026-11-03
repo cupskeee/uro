@@ -7,7 +7,7 @@ import pytest_asyncio
 from uro_core.adapters.postgres.store import PostgresEventStore
 
 # Tests run against a DEDICATED `uro_test` database — NOT the `uro` DB the running instance
-# (`uro serve` / uro-loom) uses. Otherwise every `just test` run pollutes the worlds you browse
+# (`uro serve` and its clients) uses. Otherwise every `just test` run pollutes the worlds you browse
 # (the DB tests create worlds/campaigns and don't roll back). An explicit URO_DATABASE_URL (CI, or
 # an override) is used as-is — CI's DB is already a throwaway service container.
 _EXPLICIT = os.environ.get("URO_DATABASE_URL")
