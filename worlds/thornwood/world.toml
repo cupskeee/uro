@@ -4,6 +4,7 @@
 [world]
 name = "Thornwood"
 tone = ["pastoral", "cozy"]
+starting_gear = ["a walking stick"]       # what a fresh PC carries here (D-97)
 
 [content]
 rating = "mild"

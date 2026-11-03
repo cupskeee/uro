@@ -55,7 +55,8 @@ from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
-from uro_core.timeline.models import FORK_TIME_SKIP, STARTING_GEAR, World
+from uro_core.timeline.gear import starting_gear
+from uro_core.timeline.models import FORK_TIME_SKIP, World
 from uro_core.worldpack.create import SeedResult
 
 from uro_server import schemas as S
@@ -277,6 +278,8 @@ class ServerDeps:
     revoke_token: Callable[[str], Awaitable[bool]] | None = None  # (plaintext token) → revoked?
     # (participant, campaign) → how many live runtime tokens were revoked
     revoke_participant: Callable[[str, str], Awaitable[int]] | None = None
+    # a removal's campaigns: drop their cached minted tokens (D-99) → how many
+    forget_campaigns: Callable[[set[str]], int] | None = None
     list_tokens: Callable[[str], Awaitable[list[TokenInfo]]] | None = None  # campaign → metadata
     is_admin: Callable[[str], bool] | None = None  # (token) → operator tier (may act for others)?
     token_campaign: Callable[[str], str | None] | None = None  # minted token → its campaign (scope)
@@ -622,6 +625,7 @@ def engine_deps(
         mint_token=registry.mint,
         revoke_token=registry.revoke,
         revoke_participant=registry.revoke_participant,
+        forget_campaigns=registry.forget_campaigns,
         list_tokens=registry.list_tokens,
         is_admin=registry.is_admin,
         token_campaign=registry.campaign_of,
@@ -769,7 +773,11 @@ def create_app(
         return closed
 
     async def _close_campaign_sockets(campaign_ids: set[str]) -> None:
-        """Close every live socket on a removed campaign (code 4404, as for an unknown one)."""
+        """After a removal (D-99): forget the campaigns' cached minted tokens, so they stop
+        authenticating at once, and close every live socket on them (code 4404, as for an unknown
+        campaign)."""
+        if deps.forget_campaigns is not None:
+            deps.forget_campaigns(campaign_ids)
         for entry in list(live_sockets):
             if entry[2] in campaign_ids:
                 live_sockets.discard(entry)
@@ -1909,7 +1917,11 @@ def create_app(
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
                 pc_sheet=pc_sheet,
-                starting_items=list(STARTING_GEAR) if new_pc_name is not None else None,
+                starting_items=(
+                    await starting_gear(store, branch.branch_id)
+                    if new_pc_name is not None
+                    else None
+                ),
                 ruleset_id=ruleset_id,
                 ruleset_version=pin.version,
                 seed=seed,
@@ -1977,7 +1989,11 @@ def create_app(
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
                 pc_sheet=pc_sheet,
-                starting_items=list(STARTING_GEAR) if new_pc_name is not None else None,
+                starting_items=(
+                    await starting_gear(store, campaign.branch_id)
+                    if new_pc_name is not None
+                    else None
+                ),
                 ruleset_id=campaign.ruleset_id,
             )
         except (ValueError, KeyError) as exc:  # bad PC choice, or an absent pinned ruleset
@@ -2430,12 +2446,12 @@ async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> No
 
 
 def _beat_details(result: BeatResult) -> dict[str, object]:
-    """What `beat_committed` carries beside the narration (D-98), all scene-safe: the ruleset's
-    check results (its own words, D-30: a client may show or hide them), the planner's
-    suggestions, the beat's mode, the in-fiction day after it, and the entities it made (no
-    claims: their truth is operator-only, D-45)."""
+    """What `beat_committed` carries beside the narration (D-98), sent to every seat: each check's
+    ruleset-graded outcome (not its trace, which may carry sheet values, D-46), the acting
+    player's suggestions, the beat's mode, the in-fiction day after it, and the entities it made
+    (no claims: their truth is operator-only, D-45)."""
     return {
-        "checks": list(result.check_traces),
+        "checks": [c.model_dump() for c in result.outcomes],
         "suggestions": list(result.suggestions),
         "mode": result.mode,
         "world_day": result.world_day,

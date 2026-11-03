@@ -52,7 +52,7 @@ async def test_the_stream_hands_back_the_beat(store: PostgresEventStore) -> None
 def test_the_cli_shows_the_details() -> None:
     lines = beat_detail_lines(
         {
-            "checks": ["persuade: 15 vs 12 — success"],
+            "checks": [{"actor_id": "a:sam", "affordance": "persuade", "outcome": "success"}],
             "mode": "encounter",
             "world_day": 4,
             "created": [{"kind": "actor", "id": "a:abe", "name": "Jun Abe"}],
@@ -61,10 +61,29 @@ def test_the_cli_shows_the_details() -> None:
         previous_day=3,
     )
     assert lines == [
-        "  · persuade: 15 vs 12 — success",
+        "  · persuade: success",
         "  · a fight was resolved",
         "  · day 4",
         "  + new: Jun Abe (actor)",
         "  ? you could: ask about the dive; check the lock",
     ]
     assert beat_detail_lines({"world_day": 4}, previous_day=4) == []  # nothing new, no lines
+    assert beat_detail_lines({"world_day": 4}, previous_day=None) == ["  · day 4"]  # first seen
+    others = beat_detail_lines({"suggestions": ["hide"]}, previous_day=None, mine=False)
+    assert others == []  # another player's suggestions aren't offered to you
+
+
+async def test_the_servers_beat_runner_yields_the_result_last(store: PostgresEventStore) -> None:
+    # the real engine_deps wiring (not a fake run_beat): narration, then the BeatResult
+    from uro_server.app import engine_deps
+
+    world = await store.create_world(f"runner-{new_id()}")
+    campaign = await store.start_campaign(
+        world.world_id, world.main_branch_id, participant_id="p1", new_pc_name="Sam"
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Naming()))
+    deps = engine_deps(store, engine, {"tok": "p1"})
+    items = [x async for x in deps.run_beat(campaign.campaign_id, "p1", "I look around.")]
+    assert isinstance(items[-1], BeatResult)
+    assert all(isinstance(x, str) for x in items[:-1])
+    assert {c.name for c in items[-1].created} >= {"Jun Abe", "The Dive Lock"}

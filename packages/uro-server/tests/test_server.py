@@ -2768,7 +2768,7 @@ def test_pacing_404_for_an_unknown_campaign_and_401_without_a_token() -> None:
 
 
 def test_beat_committed_carries_the_beats_details() -> None:
-    from uro_core.pipeline.engine import BeatResult, CreatedEntity
+    from uro_core.pipeline.engine import BeatResult, CheckOutcome, CreatedEntity
 
     deps = _fake_deps()
 
@@ -2778,7 +2778,8 @@ def test_beat_committed_carries_the_beats_details() -> None:
             beat_id="beat:1",
             narration="The hatch cycles open.",
             commit_id="c:1",
-            check_traces=["sneak: 14 vs 12 — success"],
+            check_traces=["sneak: 14 vs AC 12 — success"],  # the trace stays off the wire
+            outcomes=[CheckOutcome(actor_id="a:sam", affordance="sneak", outcome="success")],
             suggestions=["follow the drag marks"],
             mode="encounter",
             world_day=3,
@@ -2791,7 +2792,8 @@ def test_beat_committed_carries_the_beats_details() -> None:
         msgs = _recv_until(ws, "beat_committed")
     done = msgs[-1]
     assert done["narration"] == "The hatch cycles open."  # the result object is not narration
-    assert done["checks"] == ["sneak: 14 vs 12 — success"]
+    assert done["checks"] == [{"actor_id": "a:sam", "affordance": "sneak", "outcome": "success"}]
+    assert "AC" not in str(done)  # a sheet value in a trace never reaches a player (D-46)
     assert done["suggestions"] == ["follow the drag marks"]
     assert done["mode"] == "encounter" and done["world_day"] == 3
     assert done["created"] == [{"kind": "place", "id": "p:lock", "name": "The Dive Lock"}]
@@ -2805,3 +2807,53 @@ def test_a_beat_with_no_result_sends_no_details() -> None:
         ws.send_json({"type": "intent", "text": "I wait"})
         done = _recv_until(ws, "beat_committed")[-1]
     assert "checks" not in done and "created" not in done
+
+
+# D-99: a removal closes the campaign's sockets and forgets its cached tokens
+
+
+class _FakeRemovalStore:
+    async def get_campaign(self, campaign_id: str) -> Campaign | None:
+        return Campaign(campaign_id=campaign_id, world_id="w", branch_id="b:side")
+
+    async def get_branch(self, branch_id: str) -> BranchInfo | None:
+        return BranchInfo(
+            branch_id=branch_id, world_id="w", name="side", head_commit="c", head_depth=1
+        )
+
+    async def list_campaigns(self, world_id: str | None = None) -> list[Campaign]:
+        return [Campaign(campaign_id="camp-1", world_id="w", branch_id="b:side")]
+
+    async def delete_branch(
+        self, branch_id: str, *, only_campaign: str | None = None
+    ) -> dict[str, int]:
+        return {"campaigns": 1, "branches": 1}
+
+    async def pc_seats(self, campaign_id: str) -> list[str]:
+        return []
+
+
+def test_removing_a_campaign_closes_its_sockets_and_forgets_its_tokens() -> None:
+    forgotten: list[set[str]] = []
+    deps = _operator_deps(_FakeRemovalStore())
+    deps.forget_campaigns = lambda ids: forgotten.append(ids) or 0
+    client = TestClient(create_app(deps))
+    with client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as ws:
+        r = client.delete("/campaigns/camp-1?token=tok-a")
+        assert r.status_code == 200 and r.json()["removed"]["campaigns"] == 1
+        with pytest.raises(WebSocketDisconnect) as closed:
+            for _ in range(5):
+                ws.receive_json()
+        assert closed.value.code == 4404
+    assert forgotten == [{"camp-1"}]
+    assert client.delete("/campaigns/camp-1?token=tok-b").status_code == 403  # a player can't
+
+
+def test_the_token_registry_forgets_removed_campaigns() -> None:
+    from uro_server.sessions import TokenRegistry, _hash
+
+    reg = TokenRegistry(None, {})
+    reg._cache[_hash("t1")] = ("bob", "camp-1")
+    reg._cache[_hash("t2")] = ("cy", "camp-2")
+    assert reg.forget_campaigns({"camp-1"}) == 1
+    assert reg.resolve("t1") is None and reg.resolve("t2") == "cy"

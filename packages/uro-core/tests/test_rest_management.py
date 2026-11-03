@@ -449,12 +449,12 @@ async def test_a_campaign_starts_on_any_branch_of_the_world(store: PostgresEvent
 async def test_a_fresh_rest_pc_gets_the_same_starting_gear_as_the_cli(
     store: PostgresEventStore,
 ) -> None:
-    # Parity: the CLI seats a fresh PC with STARTING_GEAR (Phase 3 — a lost fight loots a real
-    # item); the server seated one empty-handed, so REST play had nothing to loot.
-    from uro_core.timeline.models import STARTING_GEAR
-
+    # Parity: the CLI seats a fresh PC with its world's starting gear (Phase 3 — a lost fight loots
+    # a real item); the server seated one empty-handed, so REST play had nothing to loot. The gear
+    # is the world's own (D-97): `[world] starting_gear`, carried in WorldGenesis.
+    gear = ["a station access card", "a dive light"]
+    world_id = (await store.create_world(f"Geared-{new_id()}", starting_gear=gear)).world_id
     async with _client(store) as client:
-        world_id = (await client.post(_q("/worlds"), json={"name": "Geared"})).json()["world_id"]
         made = await client.post(
             _q(f"/worlds/{world_id}/campaigns"), json={"participant": "alice", "new_pc_name": "Ash"}
         )
@@ -466,7 +466,13 @@ async def test_a_fresh_rest_pc_gets_the_same_starting_gear_as_the_cli(
         for pc in (await store.campaign_pc(c), joined.json()["actor_id"]):
             ids = await store.items_owned_by(branch, pc)
             owned = [(await store.get_item(branch, i) or {}).get("name") for i in ids]
-            assert owned == list(STARTING_GEAR), (pc, owned)
+            assert owned == gear, (pc, owned)
+        bare = (await client.post(_q("/worlds"), json={"name": "Bare"})).json()["world_id"]
+        made = await client.post(
+            _q(f"/worlds/{bare}/campaigns"), json={"participant": "alice", "new_pc_name": "Ash"}
+        )
+        pc = await store.campaign_pc(made.json()["campaign_id"])
+        assert await store.items_owned_by(made.json()["branch_id"], pc) == []  # none named, none
 
 
 async def test_branch_diff_endpoint(store: PostgresEventStore) -> None:
@@ -620,7 +626,7 @@ async def test_version_endpoint_is_authed(store: PostgresEventStore) -> None:
         assert (await client.get("/healthz")).json() == {"status": "ok"}  # advertises nothing
 
 
-def _zip_pack(src: Path, *, rename: str | None = None) -> bytes:
+def _zip_pack(src: Path, *, rename: str | None = None, drop: str | None = None) -> bytes:
     """A pack directory as an upload; `rename` swaps the manifest's name (a different world)."""
     import io
     import zipfile
@@ -632,6 +638,8 @@ def _zip_pack(src: Path, *, rename: str | None = None) -> bytes:
                 data = f.read_bytes()
                 if rename and f.name == "world.toml":
                     data = data.replace(b'name = "Emberfell"', f'name = "{rename}"'.encode())
+                if drop and f.name == "world.toml":  # cut the toml at a table (and all after it)
+                    data = data.split(drop.encode())[0]
                 zf.writestr(f.relative_to(src).as_posix(), data)
     return buf.getvalue()
 
@@ -1041,6 +1049,7 @@ async def test_every_state_section_matches_its_published_schema(store: PostgresE
         counter_changed,
         edge_added,
         faction_created,
+        item_created,
         module_cause,
         place_created,
         thread_created,
@@ -1061,6 +1070,8 @@ async def test_every_state_section_matches_its_published_schema(store: PostgresE
                     actor_id="a:mera", name="Mera", role="barkeep", aliases=["the barkeep"]
                 ),
                 place_created(place_id="p:inn", name="The Brinehouse", kind="site"),
+                # a world made without a pack gives a fresh PC no gear (D-97): an item of its own
+                item_created(item_id="i:lamp", name="a storm lamp", owner_ref="a:mera"),
                 faction_created(faction_id="f:salt", name="Saltborn"),
                 edge_added(src="a:mera", rel_type="member_of", dst="f:salt", attrs={"since": 3}),
                 thread_created(thread_id="t:boats", stakes="Boats come in light.", state="active"),
@@ -1125,3 +1136,18 @@ async def test_removal_over_the_api(store: PostgresEventStore) -> None:
         assert r.status_code == 200 and r.json()["removed"]["worlds"] == 1
         assert (await client.get(_q(f"/campaigns/{cid}"))).status_code == 404
         assert (await client.delete(_q(f"/worlds/{wid}"))).status_code == 404
+
+
+async def test_seeding_a_pack_with_no_vocabulary_is_a_400(store: PostgresEventStore) -> None:
+    # D-97: the engine ships no history of its own, so a pack without [history.vocabulary] can't
+    # be seeded — over the API that's bad input, with the reason, not a 500
+    pack_dir = Path(__file__).resolve().parents[3] / "worlds" / "emberfell"
+    name = f"Plain-{new_id()}"
+    upload = {
+        "pack": ("p.zip", _zip_pack(pack_dir, rename=name, drop="[history.vocabulary]"), "x/zip")
+    }
+    async with _client(store) as client:
+        made = await client.post(_q("/worlds/create"), files=upload)
+        assert made.status_code == 200, made.text
+        r = await client.post(_q(f"/worlds/{made.json()['world_id']}/seed"), files=upload)
+        assert r.status_code == 400 and "no vocabulary" in r.json()["detail"]

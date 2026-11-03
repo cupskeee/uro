@@ -101,6 +101,14 @@ class TokenRegistry:
             self._cache.pop(token_hash, None)
         return len(hashes)
 
+    def forget_campaigns(self, campaign_ids: set[str]) -> int:
+        """Drop the cached tokens of removed campaigns (D-99): their rows are gone from the store,
+        and the cache would otherwise keep authenticating them until a restart. Returns how many."""
+        doomed = [h for h, (_, c) in self._cache.items() if c in campaign_ids]
+        for token_hash in doomed:
+            del self._cache[token_hash]
+        return len(doomed)
+
     async def list_tokens(self, campaign_id: str) -> list[TokenInfo]:
         """A campaign's runtime tokens (metadata only — never a token or its full hash)."""
         return [] if self._store is None else await self._store.campaign_tokens(campaign_id)

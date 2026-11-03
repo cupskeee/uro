@@ -37,7 +37,8 @@ def seed_history(manifest: WorldManifest, rng: Rng) -> list[DomainEvent]:
         )
     seed = rng.seed
     cause = history_cause("seeding")
-    era = f"the age of {manifest.history.seed_era}" if manifest.history.seed_era else "its past"
+    seed_era = manifest.history.seed_era
+    era = vocab.era_name.replace("{era}", seed_era) if seed_era else vocab.era_unnamed
     events: list[DomainEvent] = [
         history_seeded(
             seed=seed,
@@ -78,10 +79,18 @@ def seed_history(manifest: WorldManifest, rng: Rng) -> list[DomainEvent]:
     events.append(
         claim_recorded(
             claim_id=f"c:seed{seed}-era",
-            statement=f"{era[0].upper()}{era[1:]} was marked by {rng.choice(vocab.calamities)}.",
+            statement=_capitalized(
+                vocab.era_claim.replace("{era_name}", era).replace(
+                    "{calamity}", rng.choice(vocab.calamities)
+                )
+            ),
             truth="true",
             origin="history",
             caused_by=cause,
         )
     )
     return events
+
+
+def _capitalized(text: str) -> str:
+    return text[:1].upper() + text[1:]

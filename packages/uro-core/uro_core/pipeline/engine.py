@@ -122,6 +122,15 @@ class BeatResult(BaseModel):
     mode: str = "freeroam"
     world_day: int = 0
     created: list[CreatedEntity] = Field(default_factory=list)
+    # each free-roam check's ruleset-graded outcome, without its trace: a trace is the ruleset's
+    # own text and may carry sheet values (an opponent's AC), which a player isn't shown (D-46)
+    outcomes: list[CheckOutcome] = Field(default_factory=list)
+
+
+class CheckOutcome(BaseModel):
+    actor_id: str
+    affordance: str
+    outcome: str  # the ruleset's grade ("success", "partial", "miss", …), opaque to the engine
 
 
 class CreatedEntity(BaseModel):
@@ -692,9 +701,22 @@ class Engine:
             check_traces=ctx.mechanics_traces,
             suggestions=ctx.suggestions,
             mode="encounter" if encounter_events is not None else "freeroam",
-            world_day=await self._store.current_world_time(campaign.branch_id),
+            world_day=await self._day_after(campaign.branch_id, ctx.world_day),
             created=_created(events),
+            outcomes=[
+                CheckOutcome(actor_id=c.actor_id, affordance=c.affordance, outcome=c.result.outcome)
+                for c in ctx.checks
+            ],
         )
+
+    async def _day_after(self, branch_id: str, fallback: int) -> int:
+        """The branch's day once the beat is committed, for its result (D-98). The beat is durable
+        by now, so a failed read must not turn it into a reported failure: fall back."""
+        try:
+            return await self._store.current_world_time(branch_id)
+        except Exception as exc:
+            logger.warning("couldn't read the day after a committed beat: %s", exc)
+            return fallback
 
     async def react(
         self, campaign: Campaign, trigger_commit_id: str, trigger_events: list[DomainEvent]

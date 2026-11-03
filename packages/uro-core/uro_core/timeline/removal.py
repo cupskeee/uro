@@ -36,4 +36,5 @@ async def delete_campaign(store: EngineStore, campaign_id: str) -> dict[str, int
             f"its branch {branch.name!r} is shared with campaign(s) {', '.join(others)}: "
             "delete the branch to remove them all"
         )
-    return await store.delete_branch(campaign.branch_id)
+    # the store re-checks under its lock, so a campaign started meanwhile isn't swept away
+    return await store.delete_branch(campaign.branch_id, only_campaign=campaign_id)

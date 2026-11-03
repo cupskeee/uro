@@ -5,6 +5,7 @@
 [world]
 name = "Emberfell"
 tone = ["gritty", "frontier", "desperate"]
+starting_gear = ["a miner's lamp"]       # what a fresh PC carries here (D-97)
 
 [content]
 rating = "mature"

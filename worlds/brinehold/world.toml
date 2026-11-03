@@ -5,6 +5,7 @@
 [world]
 name = "Brinehold"
 tone = ["salt-stained", "tense", "close-knit"]
+starting_gear = ["a gutting knife"]       # what a fresh PC carries here (D-97)
 
 [content]
 rating = "mature"

@@ -59,6 +59,9 @@ def check_sufficiency(pack: WorldPack, *, play_creates_actors: bool = True) -> S
     # Power, in any genre (D-97): a faction, or a person of standing (tier 2+: a duke, a station
     # director, a crime boss). No role words: the engine doesn't know what a ruler is called.
     n_standing = sum(1 for a in pack.actors if a.tier >= 2)
+    # simulated years only count as a past when the pack can be seeded (D-97: its vocabulary)
+    history = pack.manifest.history
+    seedable = history.simulate_years > 0 and history.vocabulary is not None
     has_conflict = bool(pack.threads) or any(f.at_war_with for f in pack.factions)
     lore_chars = sum(len(t) for t in pack.lore.values())
 
@@ -96,14 +99,11 @@ def check_sufficiency(pack: WorldPack, *, play_creates_actors: bool = True) -> S
         ),
         _dim(
             "history",
-            lore_chars >= _HISTORY_LORE_THRESHOLD or pack.manifest.history.simulate_years > 0,
+            lore_chars >= _HISTORY_LORE_THRESHOLD or seedable,
             f"{lore_chars} chars of lore"
-            + (
-                f", simulate_years={pack.manifest.history.simulate_years}"
-                if pack.manifest.history.simulate_years
-                else ""
-            ),
-            "little lore and no history.simulate_years — no past to reference",
+            + (f", simulate_years={pack.manifest.history.simulate_years}" if seedable else ""),
+            "little lore and nothing to seed a past from (history.simulate_years with a "
+            "[history.vocabulary]) — no past to reference",
         ),
     ]
 

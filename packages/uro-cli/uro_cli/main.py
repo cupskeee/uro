@@ -24,7 +24,8 @@ from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
 from uro_core.rulesets.base import CharSpec, Ruleset
 from uro_core.rulesets.rng import Rng
-from uro_core.timeline.models import FORK_TIME_SKIP, STARTING_GEAR, World
+from uro_core.timeline.gear import starting_gear
+from uro_core.timeline.models import FORK_TIME_SKIP, World
 
 from uro_cli.wiring import (
     build_router,
@@ -217,6 +218,7 @@ def world_new(
     ruleset: str = typer.Option(
         "", "--ruleset", help="a built-in ruleset id (`uro ruleset list`); default uro-basic"
     ),
+    pc: str = typer.Option("Player", "--pc", help="the player character's name"),
 ) -> None:
     """Create a world (+ its main branch) and a ready-to-play campaign with a default,
     sheeted PC. Prints the campaign id."""
@@ -232,15 +234,15 @@ def world_new(
                 world.world_id,
                 world.main_branch_id,
                 participant_id=PARTICIPANT,
-                new_pc_name="Adventurer",
+                new_pc_name=pc,
                 pc_sheet=sheet,
-                starting_items=list(STARTING_GEAR),
+                starting_items=await starting_gear(store, world.main_branch_id),
                 ruleset_id=ruleset_id,
             )
         finally:
             await store.close()
         typer.echo(f"world:    {world.world_id}  ({name})")
-        typer.echo(f"campaign: {campaign.campaign_id}  (PC: Adventurer)")
+        typer.echo(f"campaign: {campaign.campaign_id}  (PC: {pc})")
         typer.echo(f"\nplay it:  uro play {campaign.campaign_id}")
 
     _run_async(_run)
@@ -315,7 +317,8 @@ def world_create(
         typer.echo(f"world: {world.world_id}  ({world.name}, grade {result.grade})")
         for a in result.backfilled:
             typer.echo(f"  backfilled + committed: {a}")
-        typer.echo(f"seed history:  uro world seed {path} --seed 42")
+        if pack.manifest.history.vocabulary is not None:  # D-97: seeding speaks the pack's words
+            typer.echo(f"seed history:  uro world seed {path} --seed 42")
 
     _run_async(_run)
 
@@ -564,7 +567,7 @@ def play(
 def _details(result: BeatResult) -> dict[str, Any]:
     """A local beat's details in the shape `beat_committed` carries them (D-98)."""
     return {
-        "checks": result.check_traces,
+        "checks": [c.model_dump() for c in result.outcomes],
         "suggestions": result.suggestions,
         "mode": result.mode,
         "world_day": result.world_day,
@@ -572,20 +575,23 @@ def _details(result: BeatResult) -> dict[str, Any]:
     }
 
 
-def beat_detail_lines(details: dict[str, Any], previous_day: int | None) -> list[str]:
-    """What `uro play` and `uro connect` show under a beat (D-98): the ruleset's check results,
-    a fight, the day if it moved, what the beat made, and the planner's suggestions."""
-    lines = [f"  · {trace}" for trace in details.get("checks") or []]
+def beat_detail_lines(
+    details: dict[str, Any], previous_day: int | None, *, mine: bool = True
+) -> list[str]:
+    """What `uro play` and `uro connect` show under a beat (D-98): each check's outcome, a
+    fight, the day (when it moved, or first seen), what the beat made, and — under the player's
+    OWN beat only — the planner's suggestions (in a party they belong to whoever acted)."""
+    lines = [f"  · {c['affordance']}: {c['outcome']}" for c in details.get("checks") or []]
     if details.get("mode") == "encounter":
         lines.append("  · a fight was resolved")
     day = details.get("world_day")
-    if day is not None and previous_day is not None and day != previous_day:
+    if day is not None and day != previous_day:
         lines.append(f"  · day {day}")
     created = details.get("created") or []
     if created:
         lines.append("  + new: " + ", ".join(f"{c['name']} ({c['kind']})" for c in created))
     suggestions = details.get("suggestions") or []
-    if suggestions:
+    if suggestions and mine:
         lines.append("  ? you could: " + "; ".join(suggestions))
     return lines
 
@@ -808,13 +814,19 @@ def connect(
                         msg = json.loads(raw)
                         kind = msg.get("type")
                         echoes = echoes or "intent_id" in msg
+                        # one of OUR intents? (decided before settle() pops it)
+                        ours = (
+                            str(msg["intent_id"]) in pending
+                            if "intent_id" in msg
+                            else any(t == msg.get("intent") for t, _ in pending.values())
+                        )
                         if kind in settles:
                             settle(msg)
                         if kind == "narration_chunk":
                             typer.echo(msg["text"], nl=False)
                         elif kind == "beat_committed":
                             typer.echo(f"\n  ✓ [{msg['participant_id']}] {msg['intent']!r}")
-                            for line in beat_detail_lines(msg, seen_day):
+                            for line in beat_detail_lines(msg, seen_day, mine=ours):
                                 typer.echo(line)
                             seen_day = msg.get("world_day", seen_day)
                             typer.echo("")
@@ -1733,7 +1745,7 @@ def campaign_new(
                 adopt_actor_id=adopt,
                 new_pc_name=pc,
                 pc_sheet=pc_sheet,
-                starting_items=list(STARTING_GEAR) if pc is not None else None,
+                starting_items=await starting_gear(store, b.branch_id) if pc is not None else None,
                 ruleset_id=ruleset_id,
                 ruleset_version=pin.version,
                 seed=seed,
@@ -1872,7 +1884,9 @@ def campaign_join(
                 adopt_actor_id=adopt,
                 new_pc_name=pc,
                 pc_sheet=pc_sheet,
-                starting_items=list(STARTING_GEAR) if pc is not None else None,
+                starting_items=(
+                    await starting_gear(store, campaign.branch_id) if pc is not None else None
+                ),
                 ruleset_id=campaign.ruleset_id,
             )
         finally:

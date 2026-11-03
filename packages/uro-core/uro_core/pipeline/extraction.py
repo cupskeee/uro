@@ -170,24 +170,33 @@ def _is_common_noun(name: str) -> bool:
     """A description, not a name (D-51): all-lowercase once a leading article is stripped —
     "the guard", "tallest hooded stranger", "the tavern". A capitalized title ("the Duke") reads as
     a name, and a script without letter case can't be judged, so both pass (`islower` needs a cased
-    letter). Never minted as an actor (D-51), a place or a faction (live run, 2026-10-31).
+    letter). Never minted as an actor (D-51), a place or a faction (live run, 2026-10-31)."""
+    return re.sub(r"^(the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE).islower()
 
-    A capitalized job title or description is one too (D-97): sentence case with no joining word
-    — "Operations supervisor", "Marsh brute". Modern and corporate settings capitalize titles, so
-    the lowercase test alone let a role through (the Halcyon Deep run). A name capitalizes its
-    other words ("Teo Varga", "River raider Kolb") or joins them ("Ilka of Gullwater", "Sable the
-    wizard"), and a possessive names one person ("Mira's mother", D-58); across every world played
-    on the instance this split the extractor's 41 minted names from its one minted title."""
+
+def _is_role_phrase(name: str) -> bool:
+    """A capitalized job title or description, as a PERSON's name (D-97): sentence case with no
+    joining word and no possessive — "Operations supervisor", "Marsh brute". Modern and corporate
+    settings capitalize titles, so the lowercase test alone let a role through as a person (the
+    Halcyon Deep run). A name capitalizes its other words ("Teo Varga", "River raider Kolb"), joins
+    them ("Ilka of Gullwater", "Sable the wizard"), or is a possessive that names one person
+    ("Mira's mother", D-58); across every world played on the instance this split the extractor's
+    41 minted names from its one minted title. People only: many languages write a PLACE's or a
+    group's name in sentence case ("Красная площадь"), so places and factions keep the lowercase
+    test. Like it, this reads letter case, so a script without case passes."""
     bare = re.sub(r"^(the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE)
-    if bare.islower():
-        return True
     words = bare.split()
     return (
         len(words) > 1
         and not any(w.lower() in _NAME_JOINERS for w in words)
-        and not _POSSESSIVE.search(bare)  # "Mira's mother" is one person, kept apart (D-58)
+        and not _POSSESSIVE.search(bare)
         and all(w.islower() for w in words[1:])
     )
+
+
+def _not_a_person(name: str) -> bool:
+    """Never mint (or partly link) a person from this: a description, or a capitalized role."""
+    return _is_common_noun(name) or _is_role_phrase(name)
 
 
 # What a model writes for a field it has nothing for — never a name, a place, or a role. Live, a
@@ -684,7 +693,7 @@ async def run_gauntlet(
         # same-name actor of a different house is distinct — D-50 — not a partial match).
         partial = (
             None
-            if key in actors_by_key or _is_common_noun(name) or _POSSESSIVE.search(name)
+            if key in actors_by_key or _not_a_person(name) or _POSSESSIVE.search(name)
             else _partial_match(_name_parts(name), actor_words)
         )
         if partial is not None:
@@ -703,7 +712,7 @@ async def run_gauntlet(
         # every later guard merges into, collecting their affiliations. Linking above is unaffected,
         # so an existing actor known by that alias still resolves; facts about the figure still
         # record as claims (subject = a name token), but an unnamed speaker gets no belief.
-        if _is_common_noun(name):
+        if _not_a_person(name):
             return None
         aid = f"a:{new_id()}"
         events.append(actor_created(actor_id=aid, name=name.strip(), tier=1, role=role.strip()))
@@ -724,7 +733,7 @@ async def run_gauntlet(
         ids = actors_by_key.get(key)
         if ids:
             return ids[0]
-        if _is_common_noun(name) or _POSSESSIVE.search(name):  # "Mira's mother" is not Mira (D-58)
+        if _not_a_person(name) or _POSSESSIVE.search(name):  # "Mira's mother" is not Mira (D-58)
             return None
         return _partial_match(_name_parts(name), actor_words)
 

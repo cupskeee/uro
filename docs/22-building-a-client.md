@@ -47,7 +47,7 @@ over a hundred test worlds). Make one for the client, so your worlds stay yours:
 docker compose exec postgres psql -U uro -c "create database uro_loom"
 export URO_DATABASE_URL=postgresql://uro:uro@localhost:5433/uro_loom   # every uro command below reads this
 uv run uro db migrate                       # creates the tables (and the vector extension)
-uv run uro world create worlds/ashfall      # import a starter world (also: brinehold, emberfell, thornwood)
+uv run uro world create worlds/ashfall      # import a starter world (also: brinehold, emberfell, thornwood, and halcyon: a 2091 deep-sea station)
 ```
 
 A fresh database has **no model configured**, so the server narrates with the built-in **stub**:
@@ -111,7 +111,7 @@ You get, in order (every frame that settles your intent echoes your `id` as `int
 | `beat_started` | the turn began | show "the world answers…" |
 | `narration_chunk` × N | `text` pieces of the narration, as the model writes them | stream them into the transcript |
 | `beat_narrated` | the story is fully told; the world is now being updated | re-enable input here, don't wait |
-| `beat_committed` | saved: `narration`, `commit_id`, and what the beat did: `checks` (dice/moves, the ruleset's words), `suggestions`, `mode` (`encounter` = a fight was resolved), `world_day`, `created` (new people, places, factions, plots) | show the check results and what's new; update the day badge |
+| `beat_committed` | saved: `narration`, `commit_id`, and what the beat did: `checks` (`{actor_id, affordance, outcome}`, the ruleset's grade), `suggestions` (for the acting `participant_id`), `mode` (`encounter` = a fight was resolved), `world_day`, `created` (new people, places, factions, plots) | show the outcomes and what's new; update the day badge; offer suggestions only to the player who acted |
 | `beat_failed` | `error` (generic) | show a retry; nothing was saved |
 
 Also broadcast: `participant_joined`/`participant_left`, and for parties `not_your_turn`,
@@ -126,7 +126,7 @@ Also broadcast: `participant_joined`/`participant_left`, and for parties `not_yo
 | "what if" fork from any point | `POST /worlds/{w}/branches` `{from_ref, name, time_skip_days?}`, then a campaign on it (`"branch": "<name>"`) |
 | skip ahead | `POST /campaigns/{c}/time-skip` `{days, downtime}` (`downtime: false` = time passes in play, nothing rests) |
 | preview a turn without saving | `POST /campaigns/{c}/dry-run` `{intent}` |
-| delete a playthrough (privacy) | `DELETE /campaigns/{c}` removes it and its branch for good; `DELETE /worlds/{w}` removes a whole world. A campaign on the world's `main` branch can't be removed alone, so start each separate playthrough on its own branch: `POST /worlds/{w}/branches` `{from_ref, name}`, then `POST /worlds/{w}/campaigns` with `"branch": name` |
+| delete a playthrough (privacy) | `DELETE /campaigns/{c}` removes it and its branch for good; `DELETE /worlds/{w}` removes a whole world. A campaign on the world's `main` branch can't be removed alone, so start each separate playthrough on its own branch: `POST /worlds/{w}/branches` `{from_ref, name}`, then `POST /worlds/{w}/campaigns` with `"branch": name`. A campaign removal keeps history another branch shares (a fork made from it) and the player's codex notes for the world; only a world removal takes those |
 | plots gone quiet (a journal's "loose ends") | `GET /campaigns/{c}/pacing`: each live thread's beats since it came up; a world that opts in (`[pacing]`) also has the engine nudge the quietest back into the story (D-95, D-96) |
 | world history / timeline | `GET /worlds/{w}/branches`, `GET /worlds/{w}/log` |
 | import a world pack | `POST /worlds/create` (multipart field `pack`: a `.zip` of the pack folder); check it first with `POST /worlds/validate` |

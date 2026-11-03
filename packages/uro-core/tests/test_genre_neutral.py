@@ -2,6 +2,7 @@
 person of standing, not a role word; History seeding speaks the pack's own words, and a pack that
 brings none can't be seeded. Halcyon Deep (a 2091 deep-sea station) is the non-fantasy check."""
 
+import json
 import shutil
 from pathlib import Path
 
@@ -74,3 +75,52 @@ def test_a_pack_without_a_vocabulary_cannot_be_seeded(tmp_path: Path) -> None:
 def test_halcyon_is_runnable() -> None:
     report = check_sufficiency(parse_pack(WORLDS / "halcyon"))
     assert report.grade == "runnable", report.gaps
+
+
+def test_ashfalls_seeded_history_is_unchanged() -> None:
+    # recorded from the seeder before D-97 moved its words into the pack: byte-identical
+    golden = json.loads(
+        (Path(__file__).parent / "fixtures" / "ashfall_seed42_pre_d97.json").read_text()
+    )
+    now = [
+        {"type": e.event_type, "payload": e.payload, "cause": e.caused_by.model_dump()}
+        for e in seed_history(parse_pack(WORLDS / "ashfall").manifest, Rng(42))
+    ]
+    assert json.loads(json.dumps(now, sort_keys=True)) == golden
+
+
+def test_a_vocabulary_is_checked_and_speaks_the_packs_language(tmp_path: Path) -> None:
+    pack = _copy("halcyon", tmp_path)
+    toml = pack / "world.toml"
+    text = toml.read_text()
+    toml.write_text(text.replace('group_name = "{name} Holdings"', 'group_name = "Holdings"'))
+    with pytest.raises(PackError, match="must contain"):
+        parse_pack(pack)
+    toml.write_text(text.replace('"Kuroshio", ', '"", '))
+    with pytest.raises(PackError, match="blank"):
+        parse_pack(pack)
+    spanish = text.replace(
+        'group_name = "{name} Holdings"',
+        'group_name = "{name} Holdings"\nera_name = "la época de {era}"\n'
+        'era_claim = "{era_name} quedó marcada por {calamity}."',
+    )
+    toml.write_text(spanish)
+    events = seed_history(parse_pack(pack).manifest, Rng(42))
+    claim = next(e.payload["statement"] for e in events if e.event_type == "ClaimRecorded")
+    assert claim.startswith("La época de the first deep stations quedó marcada por ")
+
+
+def test_simulated_years_need_a_vocabulary_to_count_as_a_past(tmp_path: Path) -> None:
+    pack = _copy("halcyon", tmp_path)
+    (pack / "lore" / "overview.md").write_text("A station.")  # too little lore to count
+    history = next(d for d in check_sufficiency(parse_pack(pack)).dimensions if d.name == "history")
+    assert history.ok  # simulate_years + a vocabulary: a past can be seeded
+    toml = pack / "world.toml"
+    toml.write_text(toml.read_text().split("[history.vocabulary]")[0])
+    history = next(d for d in check_sufficiency(parse_pack(pack)).dimensions if d.name == "history")
+    assert not history.ok and "vocabulary" in history.detail
+
+
+def test_starting_gear_is_the_worlds() -> None:
+    assert parse_pack(WORLDS / "halcyon").manifest.starting_gear == ["a station access card"]
+    assert parse_pack(WORLDS / "ashfall").manifest.starting_gear == ["a traveler's knife"]

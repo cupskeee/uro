@@ -161,3 +161,87 @@ async def test_a_campaign_is_removed_with_its_own_branch_only(store: PostgresEve
     assert await store.get_campaign(on_main.campaign_id) is not None  # main's campaign stays
     with pytest.raises(KeyError):
         await delete_campaign(store, alone.campaign_id)
+
+
+# --- review fixes (D-97..D-99 phase-end review) ---
+
+
+async def test_a_beat_committing_during_a_world_removal_leaves_nothing(
+    store: PostgresEventStore,
+) -> None:
+    import asyncio
+
+    world = await store.create_world(f"racing-{new_id()}")
+    branch = world.main_branch_id
+    async with store.pool.acquire() as conn:
+        tx = conn.transaction()
+        await tx.start()
+        # a beat mid-append: it holds its branch row, and its projection rows are not yet visible
+        await store._append(conn, branch, [actor_created(actor_id="a:secret", name="Secret")])
+        removal = asyncio.create_task(store.delete_world(world.world_id))
+        await asyncio.sleep(0.3)
+        assert not removal.done()  # the removal waits for the beat…
+        await tx.commit()
+    await removal  # …then removes it too
+    async with store.pool.acquire() as conn:
+        left = await conn.fetchval("SELECT count(*) FROM proj_actors WHERE branch_id = $1", branch)
+    assert left == 0 and await store.get_world(world.world_id) is None
+
+
+async def test_late_writes_for_a_removed_branch_are_dropped(store: PostgresEventStore) -> None:
+    world = await store.create_world(f"late-{new_id()}")
+    head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+    fork = await store.fork_branch(world.world_id, head, "gone")  # type: ignore[arg-type]
+    commit = await _beat(store, fork.branch_id, "said on the fork")
+    await store.delete_branch(fork.branch_id)
+    # the beat's memory and a call's response, arriving after the removal, are not kept
+    await store.add_memory(
+        branch_id=fork.branch_id,
+        commit_id=commit,
+        kind="beat",
+        text="late narration",
+        vector=hashing_embedding("late narration"),
+        entity_refs=[],
+    )
+    await store.record_llm_call(
+        LLMCall(stage_tag="extractor", prompt_hash="h", latency_ms=1, branch_id=fork.branch_id)
+    )
+    async with store.pool.acquire() as conn:
+        mem = await conn.fetchval(
+            "SELECT count(*) FROM memory_index WHERE branch_id = $1", fork.branch_id
+        )
+        calls = await conn.fetchval(
+            "SELECT count(*) FROM llm_calls WHERE branch_id = $1", fork.branch_id
+        )
+    assert mem == 0 and calls == 0
+    await store.record_llm_call(
+        LLMCall(stage_tag="probe", prompt_hash="h", latency_ms=1)
+    )  # no branch: kept
+
+
+async def test_a_branch_removal_keeps_markers_and_snapshots_it_shares(
+    store: PostgresEventStore,
+) -> None:
+    world = await store.create_world(f"marks-{new_id()}")
+    main = world.main_branch_id
+    await _beat(store, main, "the shared past")
+    shared = await store.create_marker(world.world_id, "before", main)
+    fork = await store.fork_branch(world.world_id, shared.commit_id, "side")
+    await _beat(store, fork.branch_id, "only on the side")
+    own = await store.create_marker(world.world_id, "side-end", fork.branch_id)
+    await store.delete_branch(fork.branch_id)
+    async with store.pool.acquire() as conn:
+        marks = {
+            r["name"]
+            for r in await conn.fetch(
+                "SELECT name FROM markers WHERE world_id = $1", world.world_id
+            )
+        }
+        snaps = {
+            r["commit_id"]
+            for r in await conn.fetch(
+                "SELECT commit_id FROM snapshots WHERE commit_id = ANY($1::text[])",
+                [shared.commit_id, own.commit_id],
+            )
+        }
+    assert marks == {"before"} and snaps == {shared.commit_id}

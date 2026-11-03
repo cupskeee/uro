@@ -29,6 +29,7 @@ ashfall/
 [world]
 name = "Ashfall"
 tone = ["grim", "low-magic", "political"]
+starting_gear = ["a traveler's knife"]   # D-97: what a fresh PC carries here; none if omitted
 
 [content]                    # per-world, NOT per-user (owner decision)
 rating   = "mature"          # intensity CEILING: none | mild | mature | explicit
@@ -86,6 +87,8 @@ titles = ["King", "Duke"]    # optional: a leader is "<title> <leader>", or just
 leaders = ["Aldric", "Mira"]
 leader_role = "ruler"
 calamities = ["a great plague", "a border war"]   # what marked the era
+# optional, in the pack's language (the English defaults): era_name = "the age of {era}",
+# era_unnamed = "its past", era_claim = "{era_name} was marked by {calamity}."
 
 [llm.roles]                  # SUGGESTIONS; deployment config overrides
 narrator = "anthropic:claude-sonnet-5"

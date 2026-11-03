@@ -3,6 +3,7 @@
 [world]
 name = "Ashfall"
 tone = ["grim", "low-magic", "political"]
+starting_gear = ["a traveler's knife"]       # what a fresh PC carries here (D-97)
 
 [content]
 rating = "mature"

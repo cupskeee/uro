@@ -5,6 +5,7 @@
 [world]
 name = "Halcyon Deep"
 tone = ["claustrophobic", "near-future", "corporate", "procedural"]
+starting_gear = ["a station access card"]       # what a fresh PC carries here (D-97)
 
 [content]
 rating = "mature"
