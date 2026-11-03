@@ -28,7 +28,7 @@ from uro_core.worldpack.models import (
     WorldManifest,
     WorldPack,
 )
-from uro_core.worldpack.rules import RulePack
+from uro_core.worldpack.rules import RulePack, duplicate_ids
 
 
 def parse_pack(root: str | Path) -> WorldPack:
@@ -92,9 +92,13 @@ def _rule_pack(root: Path) -> RulePack | None:
     try:
         # RulePack's model validator enforces the supported-version set (v1..v3; v3 adds multi-ref
         # scopes, D-40) + the closed grammar — one authority for parse, runtime, and import.
-        return RulePack(**data)  # type: ignore[arg-type]
+        pack = RulePack(**data)  # type: ignore[arg-type]
     except ValidationError as exc:
         raise PackError(f"rule pack failed validation: {exc}") from exc
+    dupes = duplicate_ids(pack)
+    if dupes:  # their consequences would share ids and overwrite each other (D-80 review)
+        raise PackError(f"rule and agenda ids must be unique; used twice: {', '.join(dupes)}")
+    return pack
 
 
 def _manifest(path: Path) -> WorldManifest:

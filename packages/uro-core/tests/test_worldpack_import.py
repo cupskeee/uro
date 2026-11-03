@@ -198,13 +198,32 @@ async def test_a_pack_relying_on_play_for_its_people_needs_play_to_make_them(
     toml.write_text(
         toml.read_text().replace("[world]\n", "[world]\ngenerate_population = true\n", 1)
     )
+    (pack / "entities" / "threads.yaml").unlink()  # no conflict seed either: a backfill would bill
+    factions = pack / "entities" / "factions.yaml"
+    factions.write_text(
+        "\n".join(line for line in factions.read_text().split("\n") if "at_war_with" not in line)
+    )
     parsed = parse_pack(pack)
     assert len(parsed.actors) < 3 and parsed.manifest.generate_population
+    assert not parsed.threads and not any(f.at_war_with for f in parsed.factions)
     before = await store.get_extraction_policy()
     try:
         await store.set_extraction_policy(before.model_copy(update={"extract_actors": False}))
         with pytest.raises(PackError, match="keeps play from creating actors"):
             await import_pack(store, parsed)
+        # ...and refused before paying for a backfill, which fills only the conflict dimension
+        calls: list[str] = []
+
+        class Bills:
+            async def complete(self, req: CompletionRequest) -> str:
+                calls.append(req.stage_tag)
+                return '{"stakes": "x"}'
+
+        with pytest.raises(PackError, match="keeps play from creating actors"):
+            await import_pack(
+                store, parsed, backfill_router=ProviderRouter(bindings={}, default=Bills())
+            )
+        assert calls == []
         await store.set_extraction_policy(before.model_copy(update={"extract_actors": True}))
         assert (await import_pack(store, parsed)).grade != "insufficient"
     finally:

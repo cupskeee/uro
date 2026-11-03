@@ -268,9 +268,12 @@ class PostgresEventStore:
             # Validate the Reaction-Layer pack LOUDLY at creation (gap-report Hollowloop G-6): a bad
             # pack must not persist and then die silently at the first beat (react()/agenda_tick
             # swallow load errors as a warning, disabling the whole pack). Fail here instead.
-            from uro_core.worldpack.rules import RulePack
+            from uro_core.worldpack.rules import RulePack, duplicate_ids
 
-            RulePack(**rule_pack)  # raises on a bad version / unknown trigger / malformed action
+            # raises on a bad version / unknown trigger / malformed action
+            dupes = duplicate_ids(RulePack(**rule_pack))
+            if dupes:  # one would overwrite the other's consequences (D-80 review)
+                raise ValueError(f"rule and agenda ids must be unique; used twice: {dupes}")
         if ruleset_id or ruleset_config:
             # Same rule for the ruleset (D-62): an unknown id or a bad `[ruleset.config]` fails
             # here, not at the first campaign or beat.

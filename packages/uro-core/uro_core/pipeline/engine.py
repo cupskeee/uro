@@ -800,7 +800,7 @@ class Engine:
         campaign: Campaign,
         days: int,
         *,
-        reason: str = "play",
+        reason: str = "game",
         evidence: str = "",
         caused_by: CausedBy | None = None,
         based_on_day: int | None = None,
@@ -810,8 +810,10 @@ class Engine:
         cross fire — what an intent that passes days does (D-77), for a game that decides time
         itself (a button, a turn that is an hour, its own calendar). Not a time-skip: no downtime,
         no adaptation header (use `agenda_tick` for that). With `based_on_day`, nothing commits
-        unless the branch is still on that day (compare-and-set) and None is returned. The cause
-        defaults to `system` (a host's own write); pass a `player_action` cause for a player's.
+        unless the branch is still on that day (compare-and-set) and None is returned. The reason
+        defaults to `game` (an intent's days are `play`, a skip `time-skip`), so a rule can tell
+        them apart; the cause defaults to `system` (a host's own write) — pass a `player_action`
+        cause for a player's.
         Unlike the intent cue, no cap: the caller is the game, in process."""
         if days <= 0:
             raise ValueError("days must be positive")
@@ -893,9 +895,9 @@ class Engine:
         """Time passed in play (D-77): after the beat and its reactions commit, move the clock by
         the days the intent passed, as its own TimeAdvanced commit caused by the player — only if
         the branch is still on the day the beat began (a concurrent skip or advance wins, and this
-        commits nothing) — then fire the agendas the new day crossed. No downtime: a night in play
-        isn't a ruleset's rest (that stays with explicit skips, D-63/D-76). Never raises: the beat
-        is already durable."""
+        commits nothing) — then the world's rules and agendas run on it (`_time_passed`). No
+        downtime: a night in play isn't a ruleset's rest (that stays with explicit skips,
+        D-63/D-76). Never raises: the beat is already durable."""
         try:
             days = await self._days_passed(campaign, participant_id, ctx, encounter_events)
             if not days:
@@ -1270,8 +1272,9 @@ class Engine:
         """What the extractor is shown as KNOWN (D-82): recall over the intent AND this beat's
         narration. The beat's recall was built from the intent before the prose existed, so when a
         narration brought back someone the intent hadn't named (a callback, mostly), none of their
-        facts were KNOWN and the extractor recorded them again in new words — 14 of 60 callback
-        narrations in a replay, 2 with this. Falls back to the beat's recall if the read fails."""
+        facts were KNOWN and the extractor recorded them again in new words — 14 restatements over
+        60 callback narrations in a replay, 2 with this. Falls back to the beat's recall if the
+        read fails."""
         try:
             return await assemble_recall(
                 self._store, branch_id, f"{intent_text}\n{narration}", self._recency

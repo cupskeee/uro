@@ -283,6 +283,12 @@ def _time_pack() -> dict[str, Any]:
                 "then": [{**count, "key": "skipped"}],
                 "scope": {"world": True},
             },
+            {
+                "id": "the-game-moved-it",
+                "trigger": {"event": "TimeAdvanced", "where": {"reason": "game"}},
+                "then": [{**count, "key": "game"}],
+                "scope": {"world": True},
+            },
         ],
         "agendas": [
             {
@@ -315,20 +321,24 @@ async def test_a_game_passes_time_and_the_world_reacts_on_every_path(
     commit = await engine.pass_time(campaign, 5, evidence="the caravan crosses the salt flats")
     assert commit is not None and await _day(store, campaign) == 5
     (advanced,) = (await store.commit_detail(campaign.world_id, commit.commit_id)).events  # type: ignore[union-attr]
-    assert advanced.payload["reason"] == "play" and advanced.caused_by["kind"] == "system"
-    assert await _count(store, campaign, "played") == 1  # the rule on TimeAdvanced fired
+    assert advanced.payload["reason"] == "game" and advanced.caused_by["kind"] == "system"
+    assert await _count(store, campaign, "game") == 1  # the rule on TimeAdvanced fired
+    assert await _count(store, campaign, "played") == 0  # ...and only the one for its reason
     assert await _count(store, campaign, "weeks") == 0  # day 7 not crossed yet
 
-    # an intent's days (D-77) take the same path: the rule fires, the agenda crosses day 7
+    # an intent's days (D-77) take the same path, as `play`: the agenda crosses day 7
     await engine.run_beat(campaign, "p1", "I rest at the inn for two days.")
     assert await _day(store, campaign) == 7
-    assert await _count(store, campaign, "played") == 2
+    assert await _count(store, campaign, "played") == 1
     assert await _count(store, campaign, "weeks") == 1
 
-    # and so does a time-skip, which the rules can tell apart by its reason
+    # and so does a time-skip, which the rules tell apart by its reason
     await engine.agenda_tick(campaign.branch_id, 3)
     assert await _count(store, campaign, "skipped") == 1
-    assert await _count(store, campaign, "played") == 2
+    assert (await _count(store, campaign, "played"), await _count(store, campaign, "game")) == (
+        1,
+        1,
+    )
 
     # compare-and-set: a stale day commits nothing; no days is an error
     assert await engine.pass_time(campaign, 1, based_on_day=0) is None
@@ -351,7 +361,7 @@ async def test_a_world_can_keep_intents_off_its_clock(store: PostgresEventStore)
     previewed = await engine.preview_beat(campaign, "p1", "I rest for two days.")
     assert "TimeAdvanced" not in {e.event_type for e in previewed}
     await engine.pass_time(campaign, 1)  # ...and moves it itself
-    assert await _day(store, campaign) == 1 and await _count(store, campaign, "played") == 1
+    assert await _day(store, campaign) == 1 and await _count(store, campaign, "game") == 1
 
 
 def test_a_pack_declares_its_clock(tmp_path: Path) -> None:
@@ -382,3 +392,20 @@ async def test_a_packs_clock_setting_reaches_the_world(
     # and it travels with the world
     imported = await store.import_world(await store.export_world(world.world_id))
     assert await store.world_clock(imported.main_branch_id) == {"from_intent": False}
+
+
+async def test_a_rule_and_an_agenda_cannot_share_an_id(
+    store: PostgresEventStore, tmp_path: Path
+) -> None:
+    # D-80 review: a TimeAdvanced rule and an agenda run on the same clock commit, and their
+    # consequences are keyed by the commit and the id — one would silently overwrite the other.
+    pack = _time_pack()
+    pack["agendas"][0]["id"] = "skips"  # the id of a rule
+    with pytest.raises(ValueError, match="skips"):
+        await store.create_world(f"dupe-{new_id()}", rule_pack=pack)
+    authored = tmp_path / "ashfall"
+    shutil.copytree(WORLDS / "ashfall", authored)
+    agendas = authored / "agendas.yaml"
+    agendas.write_text(agendas.read_text().replace("id: the-wagons-stop", "id: the-feud-simmers"))
+    with pytest.raises(PackError, match="the-feud-simmers"):
+        parse_pack(authored)

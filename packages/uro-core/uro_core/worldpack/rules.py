@@ -673,3 +673,18 @@ ExprOp.model_rebuild()
 CondAll.model_rebuild()
 CondAny.model_rebuild()
 CondNot.model_rebuild()
+
+
+def duplicate_ids(pack: RulePack) -> list[str]:
+    """Ids used by more than one rule or agenda. Their consequences share ids (a rumor's claim id is
+    keyed by the commit and the rule's id), so on one commit one would silently overwrite the
+    other — since D-80 a rule on TimeAdvanced and an agenda run on the same clock commit. Checked
+    where a pack is loaded or a world created (bad input, loud), not by the model: a stored pack
+    must still load."""
+    seen: set[str] = set()
+    dupes: list[str] = []
+    for item_id in [*(r.id for r in pack.rules), *(a.id for a in pack.agendas)]:
+        if item_id in seen and item_id not in dupes:
+            dupes.append(item_id)
+        seen.add(item_id)
+    return dupes

@@ -1593,7 +1593,7 @@ def campaign_time_skip(
             if downtime:
                 await engine.agenda_tick(c.branch_id, days)
             else:
-                await engine.pass_time(c, days)
+                await engine.pass_time(c, days, reason="operator")
             day = await store.current_world_time(c.branch_id)
         finally:
             await store.close()

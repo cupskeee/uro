@@ -427,7 +427,7 @@ def engine_deps(
             # the campaign's own ruleset and settings
             await playing.agenda_tick(campaign.branch_id, days)
         else:  # time passes in play (D-80): the world's rules and agendas, no rest, no header
-            await playing.pass_time(campaign, days)
+            await playing.pass_time(campaign, days, reason="operator")
         world_day = await store.current_world_time(campaign.branch_id)
         return {"branch_id": campaign.branch_id, "world_day": world_day}
 
@@ -1463,12 +1463,16 @@ def create_app(
                 parsed = parse_pack(root)
             except PackError as exc:  # a malformed pack is bad INPUT → 400
                 raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
-            before = check_sufficiency(parsed)
+            # graded as /worlds/validate and /worlds/create grade it (generate_population, D-81)
+            makes_people = (
+                (await deps.store.get_extraction_policy()).extract_actors if deps.store else True
+            )
+            before = check_sufficiency(parsed, play_creates_actors=makes_people)
             try:
                 augmented, added = await deps.backfill(parsed)
             except ProviderError as exc:  # a live-model failure is upstream, not bad input → 502
                 raise HTTPException(status_code=502, detail=f"provider error: {exc}") from exc
-            after = check_sufficiency(augmented)
+            after = check_sufficiency(augmented, play_creates_actors=makes_people)
             seeds = [t.model_dump() for t in augmented.threads if t.provenance == "ai_backfill"]
             return {
                 "name": parsed.manifest.name,

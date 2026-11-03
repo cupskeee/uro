@@ -60,7 +60,9 @@ async def import_pack(
     makes_people = (await store.get_extraction_policy()).extract_actors
     report = check_sufficiency(pack, play_creates_actors=makes_people)
     added: list[str] = []
-    if backfill_router is not None and report.grade != "runnable":
+    # Backfill fills only the conflict dimension, which isn't structural: an insufficient pack
+    # stays insufficient, so refuse it before paying for a backfill call (D-81 review).
+    if backfill_router is not None and report.grade == "thin":
         pack, added = await backfill_gaps(pack, backfill_router, report=report)
         report = check_sufficiency(pack, play_creates_actors=makes_people)
     if report.grade == "insufficient":
