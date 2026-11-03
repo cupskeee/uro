@@ -9,8 +9,10 @@ one line beside the intent, which leaves the player's action first. Naming a thr
 touching it, so a thread the scene had no room for waits another `quiet_after` beats.
 
 A pure function of the branch's recorded beats and threads: a fork, a replay or a dry run of the
-same beat names the same thread. Which plots matter and how hard to push is the game's (`[pacing]`
-in its world pack); the engine only says which plots went quiet (D-80's split, applied to plots).
+same beat names the same thread. The engine always records and reports which plots went quiet (the
+signal: `BeatResolved.threads`, `pacing_report`); naming one to the narrator is a narrative policy,
+so it is OFF unless the game turns it on (`[pacing] quiet_after` in its world pack, or
+`Engine(pacing=)`), and its wording is the world's prompt-pack template `pacing.j2` (D-96).
 """
 
 from __future__ import annotations
@@ -20,12 +22,15 @@ import logging
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from uro_core.domain.events import BeatResolvedPayload
+from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.ports.projections import EngineStore
 from uro_core.timeline.models import ThreadView
 
 logger = logging.getLogger(__name__)
 
-QUIET_AFTER = 25  # beats a live thread may go without coming up before it is named
+# The measured setting (D-95: the A/B's quiet plots had been quiet 25+ beats) — what a game sets to
+# opt in. The default is off (D-96): naming plots steers the story, which is the game's call.
+SUGGESTED_QUIET_AFTER = 25
 EVERY = 10  # at most one named thread in this many beats
 LIVE = ("active", "offered")  # the threads the narrator is shown (dormant ones wait for a rule)
 
@@ -34,14 +39,15 @@ class PacingSettings(BaseModel):
     """`[pacing]` (D-95): when the engine names a quiet plot to the narrator."""
 
     model_config = ConfigDict(extra="forbid")  # a misspelt setting is an error, not a no-op
-    quiet_after: int = Field(default=QUIET_AFTER, ge=0, le=200)  # 0 = never name one
+    quiet_after: int = Field(default=0, ge=0, le=200)  # 0 = never name one (the default, D-96)
     every: int = Field(default=EVERY, ge=1, le=200)
 
     @property
     def window(self) -> int:
         """How many of the branch's last beats the director reads: enough to rank threads quiet
-        past `quiet_after`, and to see the last `every` beats."""
-        return max(2 * self.quiet_after, self.every)
+        past `quiet_after` and to see the last `every` beats. Off, the report still reads as many
+        as the suggested setting would (the signal is the game's whether or not it opts in)."""
+        return max(2 * (self.quiet_after or SUGGESTED_QUIET_AFTER), self.every)
 
 
 class ThreadPacing(BaseModel):
@@ -67,13 +73,11 @@ class PacingReport(BaseModel):
     next_paced: str = ""
 
 
-def pacing_line(stakes: str) -> str:
-    """The narrator's line for a named thread. The wording passed the D-95 A/B; keep it as is."""
-    return (
-        f"A PLOT TO KEEP ALIVE: {stakes.rstrip('.')}. If it can fit the player's action, let this "
-        "scene touch it: a reminder, a person, a clue or a consequence tied to it. Never at the "
-        "cost of the player's action, and don't resolve it unless the action does."
-    )
+def pacing_line(stakes: str, env: PromptEnv | None = None) -> str:
+    """The narrator's line for a named thread: the world's `pacing.j2` (a prompt pack may reword
+    or translate it, D-96), rendered with `stakes` (its trailing period dropped). The default
+    template is the wording that passed the D-95 A/B."""
+    return (env or DEFAULT_ENV).render("pacing.j2", stakes=stakes.rstrip("."))
 
 
 def settings_from(raw: dict[str, object]) -> PacingSettings:

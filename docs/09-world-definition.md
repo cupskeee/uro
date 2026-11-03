@@ -16,8 +16,9 @@ ashfall/
 │   └── actors.yaml         #   wants to pin down explicitly
 ├── prompts/                # prompt template pack (optional, overrides defaults BY FILENAME —
 │   ├── narrator.system.j2  #   the file's name must match the engine's default template name
-│   ├── planner.system.j2   #   exactly (uro_core/prompts/*.system.j2), else it is not applied)
-│   └── extractor.system.j2
+│   ├── planner.system.j2   #   exactly (uro_core/prompts/*.j2), else it is not applied)
+│   ├── extractor.system.j2
+│   └── pacing.j2           #   the pacing director's line (D-96), rendered with `stakes`
 └── assets/                 # opaque blobs for platforms (maps, portraits) — engine
                             #   stores/serves refs, never interprets them
 ```
@@ -53,9 +54,11 @@ from_intent = true           # an intent that passes whole days moves it (D-77);
                              # moves it itself (Engine.pass_time, or the REST/CLI time-skip with
                              # downtime off). The day stays world state either way.
 
-[pacing]                     # D-95: when the engine names a quiet plot to the narrator
-quiet_after = 25             # a live thread untouched this many beats can be named; 0 = never
-every = 10                   # at most one named thread in this many beats (the defaults shown)
+[pacing]                     # D-95/D-96: OFF by default. The engine always records which plots
+quiet_after = 25             #   came up (and reports quiet ones, `/pacing`); setting quiet_after
+every = 10                   #   opts in: a live thread untouched that many beats is named to the
+                             #   narrator, at most once every `every` beats (default 10). The
+                             #   line is the pack's prompts/pacing.j2. worlds/ashfall opts in.
 
 [ruleset]
 id = "uro-basic"             # resolved via the ruleset registry (06, D-30); "uro-pbta" for the
@@ -113,7 +116,7 @@ first-name/partial matching is deliberately NOT done (false-merge risk, OQ-3).
 
 Owner decision: prompt templates live **at the world level**, distributable with the pack, customizable by any engine user. Mechanism:
 
-- The engine ships **default templates** for every pipeline stage (`uro_core/prompts/narrator.system.j2`, `planner.system.j2`, `extractor.system.j2`).
+- The engine ships **default templates** for every pipeline stage (`uro_core/prompts/narrator.system.j2`, `planner.system.j2`, `extractor.system.j2`), and for the pacing director's line (`pacing.j2`, D-96: injected `stakes`, a thread's stakes without its final period; a world that opts in can reword or translate it).
 - A pack's `prompts/` overrides any subset **by matching that exact filename**; everything else falls through to defaults (`PromptEnv`, `pipeline/prompts.py`). A file whose name doesn't match a default template name is simply never rendered.
 - Templates are Jinja2 (`StrictUndefined` — an override that references a variable the stage doesn't inject fails loudly) with a documented context contract per stage (e.g. the narrator injects `style` = the world's tone). A `TEMPLATE_API_VERSION` constant exists as the intended version-pin anchor, but the manifest carries no version field yet and nothing checks it — **the pin is reserved, not yet enforced.**
 - This is deliberately the *only* creator scripting surface for now — no module/plugin scripting in world packs (deferred, D-6); world-pack authors customize behavior through prompts and seeds, not code.

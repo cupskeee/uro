@@ -115,12 +115,16 @@ def test_settings_are_validated() -> None:
     with pytest.raises(ValidationError):
         PacingSettings(every=0)
     assert PacingSettings(quiet_after=10, every=30).window == 30
+    assert PacingSettings().window == 50  # off: the report still reads the suggested window
 
 
 def test_the_line_names_the_plot_and_leaves_the_action_first() -> None:
-    line = pacing_line("The salt wagons have stopped coming.")
-    assert line.startswith("A PLOT TO KEEP ALIVE: The salt wagons have stopped coming. If it")
-    assert "Never at the cost of the player's action" in line
+    # the default template is the A/B's wording, byte for byte (scripts/pacing_ab.py LINE)
+    assert pacing_line("The salt wagons have stopped coming.") == (
+        "A PLOT TO KEEP ALIVE: The salt wagons have stopped coming. If it can fit the player's "
+        "action, let this scene touch it: a reminder, a person, a clue or a consequence tied to "
+        "it. Never at the cost of the player's action, and don't resolve it unless the action does."
+    )
 
 
 def test_touched_threads_keeps_known_live_ids_and_the_beats_own_threads() -> None:
@@ -231,11 +235,38 @@ async def test_pacing_off_names_nothing_and_bare_has_no_director(
     assert "A PLOT TO KEEP ALIVE" in await _told(engine, campaign)
 
 
-async def test_the_default_waits_25_beats(store: PostgresEventStore) -> None:
-    _, campaign = await _world(store, {})
-    report = await pacing_report(store, campaign.branch_id)
-    assert report.settings == PacingSettings() and report.settings.quiet_after == 25
-    assert report.beats_read == 0 and report.next_paced == ""
+async def test_off_by_default_but_the_signal_is_recorded(store: PostgresEventStore) -> None:
+    # D-96: naming a plot steers the story, so a world opts in; the engine records and reports
+    # which plots came up either way
+    engine, campaign = await _world(store, {})
+    assert (await pacing_report(store, campaign.branch_id)).settings.quiet_after == 0
+    for _ in range(30):
+        await engine.run_beat(campaign, "p1", "I look around.")
+    await engine.run_beat(campaign, "p1", "I ask about the heron [t:heron].")
+    assert "A PLOT TO KEEP ALIVE" not in await _told(engine, campaign)
+    report = await engine.pacing(campaign.branch_id)
+    assert report.next_paced == "" and report.beats_read == 31  # off still reads up to 50 beats
+    quiet = {t.thread_id: t.quiet_beats for t in report.threads}
+    assert quiet["t:heron"] == 0 and quiet["t:wagons"] == report.beats_read
+
+
+async def test_a_world_rewords_the_line_in_its_prompt_pack(store: PostgresEventStore) -> None:
+    world = await store.create_world(
+        f"pacing-reword-{new_id()}",
+        pacing={"quiet_after": 1, "every": 1},
+        prompt_overrides={"pacing.j2": "UN HILO OLVIDADO: {{ stakes }}."},
+        extra_events=[
+            thread_created(thread_id="t:wagons", stakes="The salt wagons stopped.", state="active")
+        ],
+    )
+    campaign = await store.start_campaign(
+        world.world_id, world.main_branch_id, participant_id="p1", new_pc_name="Wren"
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Extracting()))
+    await engine.run_beat(campaign, "p1", "I look around.")
+    told = await _told(engine, campaign)
+    assert "UN HILO OLVIDADO: The salt wagons stopped." in told
+    assert "A PLOT TO KEEP ALIVE" not in told
 
 
 async def test_a_bad_pacing_setting_is_refused_at_creation(store: PostgresEventStore) -> None:
@@ -248,15 +279,21 @@ async def test_a_pack_declares_its_pacing_and_it_travels(
 ) -> None:
     pack = tmp_path / "ashfall"
     shutil.copytree(WORLDS / "ashfall", pack)
-    toml = pack / "world.toml"
-    toml.write_text(toml.read_text() + "\n[pacing]\nquiet_after = 12\nevery = 4\n")
+    toml = pack / "world.toml"  # Ashfall opts in (25/10); this copy sets its own numbers
+    text = toml.read_text()
+    assert "quiet_after = 25" in text and "every = 10" in text
+    toml.write_text(
+        text.replace("quiet_after = 25", "quiet_after = 12").replace("every = 10", "every = 4")
+    )
     parsed = parse_pack(pack)
     assert parsed.manifest.pacing == PacingSettings(quiet_after=12, every=4)
     world = (await import_pack(store, parsed)).world
     assert await store.world_pacing(world.main_branch_id) == {"quiet_after": 12, "every": 4}
-    # a default pack stores no settings, so its genesis is as before D-95
-    plain = (await import_pack(store, parse_pack(WORLDS / "ashfall"))).world
+    # a pack without [pacing] stores no settings (its genesis is as before D-95): off
+    plain = (await import_pack(store, parse_pack(WORLDS / "thornwood"))).world
     assert await store.world_pacing(plain.main_branch_id) == {}
+    ashfall = (await import_pack(store, parse_pack(WORLDS / "ashfall"))).world
+    assert await store.world_pacing(ashfall.main_branch_id) == {"quiet_after": 25}
     # and it travels with the world
     imported = await store.import_world(await store.export_world(world.world_id))
     assert await store.world_pacing(imported.main_branch_id) == {"quiet_after": 12, "every": 4}
@@ -359,7 +396,8 @@ async def test_settings_fall_back_safely(store: PostgresEventStore) -> None:
         async def world_pacing(self, branch_id: str) -> dict[str, object]:
             return {"quiet_after": -3}
 
-    assert await world_settings(_Old(), "b") == PacingSettings()
+    assert await world_settings(_Old(), "b") == PacingSettings()  # the defaults: off
+    assert PacingSettings().quiet_after == 0
     assert (await world_settings(_Bad(), "b")).quiet_after == 0  # invalid → off, not a crash
 
 

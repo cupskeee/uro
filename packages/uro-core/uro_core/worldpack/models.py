@@ -62,8 +62,9 @@ class WorldManifest(BaseModel):
     content: ContentDecl = Field(default_factory=ContentDecl)
     calendar: CalendarDecl = Field(default_factory=CalendarDecl)
     clock: ClockDecl = Field(default_factory=ClockDecl)
-    # `[pacing]` (D-95): when the engine names a quiet plot to the narrator (`quiet_after` beats,
-    # 0 = never; at most once every `every` beats). Unknown keys are refused.
+    # `[pacing]` (D-95, D-96): whether and when the engine names a quiet plot to the narrator —
+    # off unless `quiet_after` (beats) is set; at most once every `every` beats. Unknown keys are
+    # refused. The line's wording is the pack's `prompts/pacing.j2` (else the default).
     pacing: PacingSettings = Field(default_factory=PacingSettings)
     ruleset: RulesetDecl = Field(default_factory=RulesetDecl)
     history: HistoryDecl = Field(default_factory=HistoryDecl)
