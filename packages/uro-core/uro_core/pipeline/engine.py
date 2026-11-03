@@ -114,6 +114,47 @@ class BeatResult(BaseModel):
         default_factory=list
     )  # per-check trace, not just the count (B9)
     suggestions: list[str] = Field(default_factory=list)  # affordance-grounded hints (D-23)
+    # D-98: what a client can show a player beside the narration. The beat's mode ("encounter"
+    # when a fight resolved in it, else "freeroam"); the branch's in-fiction day once the beat and
+    # any day it passed are committed; and the entities the beat itself made — people, places,
+    # factions, plots — by id and name, scene-safe like the `state` sections (no claims: their
+    # truth is operator-only, D-45).
+    mode: str = "freeroam"
+    world_day: int = 0
+    created: list[CreatedEntity] = Field(default_factory=list)
+    # each free-roam check's ruleset-graded outcome, without its trace: a trace is the ruleset's
+    # own text and may carry sheet values (an opponent's AC), which a player isn't shown (D-46)
+    outcomes: list[CheckOutcome] = Field(default_factory=list)
+
+
+class CheckOutcome(BaseModel):
+    actor_id: str
+    affordance: str
+    outcome: str  # the ruleset's grade ("success", "partial", "miss", …), opaque to the engine
+
+
+class CreatedEntity(BaseModel):
+    kind: str  # "actor" | "place" | "faction" | "thread"
+    id: str
+    name: str  # a thread's stakes
+
+
+_CREATED_KINDS = {
+    "ActorCreated": ("actor", "actor_id", "name"),
+    "PlaceCreated": ("place", "place_id", "name"),
+    "FactionCreated": ("faction", "faction_id", "name"),
+    "ThreadCreated": ("thread", "thread_id", "stakes"),
+}
+
+
+def _created(events: list[DomainEvent]) -> list[CreatedEntity]:
+    out = []
+    for e in events:
+        spec = _CREATED_KINDS.get(e.event_type)
+        if spec is not None:
+            kind, id_key, name_key = spec
+            out.append(CreatedEntity(kind=kind, id=e.payload[id_key], name=e.payload[name_key]))
+    return out
 
 
 class _Context(BaseModel):
@@ -385,6 +426,7 @@ class Engine:
         plan: BeatPlan | None = None,
         on_commit: Callable[[str], None] | None = None,
         mark_narrated: bool = False,
+        on_result: Callable[[BeatResult], None] | None = None,
     ) -> AsyncIterator[str]:
         """Stream narration to the caller, then extract + commit once the stream ends.
 
@@ -397,6 +439,9 @@ class Engine:
         With `mark_narrated`, the stream yields `NARRATION_DONE` once the narration is complete and
         before the beat is extracted and committed (D-71): a server can let its player type while
         the extractor works. The beat still commits only when the stream is read to its end.
+
+        `on_result` receives the beat's `BeatResult` once it is committed (D-98): the check
+        results, suggestions, mode, day and new entities a streaming client can show.
         """
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
@@ -411,7 +456,7 @@ class Engine:
             yield NARRATION_DONE
         # a streaming caller learns the commit the MOMENT it's appended — before the post-commit
         # work (memory, reactions), during which a relay could already publish it (D-67 review)
-        await self._finish(
+        result = await self._finish(
             campaign,
             participant_id,
             intent_text,
@@ -420,6 +465,8 @@ class Engine:
             encounter_events,
             on_appended=on_commit,
         )
+        if on_result is not None:
+            on_result(result)
 
     def _narration_role(self, ctx: _Context, encounter_events: list[DomainEvent] | None) -> str:
         """Which model voices this beat. Conversational beats route through the `dialogue` model
@@ -653,7 +700,23 @@ class Engine:
             checks=len(ctx.mechanics_traces),
             check_traces=ctx.mechanics_traces,
             suggestions=ctx.suggestions,
+            mode="encounter" if encounter_events is not None else "freeroam",
+            world_day=await self._day_after(campaign.branch_id, ctx.world_day),
+            created=_created(events),
+            outcomes=[
+                CheckOutcome(actor_id=c.actor_id, affordance=c.affordance, outcome=c.result.outcome)
+                for c in ctx.checks
+            ],
         )
+
+    async def _day_after(self, branch_id: str, fallback: int) -> int:
+        """The branch's day once the beat is committed, for its result (D-98). The beat is durable
+        by now, so a failed read must not turn it into a reported failure: fall back."""
+        try:
+            return await self._store.current_world_time(branch_id)
+        except Exception as exc:
+            logger.warning("couldn't read the day after a committed beat: %s", exc)
+            return fallback
 
     async def react(
         self, campaign: Campaign, trigger_commit_id: str, trigger_events: list[DomainEvent]

@@ -4,6 +4,7 @@
 [world]
 name = "Thornwood"
 tone = ["pastoral", "cozy"]
+starting_gear = ["a walking stick"]       # what a fresh PC carries here (D-97)
 
 [content]
 rating = "mild"
@@ -19,3 +20,11 @@ id = "uro-basic"
 [history]
 seed_era = "the-long-peace"
 simulate_years = 50
+
+[history.vocabulary]     # D-97: the words `uro world seed` builds this world's past from
+groups = ["Hollins", "Brackwell", "Fenmoor", "Applegarth", "Ivybridge", "Tansy"]
+group_name = "the {name} family"
+group_description = "A family rooted here since {era}."
+leaders = ["Old Tam", "Widow Marsh", "Elder Rook", "Cobb", "Hetty", "Wren Ashby"]
+leader_role = "head of the family"
+calamities = ["a hard winter", "a flood on the water meadows", "a blight in the orchards", "a quarrel over the mill"]

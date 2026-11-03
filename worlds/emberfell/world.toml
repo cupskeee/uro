@@ -5,6 +5,7 @@
 [world]
 name = "Emberfell"
 tone = ["gritty", "frontier", "desperate"]
+starting_gear = ["a miner's lamp"]       # what a fresh PC carries here (D-97)
 
 [content]
 rating = "mature"
@@ -21,3 +22,12 @@ version = ">=0"
 [history]
 seed_era = "the-strike-that-emptied"
 simulate_years = 40
+
+[history.vocabulary]     # D-97: the words `uro world seed` builds this world's past from
+groups = ["Cinder", "Ashgrove", "Redline", "Hollow Pike", "Slagwater"]
+group_name = "the {name} Company"
+group_description = "A company that dug in during {era}."
+titles = ["Boss", "Foreman", "Marshal"]
+leaders = ["Hale", "Corra", "Dutch", "Ines", "Kettle", "Moss"]
+leader_role = "boss"
+calamities = ["a mine collapse", "a strike broken with rifles", "a fever in the camps", "a dry season that killed the herds"]

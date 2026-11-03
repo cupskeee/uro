@@ -102,6 +102,12 @@ class Deleted(Out):
     deleted: bool
 
 
+class Removed(Out):
+    """A world, branch or campaign removal (D-99): rows removed, per kind."""
+
+    removed: dict[str, int]
+
+
 class Rotated(Out):
     rotated: bool
 

@@ -401,3 +401,18 @@ def test_campaign_pacing(paced: str) -> None:
     code, out = _uro("campaign", "pacing", paced)
     assert code == 0 and "names a plot quiet 2+ beats, at most once every 1" in out
     assert "3+ beats quiet  [t:wagons] The salt wagons stopped.  ← next" in out
+
+
+def test_world_delete_needs_yes_and_removes(world: SimpleNamespace) -> None:
+    code, out = _uro("world", "delete", world.name)
+    assert code == 1 and "Pass --yes" in out  # nothing removed without the confirmation
+    code, out = _uro("world", "list")
+    assert world.name in out
+    code, out = _uro("campaign", "delete", world.campaign, "--yes")
+    assert code == 1 and "main branch" in out
+    code, out = _uro("branch", "delete", world.name, "what-if", "--yes")
+    assert code == 0 and "1 branches" in out
+    code, out = _uro("world", "delete", world.name, "--yes")
+    assert code == 0 and "1 worlds" in out
+    code, out = _uro("world", "list")
+    assert world.name not in out

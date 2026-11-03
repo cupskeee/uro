@@ -16,7 +16,6 @@ from uro_core.worldpack.models import WorldPack
 
 Grade = Literal["runnable", "thin", "insufficient"]
 _HISTORY_LORE_THRESHOLD = 200  # chars of overview lore that count as "a past to reference"
-_RULER_ROLES = ("ruler", "king", "queen", "lord", "lady", "chief", "duke", "duchess", "warlord")
 
 # Structural dimensions: without these there is literally nothing to play → insufficient.
 # The rest are playability dimensions: present-but-shallow → thin (still runnable).
@@ -57,16 +56,21 @@ def check_sufficiency(pack: WorldPack, *, play_creates_actors: bool = True) -> S
     it; a pure parse assumes the default, on)."""
     kinds = {p.kind for p in pack.places}
     n_actors = len(pack.actors)
-    has_ruler = any(any(r in a.role.lower() for r in _RULER_ROLES) for a in pack.actors)
+    # Power, in any genre (D-97): a faction, or a person of standing (tier 2+: a duke, a station
+    # director, a crime boss). No role words: the engine doesn't know what a ruler is called.
+    n_standing = sum(1 for a in pack.actors if a.tier >= 2)
+    # simulated years only count as a past when the pack can be seeded (D-97: its vocabulary)
+    history = pack.manifest.history
+    seedable = history.simulate_years > 0 and history.vocabulary is not None
     has_conflict = bool(pack.threads) or any(f.at_war_with for f in pack.factions)
     lore_chars = sum(len(t) for t in pack.lore.values())
 
     dims = [
-        _dim(
+        _dim(  # one place is a world (a ship, a mansion, a station): no shape is required (D-97)
             "geography",
-            {"region", "settlement", "site"} <= kinds,
-            f"places: {sorted(kinds)}" if kinds else "no places seeded",
-            "needs ≥1 region, ≥1 settlement, and ≥1 site — nowhere to be",
+            bool(pack.places),
+            f"{len(pack.places)} places: {sorted(kinds)}",
+            "no places seeded — nowhere to be",
         ),
         _dim(
             "population",
@@ -77,9 +81,9 @@ def check_sufficiency(pack: WorldPack, *, play_creates_actors: bool = True) -> S
         ),
         _dim(
             "power",
-            bool(pack.factions) or has_ruler,
-            f"{len(pack.factions)} factions" + (", a ruler" if has_ruler else ""),
-            "no faction or ruler — no one runs things",
+            bool(pack.factions) or n_standing > 0,
+            f"{len(pack.factions)} factions, {n_standing} people of standing (tier 2+)",
+            "no faction and no one of standing (tier 2+) — no one runs things",
         ),
         _dim(
             "conflict",
@@ -95,14 +99,11 @@ def check_sufficiency(pack: WorldPack, *, play_creates_actors: bool = True) -> S
         ),
         _dim(
             "history",
-            lore_chars >= _HISTORY_LORE_THRESHOLD or pack.manifest.history.simulate_years > 0,
+            lore_chars >= _HISTORY_LORE_THRESHOLD or seedable,
             f"{lore_chars} chars of lore"
-            + (
-                f", simulate_years={pack.manifest.history.simulate_years}"
-                if pack.manifest.history.simulate_years
-                else ""
-            ),
-            "little lore and no history.simulate_years — no past to reference",
+            + (f", simulate_years={pack.manifest.history.simulate_years}" if seedable else ""),
+            "little lore and nothing to seed a past from (history.simulate_years with a "
+            "[history.vocabulary]) — no past to reference",
         ),
     ]
 

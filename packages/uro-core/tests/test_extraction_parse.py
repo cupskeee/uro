@@ -7,6 +7,7 @@ import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.pipeline.extraction import (
     _is_common_noun,
+    _is_role_phrase,
     build_extractor_messages,
     canonical_name,
     parse_extraction,
@@ -123,6 +124,17 @@ def test_role_noun_detection() -> None:
     for role in ("the guard", "tallest hooded stranger", "a barkeep", "An old patron"):
         assert _is_common_noun(role), role
     for name in ("the Duke", "Ser Aldren Voss", "Mara", "de la Cruz"):
+        assert not _is_common_noun(name), name
+    # D-97: as a PERSON, a capitalized title in sentence case is a role too; names keep their shapes
+    for role in ("Operations supervisor", "Marsh brute", "Chief engineer", "The night shift"):
+        assert _is_role_phrase(role), role
+    for name in ("Teo Varga", "Ilka of Gullwater", "Sable the wizard", "River raider Kolb"):
+        assert not _is_role_phrase(name), name
+    for name in ("HALE", "Dr. Lucas Brandt", "Mira's mother", "Иван Петров"):
+        assert not _is_role_phrase(name), name
+    # …but a place or a group may be named in sentence case (other languages do it): only the
+    # lowercase test applies to them
+    for name in ("Красная площадь", "Puerta del sol", "Crew quarters", "Module B"):
         assert not _is_common_noun(name), name
     assert not _is_common_noun("衛兵")  # no letter case → can't judge → never refused
 

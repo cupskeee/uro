@@ -117,6 +117,7 @@ def _manifest(path: Path) -> WorldManifest:
             name=world["name"],
             tone=world.get("tone", []),
             generate_population=world.get("generate_population", False),
+            starting_gear=world.get("starting_gear", []),
             content=ContentDecl(**data.get("content", {})),
             calendar=CalendarDecl(**data.get("calendar", {})),
             clock=ClockDecl(**data.get("clock", {})),

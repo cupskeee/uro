@@ -200,6 +200,20 @@ async def _outbox_row(
 _RECENT_COMMITS = 40
 
 
+# D-99: a set of branch heads' whole ancestry (one row per commit).
+_ANCESTRY = (
+    "(WITH RECURSIVE chain AS (SELECT c.commit_id, c.parent_id FROM commits c "
+    "WHERE c.commit_id IN ({heads}) UNION SELECT p.commit_id, p.parent_id FROM commits p "
+    "JOIN chain ch ON p.commit_id = ch.parent_id) SELECT commit_id FROM chain)"
+)
+# only the vectors the removed memories used, and only if nothing else does (review: a sweep of
+# the whole table could race another world's write of the same vector)
+_ORPHAN_EMBEDDINGS = (
+    "DELETE FROM embeddings e WHERE e.content_hash = ANY($1::text[]) AND NOT EXISTS "
+    "(SELECT 1 FROM memory_index m WHERE m.content_hash = e.content_hash)"
+)
+
+
 class PostgresEventStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
@@ -262,6 +276,7 @@ class PostgresEventStore:
         ruleset_config: dict[str, Any] | None = None,
         clock: dict[str, Any] | None = None,
         pacing: dict[str, Any] | None = None,
+        starting_gear: list[str] | None = None,
     ) -> World:
         """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, docs/09, 17) plus any
@@ -301,6 +316,7 @@ class PostgresEventStore:
                 rule_pack=rule_pack,
                 clock=clock,
                 pacing=pacing,
+                starting_gear=starting_gear,
             ),
             *(extra_events or []),
         ]
@@ -1296,6 +1312,163 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             return await self._resolve_ref(conn, world_id, ref)
 
+    # --- privacy wipe (D-99): removal of a world or a branch, not a change inside one ---
+
+    async def delete_world(self, world_id: str) -> dict[str, int]:
+        async with self.pool.acquire() as conn, conn.transaction():
+            # Lock before reading anything (review), in the order a beat takes them — its branch
+            # row, then the world row through the commit's key — so the two can't deadlock: the
+            # branches first (a beat in flight finishes), then the world (a fork or a new campaign
+            # in flight finishes; later ones find the world gone), then the branches again, which
+            # now include a fork that committed while we waited.
+            await conn.fetch("SELECT 1 FROM branches WHERE world_id = $1 FOR UPDATE", world_id)
+            if (
+                await conn.fetchval("SELECT 1 FROM worlds WHERE world_id = $1 FOR UPDATE", world_id)
+                is None
+            ):
+                raise KeyError(world_id)
+            branches = [
+                r["branch_id"]
+                for r in await conn.fetch(
+                    "SELECT branch_id FROM branches WHERE world_id = $1 FOR UPDATE", world_id
+                )
+            ]
+            commits = "SELECT commit_id FROM commits WHERE world_id = $1"
+            gone: dict[str, int] = {}
+
+            async def wipe(kind: str, sql: str, *args: Any) -> None:
+                gone[kind] = gone.get(kind, 0) + int((await conn.execute(sql, *args)).split()[-1])
+
+            await wipe(
+                "session_tokens",
+                "DELETE FROM session_tokens WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE world_id = $1)",
+                world_id,
+            )
+            await wipe(
+                "participant_notes", "DELETE FROM participant_notes WHERE world_ref = $1", world_id
+            )
+            for section in _SNAPSHOT_TABLES:
+                await wipe(
+                    "projection_rows",
+                    f"DELETE FROM proj_{section} WHERE branch_id = ANY($1::text[])",
+                    branches,
+                )
+            hashes = [
+                r["content_hash"]
+                for r in await conn.fetch(
+                    "DELETE FROM memory_index WHERE branch_id = ANY($1::text[]) "
+                    "RETURNING content_hash",
+                    branches,
+                )
+            ]
+            gone["memories"] = len(hashes)
+            await wipe("outbox", "DELETE FROM outbox WHERE world_id = $1", world_id)
+            await wipe("markers", "DELETE FROM markers WHERE world_id = $1", world_id)
+            await wipe(
+                "snapshots", f"DELETE FROM snapshots WHERE commit_id IN ({commits})", world_id
+            )
+            await wipe("events", f"DELETE FROM events WHERE commit_id IN ({commits})", world_id)
+            await wipe("campaigns", "DELETE FROM campaigns WHERE world_id = $1", world_id)
+            await wipe("branches", "DELETE FROM branches WHERE world_id = $1", world_id)
+            await wipe("commits", "DELETE FROM commits WHERE world_id = $1", world_id)
+            await wipe(
+                "llm_calls",
+                "DELETE FROM llm_calls WHERE world_id = $1 OR branch_id = ANY($2::text[])",
+                world_id,
+                branches,
+            )
+            await wipe("worlds", "DELETE FROM worlds WHERE world_id = $1", world_id)
+            await wipe("embeddings", _ORPHAN_EMBEDDINGS, list(set(hashes)))
+        return gone
+
+    async def delete_branch(
+        self, branch_id: str, *, only_campaign: str | None = None
+    ) -> dict[str, int]:
+        async with self.pool.acquire() as conn, conn.transaction():
+            world_id = await conn.fetchval(
+                "SELECT world_id FROM branches WHERE branch_id = $1", branch_id
+            )
+            if world_id is None:
+                raise KeyError(branch_id)
+            # The branch row, then the world row — a beat's own order, so no deadlock (review): a
+            # beat in flight on it finishes first, and a fork from one of its commits or a new
+            # campaign on it waits until the removal is done instead of racing it.
+            row = await conn.fetchrow(
+                "SELECT world_id, name FROM branches WHERE branch_id = $1 FOR UPDATE", branch_id
+            )
+            if row is None:
+                raise KeyError(branch_id)
+            await conn.execute("SELECT 1 FROM worlds WHERE world_id = $1 FOR UPDATE", world_id)
+            if row["name"] == "main":
+                raise ValueError("a world's main branch can't be deleted: delete the world")
+            if only_campaign is not None:  # a campaign removal: it must be the branch's only one
+                others = [
+                    r["campaign_id"]
+                    for r in await conn.fetch(
+                        "SELECT campaign_id FROM campaigns WHERE branch_id = $1 "
+                        "AND campaign_id <> $2",
+                        branch_id,
+                        only_campaign,
+                    )
+                ]
+                if others:
+                    raise ValueError(
+                        f"its branch {row['name']!r} is shared with campaign(s) "
+                        f"{', '.join(others)}: delete the branch to remove them all"
+                    )
+            # The commits only this branch reaches: its ancestry minus every other branch's.
+            owned = [
+                r["commit_id"]
+                for r in await conn.fetch(
+                    _ANCESTRY.format(heads="SELECT head_commit FROM branches WHERE branch_id = $1")
+                    + " EXCEPT "
+                    + _ANCESTRY.format(
+                        heads="SELECT head_commit FROM branches "
+                        "WHERE world_id = $2 AND branch_id <> $1"
+                    ),
+                    branch_id,
+                    row["world_id"],
+                )
+            ]
+            gone: dict[str, int] = {}
+
+            async def wipe(kind: str, sql: str, *args: Any) -> None:
+                gone[kind] = gone.get(kind, 0) + int((await conn.execute(sql, *args)).split()[-1])
+
+            await wipe(
+                "session_tokens",
+                "DELETE FROM session_tokens WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE branch_id = $1)",
+                branch_id,
+            )
+            for section in _SNAPSHOT_TABLES:
+                await wipe(
+                    "projection_rows", f"DELETE FROM proj_{section} WHERE branch_id = $1", branch_id
+                )
+            hashes = [
+                r["content_hash"]
+                for r in await conn.fetch(
+                    "DELETE FROM memory_index WHERE branch_id = $1 RETURNING content_hash",
+                    branch_id,
+                )
+            ]
+            gone["memories"] = len(hashes)
+            await wipe(  # only its own commits' rows: a shared commit's stays (a fork reaches it)
+                "outbox", "DELETE FROM outbox WHERE commit_id = ANY($1::text[])", owned
+            )
+            await wipe("markers", "DELETE FROM markers WHERE commit_id = ANY($1::text[])", owned)
+            await wipe(
+                "snapshots", "DELETE FROM snapshots WHERE commit_id = ANY($1::text[])", owned
+            )
+            await wipe("events", "DELETE FROM events WHERE commit_id = ANY($1::text[])", owned)
+            await wipe("campaigns", "DELETE FROM campaigns WHERE branch_id = $1", branch_id)
+            await wipe("branches", "DELETE FROM branches WHERE branch_id = $1", branch_id)
+            await wipe("commits", "DELETE FROM commits WHERE commit_id = ANY($1::text[])", owned)
+            await wipe("llm_calls", "DELETE FROM llm_calls WHERE branch_id = $1", branch_id)
+            await wipe("embeddings", _ORPHAN_EMBEDDINGS, list(set(hashes)))
+        return gone
+
     async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:
         """Branch from any commit (docs/03). The new ref shares history up to `from_ref`;
         its projections are materialized there (copy-on-fork), and memory-index rows in
@@ -2021,6 +2194,17 @@ class PostgresEventStore:
             )
         return (row["payload"].get("clock") or {}) if row is not None else {}
 
+    async def world_starting_gear(self, branch_id: str) -> list[str]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT e.payload FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "JOIN branches b ON b.world_id = c.world_id "
+                "WHERE b.branch_id = $1 AND e.event_type = 'WorldGenesis' LIMIT 1",
+                branch_id,
+            )
+        return list(row["payload"].get("starting_gear") or []) if row is not None else []
+
     async def world_pacing(self, branch_id: str) -> dict[str, Any]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -2230,7 +2414,17 @@ class PostgresEventStore:
     # port when the server lands (Phase 5).
 
     async def record_llm_call(self, call: LLMCall) -> None:
-        async with self.pool.acquire() as conn:
+        async with self.pool.acquire() as conn, conn.transaction():
+            # A call made for a branch that was removed meanwhile (D-99) is not kept: it holds the
+            # response, and nothing could find it to remove it later.
+            if (
+                call.branch_id is not None
+                and await conn.fetchval(
+                    "SELECT 1 FROM branches WHERE branch_id = $1 FOR KEY SHARE", call.branch_id
+                )
+                is None
+            ):
+                return
             await conn.execute(
                 "INSERT INTO llm_calls (call_id, stage_tag, model, prompt_hash, tokens_in, "
                 "tokens_out, latency_ms, branch_id, world_id, response, error) "
@@ -2454,6 +2648,16 @@ class PostgresEventStore:
         # narration but different intents have different vectors, and must not share one.
         content_hash = hashlib.sha256((embed_text or text).encode("utf-8")).hexdigest()
         async with self.pool.acquire() as conn, conn.transaction():
+            # A beat's memory lands after its commit; if the branch was removed meanwhile (D-99),
+            # write nothing — its narration must not outlive the wipe. The share lock holds a
+            # removal back until this transaction ends.
+            if (
+                await conn.fetchval(
+                    "SELECT 1 FROM branches WHERE branch_id = $1 FOR KEY SHARE", branch_id
+                )
+                is None
+            ):
+                return
             await conn.execute(
                 "INSERT INTO embeddings (content_hash, vector) VALUES ($1, $2::vector) "
                 "ON CONFLICT (content_hash) DO NOTHING",  # a vector lives once

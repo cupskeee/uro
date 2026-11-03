@@ -1,0 +1,8 @@
+- id: "f:tethys"
+  name: "Tethys Marine"
+  kind: "faction"
+  description: "The mining-and-research company that owns the station and everyone's contract."
+- id: "f:union"
+  name: "The Divers' Union"
+  kind: "faction"
+  description: "The saturation divers' local, three votes short of a strike."

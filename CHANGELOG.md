@@ -8,6 +8,38 @@ The authoritative design history lives in [`docs/decisions.md`](docs/decisions.m
 capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
+Upgrading: no database migration. For pack authors, `uro world seed` needs a `[history.vocabulary]`
+and a fresh PC gets only the `[world] starting_gear` the pack names. For API clients, the seed
+response says `groups`, not `dynasties`. For embedders, the store gains `delete_world`,
+`delete_branch` and `world_starting_gear`, and `create_world` takes `starting_gear`. A custom
+`ServerDeps.run_beat` may yield a `BeatResult` after its narration.
+
+### Added
+- **A non-fantasy example world, `worlds/halcyon`** (a 2091 deep-sea research station), and a
+  live check that the engine holds the genre there (D-97): 0 of 58 narrations out of the setting.
+- **A committed beat says what it did** (D-98): `beat_committed` now carries each check's outcome
+  (the ruleset's grade, not its trace), the acting player's suggestions, the beat's mode (a fight
+  or not), the in-fiction day, and the people, places, factions and plots it made. `uro play` and `uro connect` print them;
+  `Engine.run_beat_stream(on_result=…)` hands an embedder the result.
+- **Removal, for privacy** (D-99): `uro world delete`, `uro branch delete`, `uro campaign delete`
+  (each needs `--yes`) and `DELETE /worlds/{w}`, `/worlds/{w}/branches/{name}`, `/campaigns/{c}`
+  (operator-only). A world goes with everything it holds, including its metered model calls and
+  its players' codex notes; a branch takes only the history it alone reaches; a campaign on
+  `main` is refused.
+
+### Changed
+- **History seeding takes its words from the pack** (D-97; breaking for pack authors): a pack's
+  `[history.vocabulary]` names the groups, leaders and calamities its past is made of. The engine
+  ships none, so a pack without one can't be `uro world seed`ed. The shipped packs have theirs
+  (Ashfall's seeding is unchanged). `/worlds/{w}/seed` returns `groups`, not `dynasties`.
+- **More packs are runnable** (D-97): geography needs one place of any kind (a world may be one
+  ship or one house), and power is a faction or an actor of tier 2+ (no ruler role words, so a
+  tier-1 "ruler" with no faction no longer counts).
+- **A fresh PC's starting gear is the world's** (D-97): `[world] starting_gear`, none if a pack
+  names none (every PC used to get "a traveler's knife"; Ashfall still gives one).
+- **A capitalized job title is never minted as a person** (D-97): "Operations supervisor" is a
+  role, like "the guard". Place and faction names are unaffected.
+- **`uro world new` takes `--pc`** (default "Player", was "Adventurer").
 
 ## [0.16.0] - 2026-11-03
 Upgrading: no database migration. The pacing director is off unless a world turns it on, so a

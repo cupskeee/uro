@@ -41,6 +41,7 @@ class EventStore(Protocol):
         ruleset_config: dict[str, Any] | None = None,
         clock: dict[str, Any] | None = None,
         pacing: dict[str, Any] | None = None,
+        starting_gear: list[str] | None = None,
     ) -> World:
         """Create a world: its `main` branch and a `WorldGenesis` genesis commit (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, plus any `extra_events` —
@@ -199,6 +200,24 @@ class EventStore(Protocol):
     async def resolve_ref(self, world_id: str, ref: str) -> str:
         """A marker name, a commit_id, or a unique commit-id prefix (6+ characters) → a commit_id.
         Markers win on collision; an ambiguous prefix raises KeyError, like an unknown ref."""
+        ...
+
+    async def delete_world(self, world_id: str) -> dict[str, int]:
+        """Remove a world and everything it holds, for good (D-99, a privacy wipe, not an event):
+        its campaigns, branches, commits, events, projections, memories, markers, snapshots,
+        outbox rows, session tokens, its players' notes for it, and the model calls metered for
+        it (they hold prompts and responses). Embeddings nothing else uses go too. One
+        transaction. Returns what was removed, per kind; raises KeyError for an unknown world."""
+        ...
+
+    async def delete_branch(
+        self, branch_id: str, *, only_campaign: str | None = None
+    ) -> dict[str, int]:
+        """Remove one branch (D-99): its campaigns (and their tokens and PC bindings), its
+        projections, memories and metered calls, and the commits only it reaches — history it
+        shares with another branch stays. `main` can't be removed (remove the world instead):
+        ValueError. With `only_campaign`, also ValueError if any other campaign plays on it (a
+        campaign removal, checked under the same lock). KeyError for an unknown branch."""
         ...
 
     async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:

@@ -1,0 +1,6 @@
+- id: "c:depth"
+  statement: "Halcyon Station sits three thousand metres down on the Kaiko Ridge."
+  truth: "true"
+- id: "c:logs"
+  statement: "Someone deleted three hours of the Moon Pool airlock logs."
+  truth: "unknown"

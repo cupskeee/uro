@@ -1,0 +1,6 @@
+- id: "t:varga"
+  stakes: "Diver Teo Varga went out through the Moon Pool four days ago and never came back."
+  state: "active"
+- id: "t:strike"
+  stakes: "The Divers' Union is three votes short of striking over the depth bonus."
+  state: "offered"

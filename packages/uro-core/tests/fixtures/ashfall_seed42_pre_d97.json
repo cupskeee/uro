@@ -1,0 +1,395 @@
+[
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "era_summary": "the age of aftermath-of-empire",
+   "seed": 42,
+   "simulated_years": 200,
+   "v": 1
+  },
+  "type": "HistorySeeded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "description": "A dynasty risen in the age of aftermath-of-empire.",
+   "faction_id": "f:seed42-d0",
+   "kind": "faction",
+   "name": "House Ashmoor",
+   "v": 1
+  },
+  "type": "FactionCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "actor_id": "a:seed42-r0",
+   "aliases": [],
+   "name": "King Bram",
+   "role": "ruler",
+   "tier": 2,
+   "v": 1
+  },
+  "type": "ActorCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d0",
+   "rel_type": "rules",
+   "src": "a:seed42-r0",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "description": "A dynasty risen in the age of aftermath-of-empire.",
+   "faction_id": "f:seed42-d1",
+   "kind": "faction",
+   "name": "House Verric",
+   "v": 1
+  },
+  "type": "FactionCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "actor_id": "a:seed42-r1",
+   "aliases": [],
+   "name": "Queen Sorel",
+   "role": "ruler",
+   "tier": 2,
+   "v": 1
+  },
+  "type": "ActorCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d1",
+   "rel_type": "rules",
+   "src": "a:seed42-r1",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "description": "A dynasty risen in the age of aftermath-of-empire.",
+   "faction_id": "f:seed42-d2",
+   "kind": "faction",
+   "name": "House Ashmoor",
+   "v": 1
+  },
+  "type": "FactionCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "actor_id": "a:seed42-r2",
+   "aliases": [],
+   "name": "Reeve Mira",
+   "role": "ruler",
+   "tier": 2,
+   "v": 1
+  },
+  "type": "ActorCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d2",
+   "rel_type": "rules",
+   "src": "a:seed42-r2",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "description": "A dynasty risen in the age of aftermath-of-empire.",
+   "faction_id": "f:seed42-d3",
+   "kind": "faction",
+   "name": "House Vane",
+   "v": 1
+  },
+  "type": "FactionCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "actor_id": "a:seed42-r3",
+   "aliases": [],
+   "name": "Warden Aldric",
+   "role": "ruler",
+   "tier": 2,
+   "v": 1
+  },
+  "type": "ActorCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d3",
+   "rel_type": "rules",
+   "src": "a:seed42-r3",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "description": "A dynasty risen in the age of aftermath-of-empire.",
+   "faction_id": "f:seed42-d4",
+   "kind": "faction",
+   "name": "House Corvane",
+   "v": 1
+  },
+  "type": "FactionCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "actor_id": "a:seed42-r4",
+   "aliases": [],
+   "name": "King Ysolde",
+   "role": "ruler",
+   "tier": 2,
+   "v": 1
+  },
+  "type": "ActorCreated"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d4",
+   "rel_type": "rules",
+   "src": "a:seed42-r4",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d1",
+   "rel_type": "at_war_with",
+   "src": "f:seed42-d0",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d4",
+   "rel_type": "at_war_with",
+   "src": "f:seed42-d1",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d4",
+   "rel_type": "at_war_with",
+   "src": "f:seed42-d2",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "attrs": {},
+   "dst": "f:seed42-d1",
+   "rel_type": "at_war_with",
+   "src": "f:seed42-d4",
+   "v": 1,
+   "weight": 1.0
+  },
+  "type": "EdgeAdded"
+ },
+ {
+  "cause": {
+   "beat_id": null,
+   "encounter_id": null,
+   "history_pass": "seeding",
+   "kind": "history",
+   "participant_id": null,
+   "rule_id": null
+  },
+  "payload": {
+   "claim_id": "c:seed42-era",
+   "created_day": 0,
+   "origin": "history",
+   "statement": "The age of aftermath-of-empire was marked by a schism of faith.",
+   "subject_refs": [],
+   "truth": "true",
+   "v": 1
+  },
+  "type": "ClaimRecorded"
+ }
+]

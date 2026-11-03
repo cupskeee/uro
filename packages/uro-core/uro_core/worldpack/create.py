@@ -28,7 +28,7 @@ class PackImport(BaseModel):
 
 class SeedResult(BaseModel):
     commit_id: str
-    dynasties: int
+    groups: int  # power groups seeded (houses, companies, clans — the pack's words, D-97)
     wars: int
 
 
@@ -77,13 +77,14 @@ async def import_pack(
         rule_pack=pack.rule_pack.model_dump() if pack.rule_pack else {},
         clock=pack.manifest.clock.model_dump(exclude_defaults=True),
         pacing=pack.manifest.pacing.model_dump(exclude_defaults=True),
+        starting_gear=pack.manifest.starting_gear,
         extra_events=pack_to_events(pack),
     )
     return PackImport(world=world, grade=report.grade, backfilled=added)
 
 
 async def seed_world(store: EngineStore, world: World, pack: WorldPack, seed: int) -> SeedResult:
-    """Layer seed-dependent dynasties and wars (History, emitter H) onto a world's main branch.
+    """Layer a seed-dependent past (History, emitter H) onto a world's main branch.
     The pack must be the one the world was created from: the world doesn't persist the manifest's
     `[history]`, so the pack is re-supplied — and a different pack would seed another world's
     history here. Same pack + a different seed → a different history on the same geography."""
@@ -94,6 +95,6 @@ async def seed_world(store: EngineStore, world: World, pack: WorldPack, seed: in
     wars = [e for e in events if e.event_type == "EdgeAdded"]
     return SeedResult(
         commit_id=commit.commit_id,
-        dynasties=sum(1 for e in events if e.event_type == "FactionCreated"),
+        groups=sum(1 for e in events if e.event_type == "FactionCreated"),
         wars=sum(1 for e in wars if e.payload.get("rel_type") == "at_war_with"),
     )

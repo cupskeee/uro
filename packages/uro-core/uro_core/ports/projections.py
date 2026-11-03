@@ -91,6 +91,11 @@ class ProjectionQueries(Protocol):
         defaults, for a world with none (or created before D-80)."""
         ...
 
+    async def world_starting_gear(self, branch_id: str) -> list[str]:
+        """The items a fresh PC carries in the branch's world (D-97), from its WorldGenesis. []
+        for a world that names none (or was created before D-97)."""
+        ...
+
     async def world_pacing(self, branch_id: str) -> dict[str, Any]:
         """The branch's world's `[pacing]` settings (D-95), from its WorldGenesis. {} = the
         defaults, for a world with none (or created before D-95)."""

@@ -79,6 +79,8 @@ class WorldGenesisPayload(BaseModel):
     # The pack's `[pacing]` settings (D-95): when the engine names a quiet plot to the narrator.
     # {} = the defaults (`pipeline/pacing.py`).
     pacing: dict[str, Any] = Field(default_factory=dict)
+    # A fresh PC's starting gear in this world (D-97): item names, the game's own. [] = none.
+    starting_gear: list[str] = Field(default_factory=list)
 
 
 class BeatResolvedPayload(BaseModel):
@@ -110,6 +112,7 @@ def world_genesis(
     rule_pack: dict[str, Any] | None = None,
     clock: dict[str, Any] | None = None,
     pacing: dict[str, Any] | None = None,
+    starting_gear: list[str] | None = None,
 ) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
@@ -124,6 +127,7 @@ def world_genesis(
             rule_pack=rule_pack or {},
             clock=clock or {},
             pacing=pacing or {},
+            starting_gear=starting_gear or [],
         ).model_dump(),
     )
 

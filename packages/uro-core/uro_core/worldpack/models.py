@@ -50,15 +50,49 @@ class RulesetDecl(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class HistoryVocabulary(BaseModel):
+    """`[history.vocabulary]`: the words History seeding builds a past from. The engine ships no
+    genre of its own (no kings, no houses): a pack that wants seeding brings its words."""
+
+    model_config = ConfigDict(extra="forbid")
+    groups: list[str] = Field(min_length=1)  # names for the power groups seeding creates
+    group_name: str = "{name}"  # e.g. "House {name}", "{name} Holdings"
+    group_description: str = "Risen in {era}."  # {era}: "the age of <seed_era>"
+    leaders: list[str] = Field(min_length=1)  # each group's leader is one of these…
+    titles: list[str] = Field(default_factory=list)  # …with one of these before it, if any
+    leader_role: str = "leader"
+    calamities: list[str] = Field(min_length=1)  # what marked the era ("a great plague")
+    # The sentences seeding writes, in the pack's language (the defaults are English): the era's
+    # name ({era} = `seed_era`), its name when the pack has no `seed_era`, and the era's claim
+    # ({era_name}, {calamity}; its first letter is capitalized).
+    era_name: str = "the age of {era}"
+    era_unnamed: str = "its past"
+    era_claim: str = "{era_name} was marked by {calamity}."
+
+    @model_validator(mode="after")
+    def _usable(self) -> HistoryVocabulary:
+        lists = {"groups": self.groups, "leaders": self.leaders, "titles": self.titles}
+        lists["calamities"] = self.calamities
+        blank = [k for k, v in lists.items() if any(not w.strip() for w in v)]
+        if blank:
+            raise ValueError(f"[history.vocabulary] has a blank entry in {', '.join(blank)}")
+        if "{name}" not in self.group_name:
+            raise ValueError("[history.vocabulary] group_name must contain {name}")
+        return self
+
+
 class HistoryDecl(BaseModel):
     seed_era: str = ""
     simulate_years: int = 0
+    vocabulary: HistoryVocabulary | None = None  # none → the world can't be seeded (D-97)
 
 
 class WorldManifest(BaseModel):
     name: str
     tone: list[str] = Field(default_factory=list)
     generate_population: bool = False  # the "generate freely" flag (docs/09 sufficiency)
+    # `[world] starting_gear` (D-97): items a fresh PC carries in this world; none by default
+    starting_gear: list[str] = Field(default_factory=list)
     content: ContentDecl = Field(default_factory=ContentDecl)
     calendar: CalendarDecl = Field(default_factory=CalendarDecl)
     clock: ClockDecl = Field(default_factory=ClockDecl)
