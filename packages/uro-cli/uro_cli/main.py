@@ -1486,6 +1486,38 @@ def campaign_show(campaign_id: str) -> None:
     _run_async(_run)
 
 
+@campaign_app.command("pacing")
+def campaign_pacing(campaign_id: str) -> None:
+    """Which live plots have gone quiet, and the one the next beat would name to the narrator
+    (the pacing director, D-95; a world's `[pacing]` sets when)."""
+
+    async def _run() -> None:
+        from uro_core.pipeline.pacing import pacing_report
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            report = await pacing_report(store, c.branch_id)
+        finally:
+            await store.close()
+        st = report.settings
+        when = (
+            "off"
+            if st.quiet_after == 0
+            else f"names a plot quiet {st.quiet_after}+ beats, at most once every {st.every}"
+        )
+        typer.echo(f"pacing: {when}   (over the last {report.beats_read} beats)")
+        if not report.threads:
+            typer.echo("  (no live threads)")
+        for t in sorted(report.threads, key=lambda t: (-t.quiet_beats, t.thread_id)):
+            quiet = f"{t.quiet_beats}{'+' if t.at_least else ''}"
+            mark = "  ← next" if t.thread_id == report.next_paced else ""
+            typer.echo(f"  {quiet:>4} beats quiet  [{t.thread_id}] {t.stakes}{mark}")
+
+    _run_async(_run)
+
+
 @branch_app.command("diff")
 def branch_diff(
     world: str,

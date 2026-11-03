@@ -2054,6 +2054,19 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"branch_id": c.branch_id, "state": across.get(c.branch_id, {})}
 
+    @app.get("/campaigns/{campaign_id}/pacing", **_out(S.PacingOut))
+    async def campaign_pacing(campaign_id: str, request: Request) -> dict[str, Any]:
+        """Which live plots have gone quiet and the one the next beat would name (D-95). Thread
+        stakes are player-safe, like the `threads` state section."""
+        _auth(request)
+        store = _mgmt()
+        c = await store.get_campaign(campaign_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        from uro_core.pipeline.pacing import pacing_report
+
+        return (await pacing_report(store, c.branch_id)).model_dump()
+
     @app.get("/campaigns/{campaign_id}/chronicle", **_out(S.Chronicle))
     async def campaign_chronicle(campaign_id: str, request: Request) -> dict[str, Any]:
         _auth(request)

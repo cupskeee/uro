@@ -10,8 +10,29 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **The pacing director** (D-95, OQ-2's director half). When a live plot thread hasn't come up for
+  25 beats, the next beat names it to the narrator in one line beside the player's action ("A PLOT
+  TO KEEP ALIVE: …"), at most once every 10 beats. In a live A/B the narrator brought the plot
+  back 44/80 times with the line and 0/80 without, and never overrode the player's action. No
+  extra model call: the extractor now also reports which KNOWN threads a narration developed
+  (`develops`), and each `BeatResolved` records them (`threads`) and any thread it named
+  (`paced_thread`). A world sets it with `[pacing] quiet_after` / `every` (`quiet_after = 0` turns
+  it off); an embedder can set it per engine (`Engine(pacing=…)`). Read it with
+  `uro campaign pacing <campaign>` or `GET /campaigns/{c}/pacing`.
 - **A primer for building a client on Uro** (`docs/22-building-a-client.md`): running it locally,
   the play loop over WebSocket, the bring-your-own-model settings screen, and what to design for.
+
+### Changed
+- **On by default, so a campaign played before this release will hear about a quiet plot.** Its
+  older beats record no threads, so every live thread reads as quiet until new beats record them;
+  the first beat after upgrading, on a branch with 25 or more beats, names one. Set
+  `[pacing] quiet_after = 0` in a world, or `Engine(pacing=PacingSettings(quiet_after=0))`, to keep
+  the old behavior.
+- **For an embedder's own store:** `create_world` takes a `pacing` dict and `ProjectionQueries`
+  has `world_pacing(branch_id)`. A store without `world_pacing` gets the defaults.
+- **A reaction rule may no longer filter `where` on a list or dict field** (`BeatResolved.threads`,
+  `ClaimRecorded.subject_refs`, …): it could never match, so it is refused when the pack is parsed.
+- **An imported world bundle with an invalid `[pacing]` is refused**, as `create_world` refuses it.
 
 ### Fixed
 - **`uro serve --admin-token` alone no longer also opens the default `local` token** (D-94). Two

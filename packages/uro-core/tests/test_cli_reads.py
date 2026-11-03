@@ -15,7 +15,7 @@ import pytest_asyncio
 from typer.testing import CliRunner
 from uro_cli.main import app
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.domain.events import actor_created, beat_resolved
+from uro_core.domain.events import actor_created, beat_resolved, thread_created
 from uro_core.domain.ids import new_id
 
 
@@ -369,3 +369,35 @@ async def test_uro_memory_reembed_is_metered(
     assert result.exit_code == 0, result.output
     assert "re-embedded 1 memory" in result.output
     assert await embed_calls() > before
+
+
+@pytest_asyncio.fixture
+async def paced(store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A campaign whose one live thread has gone quiet past its world's `[pacing]` (D-95)."""
+    monkeypatch.setenv("URO_DATABASE_URL", store.dsn)
+    w = await store.create_world(
+        f"cli-pacing-{new_id()}",
+        pacing={"quiet_after": 2, "every": 1},
+        extra_events=[
+            thread_created(thread_id="t:wagons", stakes="The salt wagons stopped.", state="active")
+        ],
+    )
+    campaign = await store.start_campaign(
+        w.world_id, w.main_branch_id, participant_id="p1", new_pc_name="Ash"
+    )
+    for n in range(3):
+        await store.append_beat(
+            w.main_branch_id,
+            [
+                beat_resolved(
+                    beat_id=new_id(), participant_id="p1", intent_text=f"i{n}", narration="n"
+                )
+            ],
+        )
+    return campaign.campaign_id
+
+
+def test_campaign_pacing(paced: str) -> None:
+    code, out = _uro("campaign", "pacing", paced)
+    assert code == 0 and "names a plot quiet 2+ beats, at most once every 1" in out
+    assert "3+ beats quiet  [t:wagons] The salt wagons stopped.  ← next" in out

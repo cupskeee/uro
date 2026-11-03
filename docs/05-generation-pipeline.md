@@ -21,7 +21,8 @@ player intent
    │
    ▼
 [1] CONTEXT ASSEMBLY        structured recall + semantic recall + recency window
-   │                        (see 04-llm-integration.md)
+   │                        (see 04-llm-integration.md); the pacing director (D-95,
+   │                        no LLM) may name one quiet live thread beside the intent
    ▼
 [2] PLAN (planner role)     classify intent; decide beat structure: outcome shape,
    │                        which actors react, whether mechanics are implicated,
@@ -40,6 +41,8 @@ player intent
 [5] EXTRACT & CANONICALIZE  extractor role parses generated prose for state-worthy
    │                        content → proposed events (new claims, new T1 actors,
    │                        belief changes, item transfers). Promotion rules below.
+   │                        It also notes which KNOWN threads the prose developed
+   │                        (`develops`, D-95): recorded on the beat, no state change.
    ▼
 [6] COMMIT                  validated events batched into one beat commit;
                             projections update; response streams to client.

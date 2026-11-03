@@ -25,6 +25,7 @@ from uro_core.domain.events import BeatResolvedPayload, DomainEvent
 from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.engines.probe import ProbeResult
 from uro_core.export import BundleCommit, BundleEvent, WorldBundle
+from uro_core.pipeline.pacing import PacingReport
 from uro_core.ports.model_registry import ModelConnection, ProviderCredential, RoleBinding
 from uro_core.ports.tokens import TokenInfo
 from uro_core.timeline.models import (
@@ -473,6 +474,12 @@ class Revoked(Out):
 
 class Roster(Out):
     pcs: list[str]
+
+
+class PacingOut(PacingReport):
+    """`GET /campaigns/{c}/pacing` (D-95): each live thread's quiet beats + the next named one."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class TimeSkipped(Out):

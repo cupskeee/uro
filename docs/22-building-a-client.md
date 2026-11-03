@@ -126,6 +126,7 @@ Also broadcast: `participant_joined`/`participant_left`, and for parties `not_yo
 | "what if" fork from any point | `POST /worlds/{w}/branches` `{from_ref, name, time_skip_days?}`, then a campaign on it (`"branch": "<name>"`) |
 | skip ahead | `POST /campaigns/{c}/time-skip` `{days, downtime}` (`downtime: false` = time passes in play, nothing rests) |
 | preview a turn without saving | `POST /campaigns/{c}/dry-run` `{intent}` |
+| plots gone quiet (a journal's "loose ends") | `GET /campaigns/{c}/pacing`: each live thread's beats since it came up; the engine nudges the quietest back into the story on its own (D-95) |
 | world history / timeline | `GET /worlds/{w}/branches`, `GET /worlds/{w}/log` |
 | import a world pack | `POST /worlds/create` (multipart field `pack`: a `.zip` of the pack folder); check it first with `POST /worlds/validate` |
 

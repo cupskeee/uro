@@ -88,6 +88,25 @@ def _event_str_fields() -> dict[str, frozenset[str]]:
 
 _EVENT_STR_FIELDS = _event_str_fields()
 
+
+def _event_container_fields() -> dict[str, frozenset[str]]:
+    """Per event, the payload fields that hold a list or dict (`BeatResolved.threads`,
+    `ClaimRecorded.subject_refs`, …). A `where` filter compares a field's string form with a
+    scalar, so on one of these it would never match (D-95 review): refused at parse."""
+    out: dict[str, frozenset[str]] = {}
+    for name, obj in vars(_events).items():
+        if name.endswith("Payload") and isinstance(obj, type) and issubclass(obj, BaseModel):
+            out[name[: -len("Payload")]] = frozenset(
+                f
+                for f, info in obj.model_fields.items()
+                if get_origin(info.annotation) in (list, dict) or info.annotation in (list, dict)
+            )
+    out.setdefault("EdgeUpdated", out.get("EdgeAdded", frozenset()))
+    return out
+
+
+_EVENT_CONTAINER_FIELDS = _event_container_fields()
+
 # Relations a module MAY touch — non-authoritative social/political edges only. Never `owns`/`rules`
 # (ownership/authority is canon, not a module's to assert). The gauntlet re-checks this (INC-3).
 ModuleRel = Literal["knows", "at_war_with", "allied_with"]
@@ -593,6 +612,12 @@ class Rule(BaseModel):
             raise ValueError(
                 f"rule {self.id!r}: trigger.where key(s) {unknown} are not fields of {ev} "
                 f"(fields: {', '.join(sorted(_EVENT_FIELDS[ev]))}) — the filter could never match"
+            )
+        lists = [k for k in self.trigger.where if k in _EVENT_CONTAINER_FIELDS.get(ev, frozenset())]
+        if lists:
+            raise ValueError(
+                f"rule {self.id!r}: trigger.where key(s) {lists} of {ev} hold a list or a dict — a "
+                "`where` filter matches a single value, so it could never match"
             )
         if self.when is not None:  # RL-6: fence $trigger.<field> refs in the `when` tree
             _check_trigger_refs(self.when, ev, self.id)
