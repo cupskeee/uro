@@ -124,6 +124,13 @@ def test_role_noun_detection() -> None:
         assert _is_common_noun(role), role
     for name in ("the Duke", "Ser Aldren Voss", "Mara", "de la Cruz"):
         assert not _is_common_noun(name), name
+    # D-97: a capitalized title in sentence case is a role too; names keep their shapes
+    for role in ("Operations supervisor", "Marsh brute", "Chief engineer", "The night shift"):
+        assert _is_common_noun(role), role
+    for name in ("Teo Varga", "Ilka of Gullwater", "Sable the wizard", "River raider Kolb"):
+        assert not _is_common_noun(name), name
+    for name in ("Module B", "Deck 7", "HALE", "Dr. Lucas Brandt", "Halcyon Station"):
+        assert not _is_common_noun(name), name
     assert not _is_common_noun("衛兵")  # no letter case → can't judge → never refused
 
 

@@ -1,0 +1,33 @@
+# Halcyon Deep — a near-future, non-fantasy example world pack (docs/09). Grades "runnable".
+# It exists to keep the engine honest about genre: no magic, no swords, no taverns. The engine's
+# prompts, extractor and clock must work here exactly as they do in the fantasy packs.
+
+[world]
+name = "Halcyon Deep"
+tone = ["claustrophobic", "near-future", "corporate", "procedural"]
+
+[content]
+rating = "mature"
+enabled = ["violence"]
+disabled = ["sexual_content"]
+
+[pacing]                 # this world opts in to the pacing director (D-96)
+quiet_after = 25
+every = 10
+
+[ruleset]
+id = "uro-basic"
+version = ">=0"
+
+[history]
+seed_era = "the first deep stations"
+simulate_years = 20
+
+[history.vocabulary]     # D-97: the words `uro world seed` builds this world's past from
+groups = ["Kuroshio", "Bathys", "Deepline", "Pelagic", "Trench Nine"]
+group_name = "{name} Holdings"
+group_description = "A company that bought in during {era}."
+titles = ["CEO", "Chair", "Director"]
+leaders = ["Amara Diallo", "Henrik Vos", "Mei Tanaka", "Rafael Ortiz", "Sung-min Park"]
+leader_role = "chief executive"
+calamities = ["a blowout at depth that killed a dive crew", "the collapse of metal prices", "a hull breach on a sister station"]

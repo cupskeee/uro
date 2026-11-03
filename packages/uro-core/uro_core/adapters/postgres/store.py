@@ -200,6 +200,18 @@ async def _outbox_row(
 _RECENT_COMMITS = 40
 
 
+# D-99: a set of branch heads' whole ancestry (one row per commit), and embeddings no memory uses.
+_ANCESTRY = (
+    "(WITH RECURSIVE chain AS (SELECT c.commit_id, c.parent_id FROM commits c "
+    "WHERE c.commit_id IN ({heads}) UNION SELECT p.commit_id, p.parent_id FROM commits p "
+    "JOIN chain ch ON p.commit_id = ch.parent_id) SELECT commit_id FROM chain)"
+)
+_ORPHAN_EMBEDDINGS = (
+    "DELETE FROM embeddings e WHERE NOT EXISTS "
+    "(SELECT 1 FROM memory_index m WHERE m.content_hash = e.content_hash)"
+)
+
+
 class PostgresEventStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
@@ -1295,6 +1307,118 @@ class PostgresEventStore:
         """A marker name or a raw commit_id → a commit_id. Markers win on collision."""
         async with self.pool.acquire() as conn:
             return await self._resolve_ref(conn, world_id, ref)
+
+    # --- privacy wipe (D-99): removal of a world or a branch, not a change inside one ---
+
+    async def delete_world(self, world_id: str) -> dict[str, int]:
+        async with self.pool.acquire() as conn, conn.transaction():
+            if await conn.fetchval("SELECT 1 FROM worlds WHERE world_id = $1", world_id) is None:
+                raise KeyError(world_id)
+            branches = [
+                r["branch_id"]
+                for r in await conn.fetch(
+                    "SELECT branch_id FROM branches WHERE world_id = $1", world_id
+                )
+            ]
+            commits = "SELECT commit_id FROM commits WHERE world_id = $1"
+            gone: dict[str, int] = {}
+
+            async def wipe(kind: str, sql: str, *args: Any) -> None:
+                gone[kind] = gone.get(kind, 0) + int((await conn.execute(sql, *args)).split()[-1])
+
+            await wipe(
+                "session_tokens",
+                "DELETE FROM session_tokens WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE world_id = $1)",
+                world_id,
+            )
+            await wipe(
+                "participant_notes", "DELETE FROM participant_notes WHERE world_ref = $1", world_id
+            )
+            for section in _SNAPSHOT_TABLES:
+                await wipe(
+                    "projection_rows",
+                    f"DELETE FROM proj_{section} WHERE branch_id = ANY($1::text[])",
+                    branches,
+                )
+            await wipe(
+                "memories", "DELETE FROM memory_index WHERE branch_id = ANY($1::text[])", branches
+            )
+            await wipe("outbox", "DELETE FROM outbox WHERE world_id = $1", world_id)
+            await wipe("markers", "DELETE FROM markers WHERE world_id = $1", world_id)
+            await wipe(
+                "snapshots", f"DELETE FROM snapshots WHERE commit_id IN ({commits})", world_id
+            )
+            await wipe("events", f"DELETE FROM events WHERE commit_id IN ({commits})", world_id)
+            await wipe("campaigns", "DELETE FROM campaigns WHERE world_id = $1", world_id)
+            await wipe("branches", "DELETE FROM branches WHERE world_id = $1", world_id)
+            await wipe("commits", "DELETE FROM commits WHERE world_id = $1", world_id)
+            await wipe(
+                "llm_calls",
+                "DELETE FROM llm_calls WHERE world_id = $1 OR branch_id = ANY($2::text[])",
+                world_id,
+                branches,
+            )
+            await wipe("worlds", "DELETE FROM worlds WHERE world_id = $1", world_id)
+            await wipe("embeddings", _ORPHAN_EMBEDDINGS)
+        return gone
+
+    async def delete_branch(self, branch_id: str) -> dict[str, int]:
+        async with self.pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT world_id, name FROM branches WHERE branch_id = $1 FOR UPDATE", branch_id
+            )
+            if row is None:
+                raise KeyError(branch_id)
+            if row["name"] == "main":
+                raise ValueError("a world's main branch can't be deleted: delete the world")
+            # The commits only this branch reaches: its ancestry minus every other branch's.
+            owned = [
+                r["commit_id"]
+                for r in await conn.fetch(
+                    _ANCESTRY.format(heads="SELECT head_commit FROM branches WHERE branch_id = $1")
+                    + " EXCEPT "
+                    + _ANCESTRY.format(
+                        heads="SELECT head_commit FROM branches "
+                        "WHERE world_id = $2 AND branch_id <> $1"
+                    ),
+                    branch_id,
+                    row["world_id"],
+                )
+            ]
+            gone: dict[str, int] = {}
+
+            async def wipe(kind: str, sql: str, *args: Any) -> None:
+                gone[kind] = gone.get(kind, 0) + int((await conn.execute(sql, *args)).split()[-1])
+
+            await wipe(
+                "session_tokens",
+                "DELETE FROM session_tokens WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE branch_id = $1)",
+                branch_id,
+            )
+            for section in _SNAPSHOT_TABLES:
+                await wipe(
+                    "projection_rows", f"DELETE FROM proj_{section} WHERE branch_id = $1", branch_id
+                )
+            await wipe("memories", "DELETE FROM memory_index WHERE branch_id = $1", branch_id)
+            await wipe(
+                "outbox",
+                "DELETE FROM outbox WHERE branch_id = $1 OR commit_id = ANY($2::text[])",
+                branch_id,
+                owned,
+            )
+            await wipe("markers", "DELETE FROM markers WHERE commit_id = ANY($1::text[])", owned)
+            await wipe(
+                "snapshots", "DELETE FROM snapshots WHERE commit_id = ANY($1::text[])", owned
+            )
+            await wipe("events", "DELETE FROM events WHERE commit_id = ANY($1::text[])", owned)
+            await wipe("campaigns", "DELETE FROM campaigns WHERE branch_id = $1", branch_id)
+            await wipe("branches", "DELETE FROM branches WHERE branch_id = $1", branch_id)
+            await wipe("commits", "DELETE FROM commits WHERE commit_id = ANY($1::text[])", owned)
+            await wipe("llm_calls", "DELETE FROM llm_calls WHERE branch_id = $1", branch_id)
+            await wipe("embeddings", _ORPHAN_EMBEDDINGS)
+        return gone
 
     async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:
         """Branch from any commit (docs/03). The new ref shares history up to `from_ref`;

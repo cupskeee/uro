@@ -1,0 +1,37 @@
+- id: "a:okafor"
+  name: "Director Imani Okafor"
+  tier: 2
+  role: "station director"
+  faction: "f:tethys"
+  location: "p:ops"
+- id: "a:brandt"
+  name: "Dr. Lucas Brandt"
+  tier: 2
+  role: "chief scientist"
+  faction: "f:tethys"
+  location: "p:halcyon"
+- id: "a:ruiz"
+  name: "Rosa Ruiz"
+  tier: 1
+  role: "head of security"
+  faction: "f:tethys"
+  location: "p:ops"
+  knows: ["a:sowa"]
+- id: "a:sowa"
+  name: "Marek Sowa"
+  tier: 1
+  role: "saturation diver and union rep"
+  faction: "f:union"
+  location: "p:moonpool"
+  knows: ["a:abe"]
+- id: "a:abe"
+  name: "Jun Abe"
+  tier: 1
+  role: "submersible pilot"
+  location: "p:galley"
+- id: "a:hale"
+  name: "HALE"
+  tier: 1
+  role: "the station's operations AI"
+  aliases: ["the station AI"]
+  location: "p:ops"

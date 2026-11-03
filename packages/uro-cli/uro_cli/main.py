@@ -18,7 +18,7 @@ from typing import Any
 import typer
 from dotenv import find_dotenv, load_dotenv
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.pipeline.engine import Engine
+from uro_core.pipeline.engine import BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
@@ -328,9 +328,10 @@ def world_seed(
         None, "--world", help="the world to seed (id or name; default: the pack's name)"
     ),
 ) -> None:
-    """Run History seeding on the world imported from <path>: layer seed-dependent dynasties and
-    wars on top of the authored geography (docs/09). Same pack + a different seed → a different
-    history on identical geography."""
+    """Run History seeding on the world imported from <path>: layer a seed-dependent past (power
+    groups, their leaders and conflicts, in the pack's [history.vocabulary]) on top of the authored
+    geography (docs/09). Same pack + a different seed → a different history on identical
+    geography."""
 
     async def _run() -> None:
         from uro_core.errors import PackError
@@ -350,7 +351,8 @@ def world_seed(
             await store.close()
         typer.echo(f"seeded {target.name!r} with seed {seed} → commit {result.commit_id}")
         typer.echo(
-            f"  {result.dynasties} dynasties, {result.wars} wars (on the pack's authored geography)"
+            f"  {result.groups} power groups, {result.wars} conflicts "
+            "(on the pack's authored geography)"
         )
 
     _run_async(_run)
@@ -526,6 +528,7 @@ def play(
                     typer.echo(f"  > {beat.intent_text}")
                     typer.echo(f"    {beat.narration}")
                 typer.echo("—")
+            day: int | None = await store.current_world_time(campaign.branch_id)
 
             while True:
                 try:
@@ -538,10 +541,17 @@ def play(
                 if not intent:
                     continue
                 try:
-                    async for chunk in engine.run_beat_stream(campaign, PARTICIPANT, intent):
+                    results: list[BeatResult] = []
+                    async for chunk in engine.run_beat_stream(
+                        campaign, PARTICIPANT, intent, on_result=results.append
+                    ):
                         sys.stdout.write(chunk)
                         sys.stdout.flush()
                     sys.stdout.write("\n")
+                    for line in beat_detail_lines(_details(results[0]) if results else {}, day):
+                        typer.echo(line)
+                    if results:
+                        day = results[0].world_day
                 except Exception as exc:
                     sys.stdout.write("\n")
                     typer.echo(f"beat failed ({exc}); nothing was saved — try again.", err=True)
@@ -549,6 +559,35 @@ def play(
             await store.close()
 
     _run_async(_run)
+
+
+def _details(result: BeatResult) -> dict[str, Any]:
+    """A local beat's details in the shape `beat_committed` carries them (D-98)."""
+    return {
+        "checks": result.check_traces,
+        "suggestions": result.suggestions,
+        "mode": result.mode,
+        "world_day": result.world_day,
+        "created": [c.model_dump() for c in result.created],
+    }
+
+
+def beat_detail_lines(details: dict[str, Any], previous_day: int | None) -> list[str]:
+    """What `uro play` and `uro connect` show under a beat (D-98): the ruleset's check results,
+    a fight, the day if it moved, what the beat made, and the planner's suggestions."""
+    lines = [f"  · {trace}" for trace in details.get("checks") or []]
+    if details.get("mode") == "encounter":
+        lines.append("  · a fight was resolved")
+    day = details.get("world_day")
+    if day is not None and previous_day is not None and day != previous_day:
+        lines.append(f"  · day {day}")
+    created = details.get("created") or []
+    if created:
+        lines.append("  + new: " + ", ".join(f"{c['name']} ({c['kind']})" for c in created))
+    suggestions = details.get("suggestions") or []
+    if suggestions:
+        lines.append("  ? you could: " + "; ".join(suggestions))
+    return lines
 
 
 @app.command()
@@ -749,6 +788,7 @@ def connect(
                 # without an id is another client's.
                 pending: dict[str, tuple[str, asyncio.Event]] = {}
                 echoes = False
+                seen_day: int | None = None  # the day the last beat_committed showed
 
                 def settle(msg: dict[str, Any]) -> None:
                     if "intent_id" in msg:
@@ -763,7 +803,7 @@ def connect(
                         hit[1].set()
 
                 async def receive() -> None:
-                    nonlocal echoes
+                    nonlocal echoes, seen_day
                     async for raw in ws:
                         msg = json.loads(raw)
                         kind = msg.get("type")
@@ -773,7 +813,11 @@ def connect(
                         if kind == "narration_chunk":
                             typer.echo(msg["text"], nl=False)
                         elif kind == "beat_committed":
-                            typer.echo(f"\n  ✓ [{msg['participant_id']}] {msg['intent']!r}\n")
+                            typer.echo(f"\n  ✓ [{msg['participant_id']}] {msg['intent']!r}")
+                            for line in beat_detail_lines(msg, seen_day):
+                                typer.echo(line)
+                            seen_day = msg.get("world_day", seen_day)
+                            typer.echo("")
                         elif kind == "not_your_turn":
                             typer.echo("  · not your turn — another player holds it (round-robin)")
                         elif kind == "proposal_opened":
@@ -1482,6 +1526,97 @@ def campaign_show(campaign_id: str) -> None:
         typer.echo("  seats:" if seats else "  seats: (none — the campaign has ended)")
         for participant, pc, name in seats:
             typer.echo(f"    {participant} → {pc} ({name})")
+
+    _run_async(_run)
+
+
+def _print_removed(removed: dict[str, int]) -> None:
+    kept = {k: v for k, v in removed.items() if v}
+    typer.echo("removed: " + (", ".join(f"{v} {k}" for k, v in kept.items()) or "nothing"))
+
+
+def _confirm_or_exit(yes: bool, what: str) -> None:
+    if not yes:
+        typer.echo(
+            f"this permanently deletes {what}; nothing can bring it back. Pass --yes.", err=True
+        )
+        raise typer.Exit(1)
+
+
+@world_app.command("delete")
+def world_delete(
+    world: str,
+    yes: bool = typer.Option(False, "--yes", help="confirm: the world is gone for good"),
+) -> None:
+    """Remove a world and everything it holds, for good (D-99): campaigns, branches, history,
+    memories, its players' notes for it, and the model calls metered for it. A privacy wipe."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            w = await _world_or_exit(store, world)
+            _confirm_or_exit(yes, f"the world {w.name!r} ({w.world_id})")
+            removed = await store.delete_world(w.world_id)
+        finally:
+            await store.close()
+        _print_removed(removed)
+
+    _run_async(_run)
+
+
+@branch_app.command("delete")
+def branch_delete(
+    world: str,
+    branch: str,
+    yes: bool = typer.Option(False, "--yes", help="confirm: the branch is gone for good"),
+) -> None:
+    """Remove a branch, its campaigns and the commits only it reaches (D-99); history it shares
+    with other branches stays. A world's main branch can't be removed (remove the world)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            w = await _world_or_exit(store, world)
+            b = await _branch_or_exit(store, w, branch)
+            _confirm_or_exit(yes, f"the branch {b.name!r} of {w.name!r}")
+            try:
+                removed = await store.delete_branch(b.branch_id)
+            except ValueError as exc:
+                typer.echo(f"error: {exc}", err=True)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        _print_removed(removed)
+
+    _run_async(_run)
+
+
+@campaign_app.command("delete")
+def campaign_delete(
+    campaign_id: str,
+    yes: bool = typer.Option(False, "--yes", help="confirm: the campaign is gone for good"),
+) -> None:
+    """Remove a campaign and its branch (D-99). Refused for a campaign on its world's main branch
+    (remove the world) or on a branch other campaigns share (remove the branch)."""
+
+    async def _run() -> None:
+        from uro_core.timeline.removal import delete_campaign
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            _confirm_or_exit(yes, f"the campaign {c.campaign_id} and its branch")
+            try:
+                removed = await delete_campaign(store, c.campaign_id)
+            except ValueError as exc:
+                typer.echo(f"error: {exc}", err=True)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        _print_removed(removed)
 
     _run_async(_run)
 

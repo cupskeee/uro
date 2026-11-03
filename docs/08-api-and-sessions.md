@@ -50,6 +50,8 @@ GET  /worlds/{w}/log             [?branch=&limit=]                 commit lineag
 GET  /worlds/{w}/events          [?branch=&type=&entity_ref=&caused_by=&limit=]  raw event log (OPERATOR-only, D-45) (BE-4)
 GET  /worlds/{w}/commits/{id}                                      one commit's events (OPERATOR-only, D-45) (BE-4)
 POST /worlds/{w}/branches        {from_ref, name, time_skip_days?}  fork (OPERATOR-only, D-44) (BE-2)
+DELETE /worlds/{w}                                                 remove the world and everything it holds, for good (OPERATOR-only, D-99)
+DELETE /worlds/{w}/branches/{name}                                 remove a branch, its campaigns and the commits only it reaches; `main` → 400 (OPERATOR-only, D-99)
 POST /worlds/{w}/markers         {name, branch?}                   name a branch head (OPERATOR-only, D-44) (BE-3)
 GET  /worlds/{w}/export                                            whole world → hash-chained bundle (OPERATOR-only, D-45) (BE-8)
 POST /worlds/import              {…WorldBundle JSON…}              verify chain + instantiate a fresh world (OPERATOR-only, D-44) (BE-8)
@@ -64,6 +66,7 @@ GET  /campaigns/{c}/roster                                         active PC ids
 GET  /campaigns/{c}/state        [?sections=actors,threads,…]      branch projections; player allowlist, omniscient sections operator-only (D-46) (B5)
 GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats
 GET  /campaigns/{c}/pacing                                         each live thread's quiet beats + the one the next beat would name, under the world's `[pacing]` (D-95)
+DELETE /campaigns/{c}                                              remove the campaign and its branch; one on `main` or sharing its branch → 400 (OPERATOR-only, D-99)
 POST /campaigns/{c}/time-skip    {days, downtime?}                 engine agenda_tick, or pass_time with downtime:false (D-80) (OPERATOR-only, D-46) (D-33)
 POST /campaigns/{c}/dry-run      {intent}                          preview a beat's events, commit nothing (BE-5)
 GET  /campaigns/{c}/consistency                                    narrator contradiction-survival proxy T2 (BE-5)
@@ -214,7 +217,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 | `beat_started` | `participant_id`, `intent`, `intent_id`† |
 | `beat_narrated` | `participant_id`, `intent`, `intent_id`† *(D-71: the narration is complete; the beat is being extracted and normally commits next (`beat_committed`), or ends in `beat_failed` if extraction or the commit fails. `uro connect` frees its prompt here. Not sent for an empty narration, which fails the beat.)* |
 | `narration_chunk` | `participant_id`, `text` |
-| `beat_committed` | `participant_id`, `intent`, `narration`, `commit_id` *(D-67)*, `intent_id`† |
+| `beat_committed` | `participant_id`, `intent`, `narration`, `commit_id` *(D-67)*, `intent_id`†; and *(D-98)* `checks[]` (the ruleset's check results, in its own words: a client may show or hide them), `suggestions[]` (the planner's next-action hints, D-23; empty without a ruleset), `mode` (`encounter` when a fight resolved in the beat, else `freeroam`), `world_day` (the in-fiction day once the beat and any day it passed are committed), `created[]` (`{kind: actor\|place\|faction\|thread, id, name}` the beat made — scene-safe like the `state` sections; never claims, whose truth is operator-only, D-45) |
 | `beat_failed` | `participant_id`, `intent`, `error`, `intent_id`† |
 | `not_your_turn` | `participant_id`, `text` *(round-robin, D-31)*, `intent_id`† |
 | `proposal_opened` | `participant_id`, `text` *(a QUEUED non-holder intent, D-38)*, `intent_id`† |
@@ -228,7 +231,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 
 † `intent_id` echoes the `id` the client sent with that intent (absent if it sent none), so a client can tell its own outcome from another player's identical text.
 
-**Deliberately NOT emitted yet (a future GROW, not drift).** `scene_update` / `mode_change` (the highest-value add — a client's play view can't show scene/mode) need the pipeline to surface within-beat mode state (encounters auto-resolve inside one beat under D-29, so between beats the mode is always free-roam — there is no persistent mode frame to send without new engine state). `mechanics_result` needs the same. `suggestions` (the planner's D-23 next-action hints) and a `beat_committed` `beat_id` (for deep-linking a committed beat) both need the `run_beat` streaming contract to yield structured frames, not only narration strings. `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
+**Deliberately NOT emitted yet (a future GROW, not drift).** Since D-98 the beat's mode, check results and suggestions ride `beat_committed` (above). Still not sent: a `scene_update` (the engine keeps no scene: `SceneEntered` is reserved, D-87), check results *before* the narration (they resolve first, but only arrive with the commit), and a `beat_committed` `beat_id` (for deep-linking a committed beat). `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
 
 Beat results may carry `suggestions[]` — 2–4 affordance-grounded next-action hints emitted by the planner at no extra LLM cost (D-23). **Free-text intent is canonical**; suggestions are hints clients may ignore entirely (the CLI renders them dimmed), never a constrained choice list. (Over the WS wire they are a future GROW, above; the embedded/CLI path already surfaces them.)
 

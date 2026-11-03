@@ -26,5 +26,14 @@ version = ">=0"
 seed_era = "aftermath-of-empire"
 simulate_years = 200
 
+[history.vocabulary]     # D-97: the words `uro world seed` builds this world's past from
+groups = ["Corvane", "Ashmoor", "Dunhallow", "Verric", "Thorne", "Blackmere", "Halloway", "Estmark", "Grausel", "Vane"]
+group_name = "House {name}"
+group_description = "A dynasty risen in {era}."
+titles = ["King", "Queen", "Duke", "Warden", "High Lord", "Reeve"]
+leaders = ["Aldric", "Mira", "Sorel", "Ysolde", "Bram", "Cael", "Nessa", "Roderic"]
+leader_role = "ruler"
+calamities = ["a great plague", "a border war", "a failed harvest", "a schism of faith", "a drowned fleet"]
+
 [llm.roles]
 narrator = "anthropic:claude-sonnet-5"

@@ -78,6 +78,15 @@ version = ">=0.1"            #   alien PbtA build. A campaign started on the wor
 seed_era = "aftermath-of-empire"   # hint to the History service
 simulate_years = 200
 
+[history.vocabulary]         # D-97: the words `uro world seed` builds the past from. The engine
+groups = ["Corvane", "Ashmoor"]  # ships none (no kings, no houses): a pack without a vocabulary
+group_name = "House {name}"  # can't be seeded. {name}: one of `groups`.
+group_description = "A dynasty risen in {era}."   # {era}: "the age of <seed_era>"
+titles = ["King", "Duke"]    # optional: a leader is "<title> <leader>", or just "<leader>"
+leaders = ["Aldric", "Mira"]
+leader_role = "ruler"
+calamities = ["a great plague", "a border war"]   # what marked the era
+
 [llm.roles]                  # SUGGESTIONS; deployment config overrides
 narrator = "anthropic:claude-sonnet-5"
 ```
@@ -133,15 +142,15 @@ parse & schema-validate  →  entity extraction  →  cross-linking  →  SUFFIC
                              lore/*.md)
 ```
 
-`uro world validate` stops at the report. `uro world create` (import) goes further: it commits `WorldGenesis`, then — in the **same import commit, emitter `S`** — emits `PlaceCreated`/`FactionCreated`/`ActorCreated` for every seed entity, `EdgeAdded` for every authored/cross-linked relation, `ClaimRecorded` for authored claims, and `ThreadCreated` for every conflict seed (`12` whitelists `S` on all of these). With `uro world create --backfill`, AI-filled seeds ride the same path and their `ThreadCreated` carries `provenance=ai_backfill` — so the machine's inventions are reviewable committed state, queryable via `proj_threads`. So authored geography, actors, factions, relations, and threads exist as timeline state *before* any History seeding runs. These are seed-independent (they're what the author wrote); History seeding (`H`, run by `uro world seed`) then layers seed-dependent dynasties/wars on top — which is why identical geography survives across different seeds (`03`, Phase 4 acceptance). A world that sets no `history.simulate_years` still has its authored entities, because they land at create, not seed.
+`uro world validate` stops at the report. `uro world create` (import) goes further: it commits `WorldGenesis`, then — in the **same import commit, emitter `S`** — emits `PlaceCreated`/`FactionCreated`/`ActorCreated` for every seed entity, `EdgeAdded` for every authored/cross-linked relation, `ClaimRecorded` for authored claims, and `ThreadCreated` for every conflict seed (`12` whitelists `S` on all of these). With `uro world create --backfill`, AI-filled seeds ride the same path and their `ThreadCreated` carries `provenance=ai_backfill` — so the machine's inventions are reviewable committed state, queryable via `proj_threads`. So authored geography, actors, factions, relations, and threads exist as timeline state *before* any History seeding runs. These are seed-independent (they're what the author wrote); History seeding (`H`, run by `uro world seed`) then layers a seed-dependent past on top (power groups, their leaders and conflicts, in the pack's own `[history.vocabulary]`, D-97) — which is why identical geography survives across different seeds (`03`, Phase 4 acceptance). A world that sets no `history.simulate_years` still has its authored entities, because they land at create, not seed.
 
 The **sufficiency check** scores the assembled world against a coverage rubric — the dimensions the pipeline actually needs at runtime:
 
 | Dimension | Question | Minimum for "runnable" |
 |---|---|---|
-| Geography | Somewhere to be? | ≥1 region, ≥1 settlement, ≥1 site |
+| Geography | Somewhere to be? | ≥1 place, of any kind (D-97: a world may be one ship, one house, one station; `region`/`settlement`/`site` describe a place, they aren't a required shape) |
 | Population | Someone to meet? | ≥3 seeded actors, or `generate_population = true` while the instance lets play create actors (D-81: the people are made in play — the narrator names them, the extractor records them; nothing is generated up front) |
-| Power | Who runs things? | ≥1 faction or ruler |
+| Power | Who runs things? | ≥1 faction, or an actor of tier 2+ (D-97: no role words — the engine doesn't know what a ruler is called in a game) |
 | Conflict seeds | Anything to play about? | ≥1 tension/thread hook |
 | Tone | How should it sound? | tone tags or style template present |
 | History | Any past to reference? | overview lore ≥ threshold, or `history.simulate_years` set |

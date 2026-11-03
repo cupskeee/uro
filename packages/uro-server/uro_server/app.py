@@ -50,7 +50,7 @@ from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.errors import ExportError
 from uro_core.export import BundleCommit, WorldBundle
-from uro_core.pipeline.engine import NARRATION_DONE, Engine
+from uro_core.pipeline.engine import NARRATION_DONE, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
@@ -247,9 +247,9 @@ class ServerDeps:
 
     resolve_participant: Callable[[str], str | None]  # bearer token → participant_id (None = deny)
     campaign_exists: Callable[[str], Awaitable[bool]]
-    run_beat: Callable[
-        [str, str, str], AsyncIterator[str]
-    ]  # (campaign, participant, intent) → chunks
+    # (campaign, participant, intent) → narration chunks, then (D-98) the committed beat's
+    # BeatResult as the last item, so `beat_committed` can carry what the engine knows about it
+    run_beat: Callable[[str, str, str], AsyncIterator[str | BeatResult]]
     # Chronicler mode (D-25): distill an external game's outcome bundle → committed events.
     report_outcome: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
     # campaign → the commit its last beat run here made (D-67): sent with `beat_committed`, and
@@ -377,7 +377,9 @@ def engine_deps(
     if engine.router.recorder is None:  # (a bare test double records nothing, like the Engine)
         engine.router.recorder = getattr(store, "record_llm_call", None)
 
-    async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[str]:
+    async def run_beat(
+        campaign_id: str, participant: str, text: str
+    ) -> AsyncIterator[str | BeatResult]:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             return
@@ -387,11 +389,19 @@ def engine_deps(
             last_commits[campaign_id] = commit_id
             announced.add(commit_id, campaign_id)  # beat_committed will tell this campaign
 
+        results: list[BeatResult] = []
         stream = playing.run_beat_stream(
-            campaign, participant, text, on_commit=committed, mark_narrated=True
+            campaign,
+            participant,
+            text,
+            on_commit=committed,
+            mark_narrated=True,
+            on_result=results.append,
         )
         async for chunk in stream:
             yield chunk
+        if results:  # the beat committed: its result goes last (D-98)
+            yield results[0]
 
     async def report_outcome(campaign_id: str, bundle_json: dict[str, Any]) -> dict[str, Any]:
         from uro_core.chronicler import OutcomeBundle, distill_outcome_with_receipt
@@ -742,19 +752,29 @@ def create_app(
     # Every open play socket with the token it authenticated with, so a revoke can CLOSE the
     # revoked player's sockets at once: an idle socket would otherwise keep reading every broadcast
     # and keep its seat in the turn ring (stalling a party) until its next message.
-    live_sockets: set[tuple[str, WebSocket]] = set()
+    # (token, socket, campaign): a deleted campaign's sockets are closed too (D-99).
+    live_sockets: set[tuple[str, WebSocket, str]] = set()
 
     async def _close_revoked_sockets() -> int:
         """Close every live socket whose token no longer resolves (code 4401). Its handler's
         `finally` then leaves the turn ring and the hub, exactly like a disconnect."""
         closed = 0
-        for token, ws in list(live_sockets):
+        for entry in list(live_sockets):
+            token, ws, _ = entry
             if deps.resolve_participant(token) is None:
-                live_sockets.discard((token, ws))
+                live_sockets.discard(entry)
                 with contextlib.suppress(Exception):  # already closing: nothing left to do
                     await ws.close(code=4401)
                 closed += 1
         return closed
+
+    async def _close_campaign_sockets(campaign_ids: set[str]) -> None:
+        """Close every live socket on a removed campaign (code 4404, as for an unknown one)."""
+        for entry in list(live_sockets):
+            if entry[2] in campaign_ids:
+                live_sockets.discard(entry)
+                with contextlib.suppress(Exception):
+                    await entry[1].close(code=4404)
 
     # A browser SPA (a web console) lives on a DIFFERENT origin than the server, so without CORS the
     # browser blocks every cross-origin call (the request never reaches here — it fails preflight /
@@ -1410,8 +1430,9 @@ def create_app(
         request: Request,
         pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
     ) -> dict[str, Any]:
-        """Run History seeding (`?seed=`, default 42) on a world: seed-dependent dynasties and
-        wars on its authored geography — `uro world seed` over the API. The world doesn't persist
+        """Run History seeding (`?seed=`, default 42) on a world: a seed-dependent past (power
+        groups, leaders, conflicts, in the pack's `[history.vocabulary]`, D-97) on its authored
+        geography — `uro world seed` over the API. The world doesn't persist
         its manifest's `[history]`, so the pack is re-supplied, and it must be the pack the world
         was created from. OPERATOR-only (D-44): a structural write on the main branch."""
         _require_operator(request)
@@ -1542,6 +1563,42 @@ def create_app(
             ],
             "markers": [m.model_dump() for m in markers],
         }
+
+    @app.delete("/worlds/{world_id}", **_out(S.Removed))
+    async def delete_world_endpoint(world_id: str, request: Request) -> dict[str, Any]:
+        """Remove a world and everything it holds, for good (D-99, `uro world delete`): a privacy
+        wipe, not an event. OPERATOR-only. Its campaigns' open sockets are closed (4404)."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        doomed = {c.campaign_id for c in await store.list_campaigns(world_id)}
+        removed = await store.delete_world(world_id)
+        await _close_campaign_sockets(doomed)
+        return {"removed": removed}
+
+    @app.delete("/worlds/{world_id}/branches/{name}", **_out(S.Removed))
+    async def delete_world_branch(world_id: str, name: str, request: Request) -> dict[str, Any]:
+        """Remove a branch, its campaigns and the commits only it reaches (D-99, `uro branch
+        delete`); shared history stays. OPERATOR-only. `main` → 400 (remove the world)."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch = await store.get_branch_by_name(world_id, name)
+        if branch is None:
+            raise HTTPException(status_code=404, detail="no such branch")
+        doomed = {
+            c.campaign_id
+            for c in await store.list_campaigns(world_id)
+            if c.branch_id == branch.branch_id
+        }
+        try:
+            removed = await store.delete_branch(branch.branch_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _close_campaign_sockets(doomed)
+        return {"removed": removed}
 
     @app.post("/worlds/{world_id}/branches", **_out(S.Forked))
     async def fork_world_branch(
@@ -2054,6 +2111,22 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"branch_id": c.branch_id, "state": across.get(c.branch_id, {})}
 
+    @app.delete("/campaigns/{campaign_id}", **_out(S.Removed))
+    async def delete_campaign_endpoint(campaign_id: str, request: Request) -> dict[str, Any]:
+        """Remove a campaign and its branch (D-99, `uro campaign delete`). OPERATOR-only. A
+        campaign on its world's `main`, or sharing its branch, → 400 (the detail says why)."""
+        _require_operator(request)
+        from uro_core.timeline.removal import delete_campaign
+
+        try:
+            removed = await delete_campaign(_mgmt(), campaign_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such campaign") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _close_campaign_sockets({campaign_id})
+        return {"removed": removed}
+
     @app.get("/campaigns/{campaign_id}/pacing", **_out(S.PacingOut))
     async def campaign_pacing(campaign_id: str, request: Request) -> dict[str, Any]:
         """Which live plots have gone quiet and the one the next beat would name (D-95). Thread
@@ -2244,7 +2317,7 @@ def create_app(
             await ws.close(code=4403)  # token not valid for this campaign
             return
         await ws.accept()
-        live_sockets.add((token, ws))
+        live_sockets.add((token, ws, campaign_id))
         # Everything fallible (a DB round-trip in pc_seats) runs INSIDE the try, so a transient
         # failure can't orphan the hub subscription / turn-roster entry (D-39 review: an unguarded
         # pre-try failure leaked the queue forever). The finally cleans up whatever was set up.
@@ -2324,7 +2397,7 @@ def create_app(
         except WebSocketDisconnect:
             pass
         finally:
-            live_sockets.discard((token, ws))
+            live_sockets.discard((token, ws, campaign_id))
             if forward is not None:
                 forward.cancel()
             if queue is not None:
@@ -2354,6 +2427,20 @@ async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> No
         if ws.application_state != WebSocketState.CONNECTED:
             return
         await ws.send_json(message)
+
+
+def _beat_details(result: BeatResult) -> dict[str, object]:
+    """What `beat_committed` carries beside the narration (D-98), all scene-safe: the ruleset's
+    check results (its own words, D-30: a client may show or hide them), the planner's
+    suggestions, the beat's mode, the in-fiction day after it, and the entities it made (no
+    claims: their truth is operator-only, D-45)."""
+    return {
+        "checks": list(result.check_traces),
+        "suggestions": list(result.suggestions),
+        "mode": result.mode,
+        "world_day": result.world_day,
+        "created": [c.model_dump() for c in result.created],
+    }
 
 
 async def _run_and_broadcast(
@@ -2402,8 +2489,12 @@ async def _run_and_broadcast(
         {"type": "beat_started", "participant_id": participant, "intent": text, **echo},
     )
     chunks: list[str] = []
+    result: BeatResult | None = None
     try:
         async for chunk in deps.run_beat(campaign_id, participant, text):
+            if isinstance(chunk, BeatResult):  # the committed beat (D-98), after the narration
+                result = chunk
+                continue
             if chunk == NARRATION_DONE:  # D-71: the story is told; the player may type again
                 await hub.publish(
                     campaign_id,
@@ -2453,6 +2544,7 @@ async def _run_and_broadcast(
             "intent": text,
             "narration": "".join(chunks).strip(),
             "commit_id": commit_id,  # matches the `commit` a client may get for it (D-67)
+            **(_beat_details(result) if result is not None else {}),
             **echo,
         },
     )

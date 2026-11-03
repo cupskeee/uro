@@ -26,3 +26,12 @@ version = "0"
 [history]
 seed_era = "the-year-the-seawall-broke"
 simulate_years = 30
+
+[history.vocabulary]     # D-97: the words `uro world seed` builds this world's past from
+groups = ["Tidewright", "Marrow", "Gull", "Harrow", "Saltpan"]
+group_name = "the {name} Guild"
+group_description = "A guild that rose in {era}."
+titles = ["Master", "Harbormaster", "Elder"]
+leaders = ["Orrin", "Tamsin", "Fell", "Maud", "Corwen", "Ysa"]
+leader_role = "guild master"
+calamities = ["the seawall breaking", "a winter with no fish", "a fire on the wharves", "a sickness off a foreign ship"]

@@ -662,7 +662,7 @@ async def test_a_pack_is_imported_and_seeded_over_the_api(store: PostgresEventSt
         w = made["world_id"]
         seeded = await client.post(_q(f"/worlds/{w}/seed?seed=7"), files=upload)
         assert seeded.status_code == 200, seeded.text
-        assert seeded.json()["dynasties"] > 0
+        assert seeded.json()["groups"] > 0
         other = {"pack": ("e.zip", _zip_pack(pack_dir, rename=f"Other-{new_id()}"), "x/zip")}
         wrong = await client.post(_q(f"/worlds/{w}/seed"), files=other)
         assert wrong.status_code == 400  # another world's pack would seed its history here
@@ -1096,3 +1096,32 @@ async def test_an_http_export_carries_its_format_version(store: PostgresEventSto
         bundle = (await client.get(_q(f"/worlds/{world_id}/export"))).json()
     cli = (await store.export_world(world_id)).model_dump(mode="json")
     assert bundle["v"] == 1 and set(bundle) == set(cli)
+
+
+async def test_removal_over_the_api(store: PostgresEventStore) -> None:
+    # D-99: DELETE a campaign, a branch or a world: operator-only, the CLI's refusals
+    async with _client(store) as client:
+        cid = await _world_campaign(client, "Removable")
+        camp = (await client.get(_q(f"/campaigns/{cid}"))).json()
+        wid = camp["world_id"]
+        bob = (
+            await client.post(
+                _q(f"/campaigns/{cid}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+            )
+        ).json()["token"]
+        assert (await client.delete(f"/worlds/{wid}?token={bob}")).status_code == 403
+        r = await client.delete(_q(f"/campaigns/{cid}"))  # on main: refused, with the reason
+        assert r.status_code == 400 and "main branch" in r.json()["detail"]
+        assert (await client.delete(_q(f"/worlds/{wid}/branches/main"))).status_code == 400
+        head = (await store.get_branch(camp["branch_id"])).head_commit  # type: ignore[union-attr]
+        fork = await store.fork_branch(wid, head, "side")  # type: ignore[arg-type]
+        side = await store.start_campaign(
+            wid, fork.branch_id, participant_id="carol", new_pc_name="Cy"
+        )
+        r = await client.delete(_q(f"/campaigns/{side.campaign_id}"))
+        assert r.status_code == 200 and r.json()["removed"]["campaigns"] == 1
+        assert (await client.delete(_q(f"/campaigns/{side.campaign_id}"))).status_code == 404
+        r = await client.delete(_q(f"/worlds/{wid}"))
+        assert r.status_code == 200 and r.json()["removed"]["worlds"] == 1
+        assert (await client.get(_q(f"/campaigns/{cid}"))).status_code == 404
+        assert (await client.delete(_q(f"/worlds/{wid}"))).status_code == 404

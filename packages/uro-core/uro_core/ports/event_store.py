@@ -201,6 +201,21 @@ class EventStore(Protocol):
         Markers win on collision; an ambiguous prefix raises KeyError, like an unknown ref."""
         ...
 
+    async def delete_world(self, world_id: str) -> dict[str, int]:
+        """Remove a world and everything it holds, for good (D-99, a privacy wipe, not an event):
+        its campaigns, branches, commits, events, projections, memories, markers, snapshots,
+        outbox rows, session tokens, its players' notes for it, and the model calls metered for
+        it (they hold prompts and responses). Embeddings nothing else uses go too. One
+        transaction. Returns what was removed, per kind; raises KeyError for an unknown world."""
+        ...
+
+    async def delete_branch(self, branch_id: str) -> dict[str, int]:
+        """Remove one branch (D-99): its campaigns (and their tokens and PC bindings), its
+        projections, memories and metered calls, and the commits only it reaches — history it
+        shares with another branch stays. `main` can't be removed (remove the world instead):
+        ValueError. Raises KeyError for an unknown branch."""
+        ...
+
     async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:
         """Branch from any commit: a new ref + copy-on-fork projections materialized
         at `from_ref`, sharing history up to that point (docs/03)."""

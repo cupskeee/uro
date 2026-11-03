@@ -170,8 +170,24 @@ def _is_common_noun(name: str) -> bool:
     """A description, not a name (D-51): all-lowercase once a leading article is stripped —
     "the guard", "tallest hooded stranger", "the tavern". A capitalized title ("the Duke") reads as
     a name, and a script without letter case can't be judged, so both pass (`islower` needs a cased
-    letter). Never minted as an actor (D-51), a place or a faction (live run, 2026-10-31)."""
-    return re.sub(r"^(the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE).islower()
+    letter). Never minted as an actor (D-51), a place or a faction (live run, 2026-10-31).
+
+    A capitalized job title or description is one too (D-97): sentence case with no joining word
+    — "Operations supervisor", "Marsh brute". Modern and corporate settings capitalize titles, so
+    the lowercase test alone let a role through (the Halcyon Deep run). A name capitalizes its
+    other words ("Teo Varga", "River raider Kolb") or joins them ("Ilka of Gullwater", "Sable the
+    wizard"), and a possessive names one person ("Mira's mother", D-58); across every world played
+    on the instance this split the extractor's 41 minted names from its one minted title."""
+    bare = re.sub(r"^(the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE)
+    if bare.islower():
+        return True
+    words = bare.split()
+    return (
+        len(words) > 1
+        and not any(w.lower() in _NAME_JOINERS for w in words)
+        and not _POSSESSIVE.search(bare)  # "Mira's mother" is one person, kept apart (D-58)
+        and all(w.islower() for w in words[1:])
+    )
 
 
 # What a model writes for a field it has nothing for — never a name, a place, or a role. Live, a

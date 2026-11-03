@@ -2678,7 +2678,7 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 57
+    assert len([op for ops in spec["paths"].values() for op in ops]) == 60
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).
@@ -2762,3 +2762,46 @@ def test_pacing_404_for_an_unknown_campaign_and_401_without_a_token() -> None:
     app = create_app(_operator_deps(_FakePacingStore(exists=False)))
     assert TestClient(app).get("/campaigns/c:1/pacing?token=tok-b").status_code == 404
     assert TestClient(app).get("/campaigns/c:1/pacing?token=nope").status_code == 401
+
+
+# D-98: what beat_committed carries beside the narration
+
+
+def test_beat_committed_carries_the_beats_details() -> None:
+    from uro_core.pipeline.engine import BeatResult, CreatedEntity
+
+    deps = _fake_deps()
+
+    async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[Any]:
+        yield "The hatch cycles open."
+        yield BeatResult(
+            beat_id="beat:1",
+            narration="The hatch cycles open.",
+            commit_id="c:1",
+            check_traces=["sneak: 14 vs 12 — success"],
+            suggestions=["follow the drag marks"],
+            mode="encounter",
+            world_day=3,
+            created=[CreatedEntity(kind="place", id="p:lock", name="The Dive Lock")],
+        )
+
+    deps.run_beat = run_beat
+    with TestClient(create_app(deps)).websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        ws.send_json({"type": "intent", "text": "I slip through the hatch"})
+        msgs = _recv_until(ws, "beat_committed")
+    done = msgs[-1]
+    assert done["narration"] == "The hatch cycles open."  # the result object is not narration
+    assert done["checks"] == ["sneak: 14 vs 12 — success"]
+    assert done["suggestions"] == ["follow the drag marks"]
+    assert done["mode"] == "encounter" and done["world_day"] == 3
+    assert done["created"] == [{"kind": "place", "id": "p:lock", "name": "The Dive Lock"}]
+    assert not any("claim" in k for k in done)  # no claims: their truth is operator-only (D-45)
+
+
+def test_a_beat_with_no_result_sends_no_details() -> None:
+    with TestClient(create_app(_fake_deps())).websocket_connect(
+        "/campaigns/camp-1/play?token=tok-a"
+    ) as ws:
+        ws.send_json({"type": "intent", "text": "I wait"})
+        done = _recv_until(ws, "beat_committed")[-1]
+    assert "checks" not in done and "created" not in done
