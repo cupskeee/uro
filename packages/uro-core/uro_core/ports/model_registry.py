@@ -2,7 +2,7 @@
 
 The instance-level, DB-backed provider registry: model connections, their (encrypted) credentials,
 and the role→(connection, model) bindings the `ProviderRouter` is built from. Configured over the
-uro-server API by uro-cli / uro-loom; resolved into a router at server startup (wiring layer).
+uro-server API by uro-cli or any client; resolved into a router at server startup (wiring layer).
 
 Deliberately OFF THE BRANCH/EVENT AXIS (like `SessionTokenStore`): instance/deployment config, not
 world state — NOT a projection, NOT event-sourced, never touched by `fork_branch`/`import_world`/
