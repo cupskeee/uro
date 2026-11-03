@@ -1489,7 +1489,7 @@ def campaign_show(campaign_id: str) -> None:
 @campaign_app.command("pacing")
 def campaign_pacing(campaign_id: str) -> None:
     """Which live plots have gone quiet, and the one the next beat would name to the narrator
-    (the pacing director, D-95; a world's `[pacing]` sets when)."""
+    (the pacing director, D-95: off unless the world's `[pacing]` turns it on, D-96)."""
 
     async def _run() -> None:
         from uro_core.pipeline.pacing import pacing_report
@@ -1503,7 +1503,7 @@ def campaign_pacing(campaign_id: str) -> None:
             await store.close()
         st = report.settings
         when = (
-            "off"
+            "off (the world's [pacing] quiet_after turns it on)"
             if st.quiet_after == 0
             else f"names a plot quiet {st.quiet_after}+ beats, at most once every {st.every}"
         )

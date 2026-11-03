@@ -330,10 +330,11 @@ def build_narrator_messages(
         )
     if directives:
         beside_intent.append(f"DIRECTION: {directives}")
-    # A quiet plot the pacing director names (D-95), last, next to the action: in the live A/B the
-    # narrator brought it back 44/80 against 0/80, overriding the player 0/80.
+    # A quiet plot the pacing director names (D-95; only when the world opts in, D-96), last, next
+    # to the action: in the live A/B the narrator brought it back 44/80 against 0/80, overriding the
+    # player 0/80. The wording is the world's `pacing.j2`.
     if paced_thread is not None:
-        beside_intent.append(pacing_line(paced_thread.stakes))
+        beside_intent.append(pacing_line(paced_thread.stakes, env))
 
     system = (env or DEFAULT_ENV).render("narrator.system.j2", style=style)
     messages = [Message(role="system", content=system)]

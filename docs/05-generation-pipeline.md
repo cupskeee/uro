@@ -21,8 +21,8 @@ player intent
    │
    ▼
 [1] CONTEXT ASSEMBLY        structured recall + semantic recall + recency window
-   │                        (see 04-llm-integration.md); the pacing director (D-95,
-   │                        no LLM) may name one quiet live thread beside the intent
+   │                        (see 04-llm-integration.md); if the world opts in, the
+   │                        pacing director (D-95/96, no LLM) names a quiet thread
    ▼
 [2] PLAN (planner role)     classify intent; decide beat structure: outcome shape,
    │                        which actors react, whether mechanics are implicated,

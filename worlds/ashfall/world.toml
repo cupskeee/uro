@@ -14,6 +14,10 @@ days_per_year = 360
 seasons = ["thaw", "highsun", "harvest", "longdark"]
 epoch_label = "After the Sundering"
 
+[pacing]                 # D-96: this world opts in to the pacing director (off by default)
+quiet_after = 25         # name a plot that hasn't come up for 25 beats…
+every = 10               # …at most once every 10 beats
+
 [ruleset]
 id = "uro-basic"
 version = ">=0"

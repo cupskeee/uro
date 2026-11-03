@@ -641,14 +641,16 @@ The same judges as the confirmation run, applied to all three runs.
 
 ## Post-PoC — the pacing director (2026-11-03, D-95, OQ-2's director half)
 
-A quiet plot is named to the narrator beside the intent, at most once every 10 beats, once it has
-gone 25 beats without coming up. Live on Codex `gpt-5.6-luna` (narrating, extracting and judging);
+In a world that opts in (`[pacing] quiet_after`, off by default since D-96; `worlds/ashfall` opts
+in), a quiet plot is named to the narrator beside the intent, at most once every 10 beats, once it
+has gone 25 beats without coming up. Which plots came up is recorded for every world. The line is
+the world's prompt template `pacing.j2` (D-96). Live on Codex `gpt-5.6-luna` (narrating, extracting and judging);
 the judge is the narrator's own model.
 
 | Capability | Status | Evidence |
 |---|---|---|
 | The narrator takes a named plot up | **live-validated (A/B)** | 8 fork points where a thread had been quiet 25-109 beats × recorded and neutral intents × 5: brought back 44/80 with the line against 0/80 without, ahead at 8 of 8 fork points, the player's action overridden 0/80 on both, judged forced 0/44. Read by hand: the plot comes back as a rumor, a sign or a name inside the answer to the player's question. |
 | Which plots went quiet | **measured; best-effort** | the extractor reports the KNOWN threads a narration developed (`develops`); against a judge's labels on 75 forked beats, precision 0.79, recall 0.59 (live, 0.62-0.65 and 0.38-0.56). Word overlap, shared names and embedding similarity scored F1 0.19-0.61 and couldn't aim the nudges. A thread the extractor misses reads as quiet, so a named thread is sometimes already in play (~35% in a simulation over the labels). |
-| A pure function of the branch | **proven (deterministic)** | `test_pacing.py`: a dry run names the same thread as the beat; a fork names what the original would; spacing, ties and the off switch; `[pacing]` validated, refused misspelt, carried through export/import; `Engine(pacing=)`; the CLI and server reads. |
+| A pure function of the branch | **proven (deterministic)** | `test_pacing.py`: a dry run names the same thread as the beat; a fork names what the original would; spacing, ties and the off switch; `[pacing]` validated, refused misspelt, carried through export/import; `Engine(pacing=)`; the CLI and server reads; off by default with the signal still recorded, and a pack's `pacing.j2` rewording the line (D-96). |
 | Over a stretch of play | **live, one fork, 40 beats per arm** | on: 4 named, 3 taken up, 0 overrides, 1 judged forced; 5 of 6 live threads came up against 3 of 7 off, 1 untouched all 40 beats against 4. Nothing resolved on either arm; the director keeps plots alive, it doesn't close them. |
 | The extractor otherwise unchanged | **replayed, 2 runs per arm per model** | the v0.15.0 run's 146 narrations through main's prompt and the new one: threads 4/6 against 7/6 on Codex and 0 on every `gpt-4o-mini` run; claims 96/115 against 99/100 (Codex) and 227/242 against 221/231 (`gpt-4o-mini`); actors and places within a run's own spread. A +1.5-thread lean on Codex is inside the replay-to-replay range (D-79's baselines: 6-8), not separable; the D-79/D-94 thread-cap trigger watches for it. |
