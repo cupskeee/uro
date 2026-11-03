@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from uro_core.domain.events import (
     CausedBy,
     DomainEvent,
+    WorldTime,
     beat_resolved,
     check_resolved,
     claim_recorded,
@@ -139,6 +140,8 @@ class _Shared:
         self.router = router
         # Per-branch prompt style (tone) + template env, from the world's pack (docs/09). Cached.
         self.style_cache: dict[str, tuple[str, PromptEnv]] = {}
+        # Per-branch `[clock]` settings (D-80), from WorldGenesis — immutable, so cached.
+        self.clock_cache: dict[str, dict[str, Any]] = {}
         # Per-branch lock serializing the Reaction pass IN-PROCESS (computation-tier review, D-34):
         # adjust_counter is a non-atomic read-modify-write (read via get_counter, later append the
         # baked absolute), so two react() passes that interleave on one branch lose an increment.
@@ -207,6 +210,14 @@ class Engine:
     @property
     def _style_cache(self) -> dict[str, tuple[str, PromptEnv]]:
         return self._shared.style_cache
+
+    async def _clock_from_intent(self, branch_id: str) -> bool:
+        """Whether the world lets an intent's day cue move its clock (`[clock] from_intent`, D-80;
+        on unless the pack turns it off)."""
+        cache = self._shared.clock_cache
+        if branch_id not in cache:
+            cache[branch_id] = await self._store.world_clock(branch_id)
+        return bool(cache[branch_id].get("from_intent", True))
 
     @property
     def _react_locks(self) -> dict[str, asyncio.Lock]:
@@ -438,7 +449,8 @@ class Engine:
         A caller may supply `plan` (docs/18 B9): the DETERMINISTIC path into the mechanics gate — it
         is validated exactly like an LLM plan (affordance fence + D-21 trigger coverage) but the
         model planner is skipped — CI + keyless consumers resolve checks with no LLM."""
-        cue_days, cue_evidence = (0, "") if self._bare else day_cue(intent_text)
+        reads_intent = not self._bare and await self._clock_from_intent(campaign.branch_id)
+        cue_days, cue_evidence = day_cue(intent_text) if reads_intent else (0, "")
         world_day = await self._store.current_world_time(campaign.branch_id) if cue_days else 0
         recall = await self._recall(
             campaign.branch_id, intent_text, participant_id, campaign.world_id
@@ -608,34 +620,39 @@ class Engine:
         and this is never re-run (cf. distill).
         """
         async with self._react_lock(campaign.branch_id):
-            try:
-                raw = await self._store.world_rule_pack(campaign.branch_id)
-                if not raw:  # no-rules short-circuit — a rule-less world pays ~nothing per beat
-                    return
-                pack = RulePack(**raw)  # a bad/incompatible pack (e.g. version) → caught, disabled
-                if not pack.rules:
-                    return
-                world_day = await self._store.current_world_time(campaign.branch_id)
-                fired = await evaluate_rules(
-                    self._store,
-                    campaign.branch_id,
-                    rules=pack.rules,
-                    trigger_events=trigger_events,
-                    world_day=world_day,
-                )
-                if not fired:
-                    return
-                result = await run_rules_gauntlet(
-                    self._store, campaign.branch_id, fired, trigger_commit=trigger_commit_id
-                )
-                _log_drops("reaction pass", result)
-                if result.events:
-                    commit = await self._store.append_beat(campaign.branch_id, result.events)
-                    await self._cascade(
-                        campaign.branch_id, pack, result.events, commit.commit_id, world_day
-                    )
-            except Exception as exc:  # the beat is durable — a reaction fault must not fail it
-                logger.warning("reaction pass failed; the beat stands, no reactions: %s", exc)
+            await self._react_pass(campaign.branch_id, trigger_commit_id, trigger_events)
+
+    async def _react_pass(
+        self, branch_id: str, trigger_commit_id: str, trigger_events: list[DomainEvent]
+    ) -> None:
+        """react()'s body, for a caller that already holds the branch's react lock (the time paths,
+        D-80: a TimeAdvanced commit is a trigger like any other). Never raises."""
+        try:
+            raw = await self._store.world_rule_pack(branch_id)
+            if not raw:  # no-rules short-circuit — a rule-less world pays ~nothing per beat
+                return
+            pack = RulePack(**raw)  # a bad/incompatible pack (e.g. version) → caught, disabled
+            if not pack.rules:
+                return
+            world_day = await self._store.current_world_time(branch_id)
+            fired = await evaluate_rules(
+                self._store,
+                branch_id,
+                rules=pack.rules,
+                trigger_events=trigger_events,
+                world_day=world_day,
+            )
+            if not fired:
+                return
+            result = await run_rules_gauntlet(
+                self._store, branch_id, fired, trigger_commit=trigger_commit_id
+            )
+            _log_drops("reaction pass", result)
+            if result.events:
+                commit = await self._store.append_beat(branch_id, result.events)
+                await self._cascade(branch_id, pack, result.events, commit.commit_id, world_day)
+        except Exception as exc:  # the trigger is durable — a reaction fault must not fail it
+            logger.warning("reaction pass failed; the commit stands, no reactions: %s", exc)
 
     async def _cascade(
         self,
@@ -735,31 +752,90 @@ class Engine:
         # the primary durable action; `reason` says why (a fork's skip says so — an in-place one
         # used to be recorded as "time-skip on fork" too, live run 2026-10-31)
         skip_commit = await self._store.time_skip(branch_id, days, reason=reason)
-        # The days the skip committed, read from its own TimeAdvanced (the branch lock picked
-        # them): a day read before the skip could be stale under a concurrent skip or play advance
-        detail = await self._store.commit_detail(skip_commit.world_id, skip_commit.commit_id)
-        events = detail.events if detail else []
-        advanced = next((e.payload for e in events if e.event_type == "TimeAdvanced"), None)
-        if advanced is None:
-            logger.warning("time-skip %s has no TimeAdvanced; no downtime, no agendas", skip_commit)
-            return
-        from_day, to_day = int(advanced["from_day"]), int(advanced["to_day"])
-        # The downtime and agenda passes are best-effort over the already-committed time-skip — like
-        # react(), a fault here must not fail the skip (which stands). Under the same per-branch
-        # lock so their read-modify-writes don't interleave with a concurrent react() (D-34 review).
+        # The downtime, reaction and agenda passes are best-effort over the already-committed skip
+        # — like react(), a fault here must not fail the skip (which stands). Under the same
+        # per-branch lock so their read-modify-writes don't interleave with a concurrent react()
+        # (D-34 review).
         async with self._react_lock(branch_id):
             try:
                 await self._downtime(branch_id, days)
             except Exception as exc:
                 logger.warning("downtime failed; the time-skip stands, no rest: %s", exc)
-            await self._agenda_pass(branch_id, from_day, to_day, skip_commit.commit_id)
+            await self._time_passed(branch_id, skip_commit)
+
+    async def _time_passed(self, branch_id: str, commit: Commit) -> None:
+        """After a commit that moved the clock (a skip, an intent's days, a game's pass_time): the
+        world's rules react to its TimeAdvanced (D-80 — a trigger like any other, so a rule on
+        `TimeAdvanced` fires on every path that moves time), then the agendas whose cadence the new
+        days cross fire. The days are read from the commit's own TimeAdvanced — the branch lock
+        picked them; a day read before the commit could be stale under a concurrent advance. The
+        caller holds the react lock. Never raises: the clock's commit is durable."""
+        try:
+            detail = await self._store.commit_detail(commit.world_id, commit.commit_id)
+            events = [
+                DomainEvent(
+                    event_id=e.event_id,
+                    event_type=e.event_type,
+                    entity_refs=e.entity_refs,
+                    world_time=WorldTime(**e.world_time),
+                    caused_by=CausedBy.model_validate(e.caused_by),
+                    payload=e.payload,
+                )
+                for e in (detail.events if detail else [])
+            ]
+            advanced = next((e.payload for e in events if e.event_type == "TimeAdvanced"), None)
+            if advanced is None:
+                logger.warning("commit %s moved no time; no reactions, no agendas", commit)
+                return
+        except Exception as exc:
+            logger.warning("couldn't read the time commit; the time passed stands: %s", exc)
+            return
+        await self._react_pass(branch_id, commit.commit_id, events)
+        await self._agenda_pass(
+            branch_id, int(advanced["from_day"]), int(advanced["to_day"]), commit.commit_id
+        )
+
+    async def pass_time(
+        self,
+        campaign: Campaign,
+        days: int,
+        *,
+        reason: str = "play",
+        evidence: str = "",
+        caused_by: CausedBy | None = None,
+        based_on_day: int | None = None,
+    ) -> Commit | None:
+        """A game moves the clock in play (D-80): one TimeAdvanced of `days` on the campaign's
+        branch as its own commit, then the world's rules react to it and the agendas the new days
+        cross fire — what an intent that passes days does (D-77), for a game that decides time
+        itself (a button, a turn that is an hour, its own calendar). Not a time-skip: no downtime,
+        no adaptation header (use `agenda_tick` for that). With `based_on_day`, nothing commits
+        unless the branch is still on that day (compare-and-set) and None is returned. The cause
+        defaults to `system` (a host's own write); pass a `player_action` cause for a player's.
+        Unlike the intent cue, no cap: the caller is the game, in process."""
+        if days <= 0:
+            raise ValueError("days must be positive")
+        cause = caused_by or CausedBy(kind="system")
+        async with self._react_lock(campaign.branch_id):
+            commit = await self._store.advance_day(
+                campaign.branch_id,
+                based_on_day=based_on_day,
+                days=days,
+                reason=reason,
+                evidence=evidence,
+                caused_by=cause,
+                beat_id=cause.beat_id,
+            )
+            if commit is not None:
+                await self._time_passed(campaign.branch_id, commit)
+        return commit
 
     async def _agenda_pass(
         self, branch_id: str, from_day: int, to_day: int, trigger_commit: str
     ) -> None:
         """Fire the world's agenda rules whose cadence boundary (from_day, to_day] crosses, as one
-        caused_by=module beat after the commit that moved the clock. Shared by an explicit skip and
-        time passed in play (D-77). Never raises: the clock's commit is already durable. The caller
+        caused_by=module beat after the commit that moved the clock. Shared by every path that moves
+        the clock (`_time_passed`). Never raises: the clock's commit is already durable. The caller
         holds the branch's react lock."""
         try:
             raw = await self._store.world_rule_pack(branch_id)
@@ -839,9 +915,7 @@ class Engine:
                 if commit is None:
                     logger.info("the clock moved during the beat; its %d day(s) aren't added", days)
                     return
-                await self._agenda_pass(
-                    campaign.branch_id, ctx.world_day, ctx.world_day + days, commit.commit_id
-                )
+                await self._time_passed(campaign.branch_id, commit)
         except Exception as exc:
             logger.warning("time passed in play wasn't recorded; the beat stands: %s", exc)
 

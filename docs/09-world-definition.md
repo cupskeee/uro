@@ -47,6 +47,11 @@ epoch_label = "After the Sundering"   # single epoch for date rendering. Named n
                                       # (e.g. history.seed_era below) are EVENT-driven, not arithmetic —
                                       # a History-layer concept, not derived from the day counter.
 
+[clock]                      # D-80: what moves the world's day besides an explicit time-skip
+from_intent = true           # an intent that passes whole days moves it (D-77); false = the game
+                             # moves it itself (Engine.pass_time, or the REST/CLI time-skip with
+                             # downtime off). The day stays world state either way.
+
 [ruleset]
 id = "uro-basic"             # resolved via the ruleset registry (06, D-30); "uro-pbta" for the
 version = ">=0.1"            #   alien PbtA build. A campaign started on the world PINS this, so

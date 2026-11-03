@@ -71,6 +71,7 @@ async def import_pack(
         ruleset_version=pack.manifest.ruleset.version,
         ruleset_config=pack.manifest.ruleset.config,
         rule_pack=pack.rule_pack.model_dump() if pack.rule_pack else {},
+        clock=pack.manifest.clock.model_dump(exclude_defaults=True),
         extra_events=pack_to_events(pack),
     )
     return PackImport(world=world, grade=report.grade, backfilled=added)

@@ -1571,9 +1571,15 @@ def campaign_new(
 def campaign_time_skip(
     campaign_id: str,
     days: int = typer.Option(..., "--days", min=1, help="in-fiction days to advance"),
+    downtime: bool = typer.Option(
+        True,
+        "--downtime/--no-downtime",
+        help="rest the sheets and mark a skip (default), or pass the days in play (D-80)",
+    ),
 ) -> None:
     """Advance time ON the campaign's own branch and fire the world's downtime agenda rules (D-33).
-    To skip time on a NEW branch instead, use `uro branch fork --time-skip-days`."""
+    `--no-downtime` passes the days in play instead: the world's rules and agendas react, nothing
+    rests (D-80). To skip time on a NEW branch, use `uro branch fork --time-skip-days`."""
 
     async def _run() -> None:
         store = build_store()
@@ -1584,11 +1590,15 @@ def campaign_time_skip(
             # and settings decide what the downtime means (D-63)
             ruleset = await _time_skip_ruleset(registry.resolve_for_campaign(store, c))
             engine = Engine(store, build_router("stub", None), ruleset=ruleset)
-            await engine.agenda_tick(c.branch_id, days)
+            if downtime:
+                await engine.agenda_tick(c.branch_id, days)
+            else:
+                await engine.pass_time(c, days)
             day = await store.current_world_time(c.branch_id)
         finally:
             await store.close()
-        typer.echo(f"advanced {days} day(s); the campaign is now on day {day}")
+        how = "" if downtime else " in play"
+        typer.echo(f"advanced {days} day(s){how}; the campaign is now on day {day}")
 
     _run_async(_run)
 

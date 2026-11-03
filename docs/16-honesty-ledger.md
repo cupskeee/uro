@@ -596,3 +596,11 @@ The long run's script again, on a fresh Ashfall campaign with all of this live: 
 | Small unstated acts on ordinary beats | **11/110 → 14/110** | the same judge over every ordinary beat of each run. |
 | Threads | **4 (2 emergent), not comparable** | the first run had 9: a different story (the LLM player's beats), and nothing about thread extraction changed. The promise became a thread; the letter didn't, and its callback was used anyway. |
 
+## Post-PoC — the clock's ownership (2026-11-03, D-80)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| A game passes time in play | **proven (deterministic)** | `test_a_game_passes_time_and_the_world_reacts_on_every_path`: `Engine.pass_time` commits its own TimeAdvanced (caused by `system`, no cap), the world's rules and agendas react, a stale `based_on_day` commits nothing; REST `downtime: false` and `uro campaign time-skip --no-downtime` take the same path and rest nobody (`test_rest_management`, `test_cli_time_skip_rests_a_uro_pool_pc`). |
+| A world keeps intents off its clock | **proven** | `[clock] from_intent = false` (`test_a_world_can_keep_intents_off_its_clock`, `test_a_pack_declares_its_clock`): no intent moves the day, a dry run shows no advance, `pass_time` still does; the setting travels in WorldGenesis through export/import; a default pack stores none. |
+| Rules triggered on TimeAdvanced | **live on every path** | they fire on a skip, an intent's days and `pass_time`, told apart by `reason`; before D-80 they parsed and never fired. |
+

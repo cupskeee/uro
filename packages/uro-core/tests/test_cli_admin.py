@@ -144,9 +144,12 @@ async def test_cli_time_skip_rests_a_uro_pool_pc(
         ruleset_id="uro-pool",
     )
     pc = await store.campaign_pc(campaign.campaign_id)
-    result = await asyncio.to_thread(
-        CliRunner().invoke, app, ["campaign", "time-skip", campaign.campaign_id, "--days", "1"]
-    )
+    # days passed in play rest nobody (D-80)
+    args = ["campaign", "time-skip", campaign.campaign_id, "--days", "1"]
+    result = await asyncio.to_thread(CliRunner().invoke, app, [*args, "--no-downtime"])
+    assert result.exit_code == 0 and "in play; the campaign is now on day 1" in result.output
+    assert (await store.get_sheet(w.main_branch_id, pc))["strain"] == 4  # type: ignore[arg-type,index]
+    result = await asyncio.to_thread(CliRunner().invoke, app, args)
     assert result.exit_code == 0, result.output
     assert (await store.get_sheet(w.main_branch_id, pc))["strain"] == 0  # type: ignore[arg-type,index]
 

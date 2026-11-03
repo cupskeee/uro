@@ -9,6 +9,17 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **A game decides what moves its world's day** (D-80). `Engine.pass_time(campaign, days)` passes
+  time in play: its own `TimeAdvanced`, the world's rules and agendas react, nothing rests. It's
+  also `POST /campaigns/{c}/time-skip` with `"downtime": false` and `uro campaign time-skip
+  --no-downtime`. A pack can set `[clock] from_intent = false` in `world.toml` so a player's words
+  never move the day (the D-77 default stays on).
+
+### Fixed
+- **Rules triggered on `TimeAdvanced` fire** (D-80). They were accepted and never ran; now they run
+  on a time-skip, an intent's days and `pass_time`, and can tell them apart by `reason`.
+
 ## [0.14.0] - 2026-11-02
 
 Upgrading: no database migration. If you embed the engine with your own `EventStore`, implement

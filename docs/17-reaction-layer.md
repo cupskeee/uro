@@ -216,3 +216,10 @@ proposers converged; an adversary killed the naive shape).
 - **Still deferred (honest ceiling).** Multi-hop/transitive triggers ("a member of an ALLY of X") need
   `for_each` traversal in CONDITIONS (reserved); aggregate triggers ("the 3rd death this season")
   compose WITH a counter+threshold but are not themselves a new primitive.
+- **Time is a trigger (D-80).** A rule triggered on `TimeAdvanced` was accepted and never fired
+  (only `react` evaluates rules, and no path that moved the clock called it). Now every path does —
+  a time-skip (`agenda_tick`), an intent's days (D-77) and a game's `Engine.pass_time` — so a rule can
+  answer time passing and tell the paths apart by `reason` (`play`, `time-skip`, `time-skip on fork`),
+  binding `evidence`/`beat_id` like any trigger field. Order: the clock's commit, then the reaction
+  beat (rules), then the agenda beat (cadences the new days cross). A cadence still belongs in an
+  agenda (`every_days`); a TimeAdvanced rule fires once per advance, however many days it spans.

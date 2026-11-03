@@ -63,7 +63,7 @@ POST /campaigns/{c}/join         {participant, new_pc_name|adopt_actor_id}   bin
 GET  /campaigns/{c}/roster                                         active PC ids
 GET  /campaigns/{c}/state        [?sections=actors,threads,…]      branch projections; player allowlist, omniscient sections operator-only (D-46) (B5)
 GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats
-POST /campaigns/{c}/time-skip    {days}                            engine agenda_tick (OPERATOR-only, D-46) (D-33)
+POST /campaigns/{c}/time-skip    {days, downtime?}                 engine agenda_tick, or pass_time with downtime:false (D-80) (OPERATOR-only, D-46) (D-33)
 POST /campaigns/{c}/dry-run      {intent}                          preview a beat's events, commit nothing (BE-5)
 GET  /campaigns/{c}/consistency                                    narrator contradiction-survival proxy T2 (BE-5)
 POST /campaigns/{c}/end          {marker, outcome?}                end campaign, release PCs (OPERATOR-only, D-44) (BE-9)
