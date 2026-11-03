@@ -1008,7 +1008,13 @@ class Engine:
             # Free-roam: canonicalize prose through the extractor gauntlet. Bare mode records
             # only the transcript.
             extracted = (
-                [] if self._bare else await self._extract(campaign.branch_id, ctx.recall, narration)
+                []
+                if self._bare
+                else await self._extract(
+                    campaign.branch_id,
+                    await self._known_to_extractor(campaign.branch_id, intent_text, narration, ctx),
+                    narration,
+                )
             )
             events = [
                 beat_resolved(
@@ -1257,6 +1263,22 @@ class Engine:
             )
         except Exception as exc:  # never fail a committed beat
             logger.warning("memory write failed for a committed beat: %s", exc)
+
+    async def _known_to_extractor(
+        self, branch_id: str, intent_text: str, narration: str, ctx: _Context
+    ) -> RecallBundle:
+        """What the extractor is shown as KNOWN (D-82): recall over the intent AND this beat's
+        narration. The beat's recall was built from the intent before the prose existed, so when a
+        narration brought back someone the intent hadn't named (a callback, mostly), none of their
+        facts were KNOWN and the extractor recorded them again in new words — 14 of 60 callback
+        narrations in a replay, 2 with this. Falls back to the beat's recall if the read fails."""
+        try:
+            return await assemble_recall(
+                self._store, branch_id, f"{intent_text}\n{narration}", self._recency
+            )
+        except Exception as exc:
+            logger.warning("couldn't widen the extractor's known state: %s", exc)
+            return ctx.recall
 
     async def _extract(
         self, branch_id: str, recall: RecallBundle, narration: str

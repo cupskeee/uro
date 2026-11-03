@@ -200,7 +200,9 @@ async def _main(source: str, provider: str, branch: str | None = None) -> None:
 
         calls = 0
         for i, b in enumerate(beats, 1):
-            recall = await assemble_recall(store, branch, b.intent_text, RECENCY)
+            # what the engine shows the extractor (D-82): recall over the intent and the narration
+            seen = f"{b.intent_text}\n{b.narration}"
+            recall = await assemble_recall(store, branch, seen, RECENCY)
             messages = build_extractor_messages(recall, b.narration)
             extraction, used = await _extract(router, messages, store, branch)
             calls += used

@@ -17,6 +17,10 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   never move the day (the D-77 default stays on).
 
 ### Fixed
+- **Old facts aren't recorded again when a narration brings them back** (D-82). The extractor's
+  KNOWN lists were built from the player's intent alone, so someone only the narration named had
+  none of their facts there, and the extractor re-recorded them in new words: 14 of 60 callback
+  narrations in a replay. Recall now covers the intent and the narration: 2 of 60.
 - **`generate_population = true` is honest** (D-81). It means the world's people are made in play,
   so it now counts only while the instance's extraction policy lets play create actors; with that
   off, a pack that relies on it is refused as insufficient, saying why.
