@@ -49,4 +49,4 @@ One line per term; the linked doc is the authority. Terms are used *exactly* thi
 | **Trust model** | The evidence hierarchy for canon: state > narrator prose > dialogue (testimony) > player text (never evidence) | `13` |
 | **World** | The container universe: definition + timeline; content settings live here | `02` |
 | **World pack** | The portable directory/archive defining a world (manifest, lore, seeds, prompts) | `09` |
-| **World time** | In-fiction time: absolute day counter + segment; the world-pack calendar derives years & seasons (D-22); named eras are event-driven, not arithmetic; never wall-clock | `12` |
+| **World time** | In-fiction time: absolute day counter + segment; the world-pack calendar is meant to derive years & seasons (D-22; parsed, not yet consumed, D-93); named eras are event-driven, not arithmetic; never wall-clock | `12` |

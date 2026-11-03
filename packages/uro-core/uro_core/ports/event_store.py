@@ -138,6 +138,12 @@ class EventStore(Protocol):
         """Append one beat commit to the branch head and advance it — one transaction."""
         ...
 
+    async def days_since_last_beat(self, branch_id: str) -> int:
+        """In-fiction days the clock moved OUTSIDE play since the branch's newest beat (D-84): the
+        days of every TimeAdvanced after it, except an intent's own (caused by `player_action`
+        with reason `play`, which its beat already narrated). 0 when there's no beat yet."""
+        ...
+
     async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:
         """The last `limit` BeatResolved payloads on the branch, oldest-first.
 

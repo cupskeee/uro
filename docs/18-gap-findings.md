@@ -81,9 +81,10 @@ fork/event-sourcing) → adversarial verify (default-REJECTED) → a completenes
 > **B11 #11/D-40**, **B6 trusted-embedder tier #12/D-41**, **B2 C3/C4/C5 #13** (C6 + computed-delta
 > OQ-1 then shipped as D-54/D-53, 2026-10-30), **B4/B5 P3 trio #14**, and **RL-6 #25/D-42** (quantified/relational triggers).
 > No backlog issue is open. **#15 (distribution)** shipped as PyPI publishing (D-43); only its
-> optional `ghcr.io` `uro-server` image stays deferred (docs/14). Still genuinely reserved:
-> the parked-encounter registry (OQ-12), rumor statement-distortion, branch GC, the append-time
-> emitter whitelist. (C6 cascade + computed-delta shipped 2026-10-30, D-54/D-53.)
+> optional `ghcr.io` `uro-server` image now exists as an owner-activated workflow (D-94, docs/14). Still genuinely reserved:
+> the parked-encounter registry (OQ-12), rumor statement-distortion, branch GC. The append-time
+> emitter whitelist now covers the two closed tiers (`external`, `module`; D-89); the open tiers stay
+> by source. (C6 cascade + computed-delta shipped 2026-10-30, D-54/D-53.)
 
 ### P0 — hit by 3–4 games, clear win
 
@@ -144,7 +145,8 @@ semantics (all 4) · `AliasAdded` / actor-merge for post-hoc entity repair (Sabl
 `ThreadState` literal blocks a game's own alarm words — Seventh G-5, Hollow G-6) · branch deletion /
 GC (Hollowloop G-11) · `--token NAME=PARTICIPANT` + expose `campaign_pcs` in the read surface ·
 `tier` capped at 3 vs a brief's `tier 4` (doc mismatch, Sable G-2) · append-time emitter whitelist
-(the by-policy invariant; Ironwake, Seventh G-27 tripped it deliberately).
+(the by-policy invariant; Ironwake, Seventh G-27 tripped it deliberately — closed for the `external`
+and `module` tiers by D-89: an external-stamped `SheetUpdated` is now refused at `_append`).
 
 ## Validated DEFERRALS — what NOT to build (equally valuable)
 

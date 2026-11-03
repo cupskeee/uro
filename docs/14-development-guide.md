@@ -172,8 +172,16 @@ name"). So `publish.yml` runs one job per package in a distinct environment:
 **Each release.** After cutting the release (steps above), run the publish workflow: Actions →
 **publish** → *Run workflow*. Jobs run `uro-core` → `uro-server` → `uro-cli` (a dependency lands on
 PyPI before its dependents) and upload via trusted publishing — no API tokens anywhere. Set up all
-three publishers before the first run so it completes in one pass. (A `ghcr.io` `uro-server` image is
-a further, still-deferred step: it needs a Dockerfile, and `uro-server` is a thin shell for now.)
+three publishers before the first run so it completes in one pass. **The container image (D-94).** The root `Dockerfile` builds `uro serve` (and the rest of the `uro`
+CLI) from the locked workspace; the store stays external (`URO_DATABASE_URL`, plus `URO_SECRET_KEY`
+for the model registry), nothing secret is baked in (`.dockerignore` keeps `.env`, `uro.toml` and
+`data/` out), and it runs as a non-root user. `docker build -t uro-server .` then
+`docker run -p 8000:8000 -e URO_DATABASE_URL=... uro-server`. Pushing it to `ghcr.io` is
+owner-activated like PyPI: Actions → **image** → *Run workflow* on a release tag builds, smoke-tests
+and pushes `ghcr.io/<owner>/uro-server:<version>` and `:latest` with the job's own token (a first
+push creates the package; set its visibility in the package settings). The CLI-backed provider
+kinds (D-72) and the Codex device login need a host CLI or a browser, so an image deployment uses
+the HTTP provider kinds.
 
 ## Definition of done (any phase)
 

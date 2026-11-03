@@ -278,6 +278,10 @@ class Engine:
             participant_id=participant_id,
             world_ref=world_ref,
         )
+        try:  # days the clock moved outside play since the last scene (D-84), for the narrator
+            recall.days_since_last_scene = await self._store.days_since_last_beat(branch_id)
+        except Exception as exc:  # best-effort, like semantic recall
+            logger.warning("couldn't read the days since the last scene: %s", exc)
         if self._semantic_k <= 0:  # semantic recall off (review: the over-fetch let k=0 through)
             return recall
         recent_texts = {b.narration for b in recall.recent_beats}

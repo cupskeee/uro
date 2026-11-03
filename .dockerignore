@@ -1,0 +1,17 @@
+# Keep secrets, local state and build output out of the image (D-94).
+.env
+.env.*
+uro.toml
+data
+dist
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+docs
+examples
+scripts

@@ -65,7 +65,7 @@ The four "engines" from the research report survive as **core services**, with c
 Owns the physical and cosmological layer: geography, climate, places, resources, magic/cosmology rules. **Correction to the report:** this layer is *not* immutable. It is **slow-changing, not static** — a meteor strike, a flood, a razed city are physical events on the timeline like any other. "Static" only means: within a single moment of the timeline, this layer is fixed context for generation. New worlds can be authored (via world packs) or generated with different characteristics.
 
 ### History service (`engines/history`)
-Two jobs: (1) **seeding** — given a world pack, simulate/generate the backstory up to the campaign start (dynasties, wars, cataclysms) and write it as pre-play events on the timeline; (2) **adaptation** — when play changes the world (king assassinated, plague released), regenerate affected forward-looking narrative threads. History is the *author of context*; the timeline is the *record*.
+Two jobs: (1) **seeding** — given a world pack, simulate/generate the backstory up to the campaign start (dynasties, wars, cataclysms) and write it as pre-play events on the timeline; (2) **adaptation** — when play changes the world (king assassinated, plague released), regenerate affected forward-looking narrative threads. *(Settled, D-88: there is no engine adaptation sweep. A cataclysm's ripple is the world's own reaction rules on the event — the Reaction Layer, D-33 — and a time-skip's `AdaptationApplied` is only its header. History is the genesis seeder.)* History is the *author of context*; the timeline is the *record*.
 
 ### Actor service (`engines/actor`)
 NPCs and factions with beliefs, goals, relationships, and memory. Two critical properties:

@@ -1386,6 +1386,9 @@ class _FakeUsageStore:
             branch_id="b:what-if", world_id=world_id, name=name, head_commit="c:9", head_depth=4
         )
 
+    async def days_since_last_beat(self, branch_id: str) -> int:
+        return 0
+
     async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:
         return [
             BeatResolvedPayload(

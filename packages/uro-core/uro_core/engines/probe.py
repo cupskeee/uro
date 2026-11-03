@@ -2,10 +2,13 @@
 declares — a compatibility REPORT, not enforcement. The engine still runs; a world declaring
 mature content bound to a refusing model gets a loud warning, and platforms may hard-fail.
 
-Probe outputs are graded by the `judge` role against per-probe rubrics, with refusal-pattern
-heuristics as fallback, and raw transcripts attached so a human can overrule the machine (D-24).
-Prefer judge ≠ judged. This ships two representative probes — the hard `structured_output` gate
-and the `content_rating` compatibility signal that motivated probes (owner feedback); the rest
+`structured_output` is graded deterministically (does the JSON parse); `content_rating` asks the
+`judge` role a one-word question (refused or engaged), read from the verdict's first word, with
+refusal-pattern heuristics as the fallback, and raw transcripts attached so a human can overrule
+the machine (D-24). Each distinct model a probe gates is asked (D-92). Prefer judge ≠ judged: a
+judge on the narrator's model is labelled self-judged. This ships two representative probes —
+the hard `structured_output` gate and the `content_rating` compatibility signal that motivated
+probes (owner feedback); the rest
 of the docs/04 suite (context_window / instruction_following / consistency / latency) extends
 the same ask → judge → attach-transcript pattern.
 """
@@ -57,27 +60,40 @@ async def run_probes(
     return ProbeReport(world=manifest.name, results=results)
 
 
+_RANK: dict[ProbeStatus, int] = {"pass": 0, "warn": 1, "fail": 2}
+
+
 async def _probe_structured_output(router: ProviderRouter, tries: int) -> ProbeResult:
-    """The hard gate (docs/04): planner/extractor MUST return schema-valid JSON."""
+    """The hard gate (docs/04): planner/extractor MUST return schema-valid JSON. Each of them is
+    asked when they're bound to different models (D-92: only the planner was, so a split
+    deployment's extractor went untested); the worst result counts."""
     messages = [
         Message(role="system", content='Output ONLY this JSON object: {"ok": true}'),
         Message(role="user", content="Respond."),
     ]
-    valid, transcripts = 0, []
-    for _ in range(tries):
-        raw = await router.complete("planner", messages, json_mode=True, temperature=0.0)
-        transcripts.append(raw)
-        try:
-            obj = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
-            if isinstance(obj, dict) and "ok" in obj:
-                valid += 1
-        except (json.JSONDecodeError, ValueError):
-            pass
-    status: ProbeStatus = "pass" if valid == tries else "warn" if valid else "fail"
+    roles = ["planner"]
+    if not router.same_binding("extractor", "planner"):
+        roles.append("extractor")
+    worst: ProbeStatus = "pass"
+    details, transcripts = [], []
+    for role in roles:
+        valid = 0
+        for _ in range(tries):
+            raw = await router.complete(role, messages, json_mode=True, temperature=0.0)
+            transcripts.append(raw)
+            try:
+                obj = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
+                if isinstance(obj, dict) and "ok" in obj:
+                    valid += 1
+            except (json.JSONDecodeError, ValueError):
+                pass
+        status: ProbeStatus = "pass" if valid == tries else "warn" if valid else "fail"
+        worst = max(worst, status, key=_RANK.__getitem__)
+        details.append(f"{role} {valid}/{tries}")
     return ProbeResult(
         name="structured_output",
-        status=status,
-        detail=f"{valid}/{tries} schema-valid responses",
+        status=worst,
+        detail=f"schema-valid responses: {', '.join(details)}",
         gate_for="planner, extractor",
         transcripts=transcripts,
     )
@@ -94,28 +110,35 @@ async def _probe_content_rating(manifest: WorldManifest, router: ProviderRouter)
             detail="no enabled categories to test",
             gate_for="narrator, dialogue",
         )
+    # the dialogue role narrates NPC speech when it's bound (D-48); ask it too if it's another model
+    roles = ["narrator"]
+    if router.has_role("dialogue") and not router.same_binding("dialogue", "narrator"):
+        roles.append("dialogue")
     refused, transcripts = [], []
-    for category in enabled:
-        prompt = [
-            Message(
-                role="system",
-                content=(
-                    f"Write a short {manifest.content.rating}-intensity scene involving "
-                    f"{category} for a fiction RPG."
+    for role in roles:
+        for category in enabled:
+            prompt = [
+                Message(
+                    role="system",
+                    content=(
+                        f"Write a short {manifest.content.rating}-intensity scene involving "
+                        f"{category} for a fiction RPG."
+                    ),
                 ),
-            ),
-            Message(role="user", content="Begin."),
-        ]
-        raw = await router.complete("narrator", prompt, temperature=0.7)
-        transcripts.append(raw)
-        if await _judge_refused(router, category, raw):
-            refused.append(category)
+                Message(role="user", content="Begin."),
+            ]
+            raw = await router.complete(role, prompt, temperature=0.7)
+            transcripts.append(raw)
+            if await _judge_refused(router, category, raw):
+                refused.append(category if role == "narrator" else f"{category} ({role})")
     status: ProbeStatus = "warn" if refused else "pass"
     detail = (
         f"model refused: {refused} — bind a permissive narrator or platforms may hard-fail"
         if refused
         else f"engaged all enabled categories: {enabled}"
     )
+    if router.same_binding("judge", "narrator"):
+        detail += " (self-judged: the judge is the narrator's model; OQ-9)"
     return ProbeResult(
         name="content_rating",
         status=status,
@@ -142,8 +165,12 @@ async def _judge_refused(router: ProviderRouter, category: str, response: str) -
         verdict = (await router.complete("judge", question, temperature=0.0)).strip().lower()
     except Exception:
         verdict = ""
-    if "refus" in verdict:
+    # the verdict's first word (D-92): "not refused" and "engaged, it did not refuse" read as
+    # refusals when any "refus" anywhere counted
+    words = verdict.replace("'", "").replace('"', "").split()
+    first = words[0].strip(".,!:;-") if words else ""
+    if first == "refused":
         return True
-    if "engage" in verdict:
+    if first == "engaged":
         return False
     return any(marker in response.lower() for marker in _REFUSAL_MARKERS)  # fallback

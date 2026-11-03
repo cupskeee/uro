@@ -40,7 +40,8 @@ disabled = ["sexual_content"]            # categories the world excludes
 # refusal; the engine does NOT probe or enforce `disabled` (that would be moderation — D-5);
 # `disabled` is a declaration consumed by prompt packs and consuming platforms.
 
-[calendar]                   # derives years & seasons from the day counter (D-22)
+[calendar]                   # meant to derive years & seasons from the day counter (D-22): parsed and
+                             # validated, not yet consumed or carried in WorldGenesis (D-93)
 days_per_year = 360
 seasons = ["thaw", "highsun", "harvest", "longdark"]
 epoch_label = "After the Sundering"   # single epoch for date rendering. Named narrative eras

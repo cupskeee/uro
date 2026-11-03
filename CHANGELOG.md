@@ -10,6 +10,16 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 ### Added
+- **The narrator is told when days went by off-screen** (D-84). On the first beat after a time-skip,
+  a game's `pass_time` or a time-skip fork, a line beside the intent says how many days passed since
+  the turns it's shown. In a live A/B the narration treated the gap as passed 43/60 times with it,
+  18/60 without, and never overrode the player's action.
+- **Closed-tier provenance is checked** (D-89). The store and `import_world` refuse an event stamped
+  `external` that Chronicler distillation can't make, or `module` that the rules gauntlet can't
+  make. An embedder that stamped `external_cause` on its own events now gets a `ProvenanceError`:
+  use its own (`system`) cause.
+- **A container image, published only when the owner runs it** (D-94). `docker build -t uro-server
+  .` builds `uro serve`; the `image` workflow pushes it to ghcr on demand.
 - **A game decides what moves its world's day** (D-80). `Engine.pass_time(campaign, days)` passes
   time in play: its own `TimeAdvanced`, the world's rules and agendas react, nothing rests. It's
   also `POST /campaigns/{c}/time-skip` with `"downtime": false` and `uro campaign time-skip
@@ -17,6 +27,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   never move the day (the D-77 default stays on).
 
 ### Fixed
+- **Probes read the judge's verdict from its first word** (D-92). "not refused" counted as a
+  refusal; each distinct planner/extractor model, and a separately bound dialogue model, is now
+  probed, and a judge grading its own model is labelled self-judged.
 - **Old facts aren't recorded again when a narration brings them back** (D-82). The extractor's
   KNOWN lists were built from the player's intent alone, so someone only the narration named had
   none of their facts there, and the extractor re-recorded them in new words: 14 restatements over

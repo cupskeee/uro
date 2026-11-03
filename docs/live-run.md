@@ -250,3 +250,31 @@ uv run uro provider bind extractor <previous connection id> <previous model>
 Read back: the party's two PCs and whose beat each was (`uro events`), the module claim the rule
 committed and whether the narrator voiced it, Brinehold's `CheckResolved` outcomes and sheet
 changes (strain, wounds), and each replay's claims beside the original.
+
+## 10. Checks to run after a long run (D-90, D-94)
+
+Two decisions settled on measurements that a later run should repeat. Both are read-only queries.
+
+```sql
+-- The narrator thread cap's trigger (D-79/D-94): live threads and their rough token cost per branch.
+SELECT branch_id, count(*) AS live, sum(length(stakes)) / 4 AS approx_tokens
+FROM proj_threads WHERE state IN ('active', 'offered')
+GROUP BY branch_id ORDER BY live DESC LIMIT 5;
+
+-- Background extraction's trigger (D-90): the extractor's latency tail.
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS p50,
+       percentile_cont(0.9) WITHIN GROUP (ORDER BY latency_ms) AS p90, max(latency_ms)
+FROM llm_calls WHERE stage_tag = 'extractor' AND error IS NULL
+  AND created_at > now() - interval '30 days';
+```
+
+The cap is built (the shelved D-79 design, exactly) when a played branch holds more than 12 live
+threads or ~500 tokens AND a replay shows a stale thread intruding. Background extraction reopens
+when the p90 passes ~12 s. In the next HUMAN party pass, also record when each intent was sent
+against the previous `beat_committed`, and count `not_your_turn` frames: more than ~5% of intents
+arriving before their predecessor commits reopens it too.
+
+The TIME PASSED line's A/B (D-84) can be re-run on any campaign with time-skips:
+`uv run python scripts/time_passed_ab.py <out.jsonl> <campaign_id>:<beats.jsonl>` (a long-run
+harness log with `kind: SKIP` rows marks where the skips were).
+

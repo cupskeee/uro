@@ -47,6 +47,21 @@ class ProviderRouter:
         an optional role (e.g. `dialogue` speech-routing) opt-in: bound → on, unbound → off."""
         return role in self._bindings
 
+    def same_binding(self, a: str, b: str) -> bool:
+        """Whether two roles are served by the same provider object, or the same kind of provider
+        with the same model (D-92: a probe needn't ask one model twice, and a judge grading its
+        own model is self-judged)."""
+        pa, pb = self._bindings.get(a, self._default), self._bindings.get(b, self._default)
+        if pa is None or pb is None:
+            return pa is pb
+        if pa is pb:
+            return True
+        return (
+            type(pa) is type(pb)
+            and self.model_for(a) is not None
+            and (self.model_for(a) == self.model_for(b))
+        )
+
     def model_for(self, role: str) -> str | None:
         """The model id serving `role`, for metering — or None if nothing serves it or the provider
         doesn't expose a `model` (the port doesn't require one; the stub has none)."""

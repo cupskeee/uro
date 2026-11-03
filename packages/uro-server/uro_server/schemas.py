@@ -312,6 +312,8 @@ class ClaimRow(Out):
     subject_refs: list[str]
     truth: str
     origin: str
+    # the in-fiction day a module claim was made (expire_claims ages it); 0 on every other origin
+    # — display-only there, not a claim's age (D-85)
     created_day: int
 
 
