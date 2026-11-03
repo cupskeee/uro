@@ -43,12 +43,20 @@ from uro_core.pipeline.extraction import (
     build_extractor_messages,
     parse_extraction,
     run_gauntlet,
+    touched_threads,
 )
 from uro_core.pipeline.mechanics import (
     MechanicsResult,
     ResolvedCheck,
     encounter_trigger,
     resolve_mechanics,
+)
+from uro_core.pipeline.pacing import (
+    PacingReport,
+    PacingSettings,
+    pacing_report,
+    quiet_thread,
+    settings_from,
 )
 from uro_core.pipeline.plan import (
     BeatPlan,
@@ -76,7 +84,7 @@ from uro_core.rulesets.base import (
 )
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.clock import day_cue
-from uro_core.timeline.models import Campaign, Commit
+from uro_core.timeline.models import Campaign, Commit, ThreadView
 from uro_core.worldpack.rules import RulePack
 
 logger = logging.getLogger(__name__)
@@ -130,6 +138,8 @@ class _Context(BaseModel):
     cue_days: int = 0
     cue_evidence: str = ""
     world_day: int = 0
+    # The quiet thread the pacing director names to the narrator on this beat (D-95), if any.
+    paced_thread: ThreadView | None = None
 
 
 class _Shared:
@@ -142,6 +152,8 @@ class _Shared:
         self.style_cache: dict[str, tuple[str, PromptEnv]] = {}
         # Per-branch `[clock]` settings (D-80), from WorldGenesis — immutable, so cached.
         self.clock_cache: dict[str, dict[str, Any]] = {}
+        # Per-branch `[pacing]` settings (D-95), from WorldGenesis — immutable, so cached.
+        self.pacing_cache: dict[str, PacingSettings] = {}
         # Per-branch lock serializing the Reaction pass IN-PROCESS (computation-tier review, D-34):
         # adjust_counter is a non-atomic read-modify-write (read via get_counter, later append the
         # baked absolute), so two react() passes that interleave on one branch lose an increment.
@@ -170,6 +182,7 @@ class Engine:
         recency: int = 8,
         semantic_k: int = 4,
         bare: bool = False,
+        pacing: PacingSettings | None = None,
     ) -> None:
         problem = ruleset_contract_problem(ruleset) if ruleset is not None else None
         if problem is not None:  # fail here, not mid-fight on a missing hook (D-65 review)
@@ -186,6 +199,9 @@ class Engine:
         # bare = ablation baseline (thesis T1): a raw-transcript GM — no structured/
         # semantic recall, no extraction, no memory. Just the narrator over recent beats.
         self._bare = bare
+        # The pacing director's settings for every branch, over each world's `[pacing]` (D-95): an
+        # embedder's or an experiment's choice. None → each world's own.
+        self._pacing = pacing
 
     def with_ruleset(self, ruleset: Ruleset | None) -> Engine:
         """A sibling engine bound to another ruleset (a server hosting campaigns of several
@@ -199,6 +215,7 @@ class Engine:
             recency=self._recency,
             semantic_k=self._semantic_k,
             bare=self._bare,
+            pacing=self._pacing,
         )
         sibling._shared = self._shared
         return sibling
@@ -218,6 +235,34 @@ class Engine:
         if branch_id not in cache:
             cache[branch_id] = await self._store.world_clock(branch_id)
         return bool(cache[branch_id].get("from_intent", True))
+
+    async def _paced_thread(self, branch_id: str, threads: list[ThreadView]) -> ThreadView | None:
+        """The quiet thread to name to the narrator on this beat (D-95), from the branch's last
+        beats; None when pacing is off, nothing has gone quiet, or one was named recently.
+        Best-effort, like semantic recall: a failed read names nothing."""
+        try:
+            settings = self._pacing
+            if settings is None:
+                cache = self._shared.pacing_cache
+                if branch_id not in cache:
+                    # an embedder's store from before D-95 has no world_pacing: the defaults
+                    read = getattr(self._store, "world_pacing", None)
+                    cache[branch_id] = (
+                        settings_from(await read(branch_id)) if read else PacingSettings()
+                    )
+                settings = cache[branch_id]
+            if settings.quiet_after <= 0 or not threads:
+                return None
+            recent = await self._store.recent_beats(branch_id, settings.window)
+            return quiet_thread(threads, recent, settings)
+        except Exception as exc:
+            logger.warning("pacing: couldn't choose a quiet thread: %s", exc)
+            return None
+
+    async def pacing(self, branch_id: str) -> PacingReport:
+        """What the pacing director sees on a branch (D-95): each live thread's quiet beats and
+        the thread the next beat would name."""
+        return await pacing_report(self._store, branch_id, settings=self._pacing)
 
     @property
     def _react_locks(self) -> dict[str, asyncio.Lock]:
@@ -411,6 +456,7 @@ class Engine:
             resolved = await self._resolve_encounter(campaign, ctx, trigger)
             if resolved is not None:  # a valid fight formed; otherwise fall through to free-roam
                 events, traces = resolved
+                ctx.paced_thread = None  # a fight beat names no quiet plot (D-95)
                 # Surface the fight's deterministic rounds in BeatResult.check_traces too: the
                 # encounter path resolves outside the free-roam gate, so without this a combat beat
                 # reports 0 checks despite rich mechanics (B9). Extend, don't overwrite — a mixed
@@ -434,6 +480,7 @@ class Engine:
             directives=ctx.directives,
             style=style,
             env=env,
+            paced_thread=ctx.paced_thread,
         )
         return messages, None
 
@@ -460,6 +507,12 @@ class Engine:
             campaign.branch_id, intent_text, participant_id, campaign.world_id
         )
         pc_actor_id = await self._acting_pc(campaign, participant_id)
+        # bare = a raw-transcript GM: no threads, no director
+        paced = (
+            None
+            if self._bare
+            else await self._paced_thread(campaign.branch_id, recall.active_threads)
+        )
         if self._ruleset is None or self._bare:
             if plan is not None:  # can't gate it here — say so, don't silently void it (B9 review)
                 logger.warning(
@@ -472,6 +525,7 @@ class Engine:
                 cue_days=cue_days,
                 cue_evidence=cue_evidence,
                 world_day=world_day,
+                paced_thread=paced,
             )
         if plan is None:
             plan = await self._plan(campaign, intent_text, recall, pc_actor_id)
@@ -494,6 +548,7 @@ class Engine:
             cue_days=cue_days,
             cue_evidence=cue_evidence,
             world_day=world_day,
+            paced_thread=paced,
         )
 
     async def _acting_pc(self, campaign: Campaign, participant_id: str) -> str:
@@ -1015,8 +1070,8 @@ class Engine:
         else:
             # Free-roam: canonicalize prose through the extractor gauntlet. Bare mode records
             # only the transcript.
-            extracted = (
-                []
+            extracted, touched = (
+                ([], [])
                 if self._bare
                 else await self._extract(
                     campaign.branch_id,
@@ -1030,6 +1085,8 @@ class Engine:
                     participant_id=participant_id,
                     intent_text=intent_text,
                     narration=narration,
+                    threads=touched,
+                    paced_thread=ctx.paced_thread.thread_id if ctx.paced_thread else "",
                 ),
                 *check_events,
                 *extracted,
@@ -1291,10 +1348,11 @@ class Engine:
 
     async def _extract(
         self, branch_id: str, recall: RecallBundle, narration: str
-    ) -> list[DomainEvent]:
+    ) -> tuple[list[DomainEvent], list[str]]:
         """Extract state from prose through the gauntlet. Up to 2 re-asks on unparseable
         output (docs/13, mirroring the planner); exhausting them → narration-only beat (state
-        integrity is never sacrificed to keep prose, and prose is never lost to keep state)."""
+        integrity is never sacrificed to keep prose, and prose is never lost to keep state).
+        Also returns the live threads the beat brought into play (D-95), for its BeatResolved."""
         _, env = await self._prompt_style(branch_id)
         messages = build_extractor_messages(recall, narration, env=env)
         raw = ""
@@ -1315,13 +1373,14 @@ class Engine:
             except ProviderError as exc:
                 # A call failure is the adapter's to retry, not ours — bail to narration-only.
                 logger.warning("extractor call failed; committing narration-only beat: %s", exc)
-                return []
+                return [], []
             extraction = parse_extraction(raw)
             if extraction is not None:
                 policy = await self._store.get_extraction_policy()
-                return await run_gauntlet(
+                events = await run_gauntlet(
                     self._store, branch_id, extraction, policy=policy, narration=narration
                 )
+                return events, touched_threads(extraction, recall.active_threads, events)
             messages = [
                 *messages,
                 Message(
@@ -1338,4 +1397,4 @@ class Engine:
             _EXCERPT,
             raw[:_EXCERPT],
         )
-        return []
+        return [], []

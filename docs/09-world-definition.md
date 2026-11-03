@@ -53,6 +53,10 @@ from_intent = true           # an intent that passes whole days moves it (D-77);
                              # moves it itself (Engine.pass_time, or the REST/CLI time-skip with
                              # downtime off). The day stays world state either way.
 
+[pacing]                     # D-95: when the engine names a quiet plot to the narrator
+quiet_after = 25             # a live thread untouched this many beats can be named; 0 = never
+every = 10                   # at most one named thread in this many beats (the defaults shown)
+
 [ruleset]
 id = "uro-basic"             # resolved via the ruleset registry (06, D-30); "uro-pbta" for the
 version = ">=0.1"            #   alien PbtA build. A campaign started on the world PINS this, so

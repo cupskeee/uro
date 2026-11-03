@@ -18,6 +18,7 @@ import re
 from pydantic import BaseModel, Field
 
 from uro_core.domain.events import BeatResolvedPayload
+from uro_core.pipeline.pacing import pacing_line
 from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.base import PLAYER_ACTION, Message
@@ -247,6 +248,7 @@ def build_narrator_messages(
     directives: str = "",
     style: str = "",
     env: PromptEnv | None = None,
+    paced_thread: ThreadView | None = None,
 ) -> list[Message]:
     # each statement once: a rule that records the same rumor on every trigger (Ashfall's failed-
     # check talk) would otherwise list it once per copy (review)
@@ -328,6 +330,10 @@ def build_narrator_messages(
         )
     if directives:
         beside_intent.append(f"DIRECTION: {directives}")
+    # A quiet plot the pacing director names (D-95), last, next to the action: in the live A/B the
+    # narrator brought it back 44/80 against 0/80, overriding the player 0/80.
+    if paced_thread is not None:
+        beside_intent.append(pacing_line(paced_thread.stakes))
 
     system = (env or DEFAULT_ENV).render("narrator.system.j2", style=style)
     messages = [Message(role="system", content=system)]

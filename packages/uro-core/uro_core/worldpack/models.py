@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from uro_core.pipeline.pacing import PacingSettings
 from uro_core.worldpack.rules import RulePack
 
 Rating = Literal["none", "mild", "mature", "explicit"]
@@ -61,6 +62,9 @@ class WorldManifest(BaseModel):
     content: ContentDecl = Field(default_factory=ContentDecl)
     calendar: CalendarDecl = Field(default_factory=CalendarDecl)
     clock: ClockDecl = Field(default_factory=ClockDecl)
+    # `[pacing]` (D-95): when the engine names a quiet plot to the narrator (`quiet_after` beats,
+    # 0 = never; at most once every `every` beats). Unknown keys are refused.
+    pacing: PacingSettings = Field(default_factory=PacingSettings)
     ruleset: RulesetDecl = Field(default_factory=RulesetDecl)
     history: HistoryDecl = Field(default_factory=HistoryDecl)
     llm_roles: dict[str, str] = Field(default_factory=dict)  # [llm.roles] — suggestions

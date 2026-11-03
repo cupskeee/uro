@@ -261,6 +261,7 @@ class PostgresEventStore:
         extra_events: list[DomainEvent] | None = None,
         ruleset_config: dict[str, Any] | None = None,
         clock: dict[str, Any] | None = None,
+        pacing: dict[str, Any] | None = None,
     ) -> World:
         """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, docs/09, 17) plus any
@@ -276,6 +277,10 @@ class PostgresEventStore:
             dupes = duplicate_ids(RulePack(**rule_pack))
             if dupes:  # one would overwrite the other's consequences (D-80 review)
                 raise ValueError(f"rule and agenda ids must be unique; used twice: {dupes}")
+        if pacing:  # a bad `[pacing]` fails here too, not at the first beat (D-95)
+            from uro_core.pipeline.pacing import settings_from
+
+            settings_from(pacing)
         if ruleset_id or ruleset_config:
             # Same rule for the ruleset (D-62): an unknown id or a bad `[ruleset.config]` fails
             # here, not at the first campaign or beat.
@@ -295,6 +300,7 @@ class PostgresEventStore:
                 ruleset_config=ruleset_config,
                 rule_pack=rule_pack,
                 clock=clock,
+                pacing=pacing,
             ),
             *(extra_events or []),
         ]
@@ -2005,6 +2011,17 @@ class PostgresEventStore:
                 branch_id,
             )
         return (row["payload"].get("clock") or {}) if row is not None else {}
+
+    async def world_pacing(self, branch_id: str) -> dict[str, Any]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT e.payload FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "JOIN branches b ON b.world_id = c.world_id "
+                "WHERE b.branch_id = $1 AND e.event_type = 'WorldGenesis' LIMIT 1",
+                branch_id,
+            )
+        return (row["payload"].get("pacing") or {}) if row is not None else {}
 
     async def world_rule_pack(self, branch_id: str) -> dict[str, Any]:
         """The branch's world's Reaction-Layer rule pack (docs/17), read inline from WorldGenesis.

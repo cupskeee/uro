@@ -33,6 +33,7 @@ from uro_core.timeline.models import (
     LineageEntry,
     Marker,
     ParticipantNote,
+    ThreadView,
     World,
 )
 from uro_server.app import ServerDeps, create_app
@@ -2677,7 +2678,7 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 56
+    assert len([op for ops in spec["paths"].values() for op in ops]) == 57
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).
@@ -2707,3 +2708,57 @@ def test_a_hand_built_core_model_response_is_strict() -> None:
 
     with pytest.raises(ValueError):
         WorldOut.model_validate({"world_id": "w", "main_branch_id": "b", "name": "n", "extra": 1})
+
+
+# D-95: the pacing director's read
+
+
+class _FakePacingStore:
+    """EngineStore stand-in for `/campaigns/{c}/pacing` (no live DB)."""
+
+    def __init__(self, *, exists: bool = True) -> None:
+        self._exists = exists
+
+    async def get_campaign(self, campaign_id: str) -> Campaign | None:
+        if not self._exists:
+            return None
+        return Campaign(campaign_id=campaign_id, world_id="w", branch_id="b:main")
+
+    async def world_pacing(self, branch_id: str) -> dict[str, Any]:
+        return {"quiet_after": 2, "every": 1}
+
+    async def list_threads(self, branch_id: str) -> list[ThreadView]:
+        return [
+            ThreadView(
+                thread_id="t:a", stakes="The wagons stopped.", state="active", provenance="author"
+            ),
+            ThreadView(
+                thread_id="t:b", stakes="The heron is lost.", state="dormant", provenance="author"
+            ),
+        ]
+
+    async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:
+        return [
+            BeatResolvedPayload(
+                beat_id=f"beat:{n}", participant_id="player-1", intent_text="i", narration="n"
+            )
+            for n in range(3)
+        ]
+
+
+def test_pacing_any_player_reads_the_quiet_plots() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakePacingStore()))).get(
+        "/campaigns/c:1/pacing?token=tok-b"  # a plain player: thread stakes are player-safe
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["settings"] == {"quiet_after": 2, "every": 1} and body["beats_read"] == 3
+    assert [t["thread_id"] for t in body["threads"]] == ["t:a"]  # dormant ones aren't live
+    assert body["threads"][0]["quiet_beats"] == 3 and body["threads"][0]["at_least"] is True
+    assert body["next_paced"] == "t:a"
+
+
+def test_pacing_404_for_an_unknown_campaign_and_401_without_a_token() -> None:
+    app = create_app(_operator_deps(_FakePacingStore(exists=False)))
+    assert TestClient(app).get("/campaigns/c:1/pacing?token=tok-b").status_code == 404
+    assert TestClient(app).get("/campaigns/c:1/pacing?token=nope").status_code == 401

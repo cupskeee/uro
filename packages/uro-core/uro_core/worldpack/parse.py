@@ -14,6 +14,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from uro_core.errors import PackError
+from uro_core.pipeline.pacing import PacingSettings
 from uro_core.worldpack.models import (
     ActorSeed,
     CalendarDecl,
@@ -119,6 +120,7 @@ def _manifest(path: Path) -> WorldManifest:
             content=ContentDecl(**data.get("content", {})),
             calendar=CalendarDecl(**data.get("calendar", {})),
             clock=ClockDecl(**data.get("clock", {})),
+            pacing=PacingSettings(**data.get("pacing", {})),
             ruleset=RulesetDecl(**data.get("ruleset", {})),
             history=HistoryDecl(**data.get("history", {})),
             llm_roles=data.get("llm", {}).get("roles", {}),

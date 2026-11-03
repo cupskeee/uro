@@ -76,6 +76,9 @@ class WorldGenesisPayload(BaseModel):
     # The pack's `[clock]` settings (D-80): which of the engine's policies move the world's day.
     # {} = the defaults (an intent that passes days moves it, D-77).
     clock: dict[str, Any] = Field(default_factory=dict)
+    # The pack's `[pacing]` settings (D-95): when the engine names a quiet plot to the narrator.
+    # {} = the defaults (`pipeline/pacing.py`).
+    pacing: dict[str, Any] = Field(default_factory=dict)
 
 
 class BeatResolvedPayload(BaseModel):
@@ -86,6 +89,11 @@ class BeatResolvedPayload(BaseModel):
     narration: str
     # short recap for the chronicle; populated once a summarizer exists (docs/12)
     synopsis: str = ""
+    # The live threads this beat brought into play (D-95): the KNOWN threads the extractor says
+    # the narration developed, plus any it created or resolved. What the pacing director reads.
+    threads: list[str] = Field(default_factory=list)
+    # The quiet thread the engine named to the narrator on this beat (D-95), "" if none.
+    paced_thread: str = ""
 
 
 # --- Constructors (the only sanctioned way to mint these events) ---
@@ -101,6 +109,7 @@ def world_genesis(
     ruleset_config: dict[str, Any] | None = None,
     rule_pack: dict[str, Any] | None = None,
     clock: dict[str, Any] | None = None,
+    pacing: dict[str, Any] | None = None,
 ) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
@@ -114,6 +123,7 @@ def world_genesis(
             ruleset_config=ruleset_config or {},
             rule_pack=rule_pack or {},
             clock=clock or {},
+            pacing=pacing or {},
         ).model_dump(),
     )
 
@@ -125,6 +135,8 @@ def beat_resolved(
     intent_text: str,
     narration: str,
     synopsis: str = "",
+    threads: list[str] | None = None,
+    paced_thread: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="BeatResolved",
@@ -135,6 +147,8 @@ def beat_resolved(
             intent_text=intent_text,
             narration=narration,
             synopsis=synopsis,
+            threads=threads or [],
+            paced_thread=paced_thread,
         ).model_dump(),
     )
 

@@ -85,7 +85,7 @@ from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.providers.base import Message
-from uro_core.timeline.models import ClaimView
+from uro_core.timeline.models import ClaimView, ThreadView
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +139,9 @@ class Extraction(BaseModel):
     # ids of KNOWN threads the narration SETTLES (D-52) — the gauntlet resolves only an active/
     # offered EMERGENT one; authored plots stay under author/rule control.
     resolves: list[str] = Field(default_factory=list)
+    # ids of KNOWN threads the narration brings into play (D-95): it changes no state, only notes
+    # that the plot came up, so the pacing director can tell a quiet thread from a live one.
+    develops: list[str] = Field(default_factory=list)
 
 
 # Entity-name canonicalization: fold case/whitespace and strip a leading article, so an actor
@@ -403,6 +406,7 @@ def build_extractor_messages(
         '"places": [{"name", "description", "parent": larger place name (optional)}], '
         '"factions": [{"name", "description"}], "threads": [{"stakes"}], '
         '"resolves": [ids of KNOWN THREADS this narration settles], '
+        '"develops": [ids of KNOWN THREADS this narration brings into play], '
         '"claims": [{"statement", "about": [names], "provenance": "narrator"|"dialogue", '
         '"speaker": name (dialogue only), "contradicts": [known claim ids], '
         '"supersedes": [known claim ids this narration CHANGES], '
@@ -453,6 +457,7 @@ def parse_extraction(raw: str) -> Extraction | None:
                     {"claims": _claims_fail_closed(data.get("claims"))}, "claims", ProposedClaim
                 ),
                 resolves=_salvage_ids(data, "resolves"),
+                develops=_salvage_ids(data, "develops"),
             )
     return None
 
@@ -490,6 +495,20 @@ def _salvage_ids(data: dict[str, Any], key: str) -> list[str]:
 def _slice_json_object(text: str) -> str | None:
     start, end = text.find("{"), text.rfind("}")
     return text[start : end + 1] if 0 <= start < end else None
+
+
+def touched_threads(
+    extraction: Extraction, threads: list[ThreadView], events: list[DomainEvent]
+) -> list[str]:
+    """The live threads a beat brought into play (D-95), for its BeatResolved: the KNOWN live
+    threads the extractor says it developed or resolved (an unknown id is dropped), and every
+    thread its own events created or resolved. Order kept, no repeats."""
+    live = {t.thread_id for t in threads if t.state in ("active", "offered")}
+    ids = [tid for tid in [*extraction.develops, *extraction.resolves] if tid in live]
+    for e in events:
+        if e.event_type in ("ThreadCreated", "ThreadStateChanged"):
+            ids.append(e.payload["thread_id"])
+    return list(dict.fromkeys(ids))
 
 
 async def run_gauntlet(

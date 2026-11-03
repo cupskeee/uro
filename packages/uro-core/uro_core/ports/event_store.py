@@ -40,6 +40,7 @@ class EventStore(Protocol):
         extra_events: list[DomainEvent] | None = None,
         ruleset_config: dict[str, Any] | None = None,
         clock: dict[str, Any] | None = None,
+        pacing: dict[str, Any] | None = None,
     ) -> World:
         """Create a world: its `main` branch and a `WorldGenesis` genesis commit (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, plus any `extra_events` —
