@@ -598,8 +598,8 @@ def serve(
     ),
 ) -> None:
     """Run the Uro server (docs/08): a thin FastAPI shell over the engine. Each --token maps to
-    a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop, on
-    127.0.0.1 only: binding any other host needs --token).
+    a participant; with no --token and no --admin-token, a single 'local' token binds player-1 (the
+    solo dev loop, on 127.0.0.1 only: binding any other host needs --token).
 
     Each campaign plays under the ruleset it pinned, as with `uro play`: one server hosts d20,
     PbtA and Uro Pool campaigns side by side. `--ruleset` sets the default for unpinned ones."""
@@ -610,13 +610,16 @@ def serve(
 
     # The default 'local' token is a guessable name, fine on loopback (the solo dev loop) and
     # nowhere else: anyone who can reach a public bind could play as player-1 with it (D-94 review).
-    if not token and host not in ("127.0.0.1", "localhost", "::1"):
+    if not token and not admin_token and host not in ("127.0.0.1", "localhost", "::1"):
         typer.echo(
-            f"error: binding {host} needs --token: the default 'local' token is only for 127.0.0.1",
+            f"error: binding {host} needs --token or --admin-token: the default 'local' token is "
+            "only for 127.0.0.1",
             err=True,
         )
         raise typer.Exit(2)
-    toks = token or ["local"]
+    # the default 'local' token is for a bare `uro serve` only: with an --admin-token given, adding
+    # it would quietly open a second, guessable credential beside the one asked for
+    toks = token or ([] if admin_token else ["local"])
     # `TOK=participant` names the participant explicitly (gap G-16 — token order was load-bearing
     # config); a bare `TOK` falls back to positional player-1..N.
     tokens: dict[str, str] = {}
@@ -653,7 +656,8 @@ def serve(
         "vote": VoteArbiter,
     }
     if arbiter_kind is None:
-        arbiter: TurnArbiter | None = PartyArbiter() if len(tokens) > 1 else None
+        # a party is several PARTICIPANTS, not several tokens (two tokens for one player is solo)
+        arbiter: TurnArbiter | None = PartyArbiter() if len(set(tokens.values())) > 1 else None
     elif arbiter_kind not in shapes:
         raise typer.BadParameter(
             f"--arbiter must be one of {', '.join(shapes)} (got {arbiter_kind!r})"

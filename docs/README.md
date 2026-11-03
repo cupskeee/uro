@@ -10,7 +10,8 @@ New here? The [root README](../README.md) is the friendly, game-dev-first introd
 
 - **`00`–`11`** — the design, in order (vision → architecture → domain → timeline → LLM → pipeline → rulesets → persistence → API → worlds → roadmap → open questions).
 - **`12`–`15`** — the developer-facing contracts and guides; read before writing code.
-- **`16`–`19`** — the honest capability map + the post-PoC designs.
+- **`16`–`21`** — the honest capability map + the post-PoC designs.
+- **`22`** — building a client on Uro (start here if you're writing a UI).
 - **`glossary.md`** pins the vocabulary (one line, one authority); **`decisions.md`** records why things are the way they are (ADR-style).
 
 ## Documentation map
@@ -36,6 +37,7 @@ New here? The [root README](../README.md) is the friendly, game-dev-first introd
 | [16-honesty-ledger.md](16-honesty-ledger.md) | The honest proven / proxy / stub-only / deferred map |
 | [17-reaction-layer.md](17-reaction-layer.md) · [18-gap-findings.md](18-gap-findings.md) · [19-computation-tier.md](19-computation-tier.md) | Post-PoC designs: the reaction layer, the games' gap backlog, the computation tier |
 | [decisions.md](decisions.md) · [glossary.md](glossary.md) | The ADR-style decision log (D-1..) · every term, one line each |
+| [22-building-a-client.md](22-building-a-client.md) | A primer for building a client (a web UI) on Uro: run it locally, the play loop over WebSocket, bring-your-own-model settings, what to design for |
 | [live-run.md](live-run.md) | How to reproduce the LLM-dependent legs with your own key |
 
 ## What's built (the build log)

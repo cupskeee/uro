@@ -9,6 +9,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **A primer for building a client on Uro** (`docs/22-building-a-client.md`): running it locally,
+  the play loop over WebSocket, the bring-your-own-model settings screen, and what to design for.
+
+### Fixed
+- **`uro serve --admin-token` alone no longer also opens the default `local` token** (D-94). Two
+  tokens for one player no longer pick the party arbiter, and an admin token alone may serve a
+  public bind.
+
 ## [0.15.0] - 2026-11-03
 Upgrading: no database migration. Two breaking changes. `uro serve` on any address other than
 127.0.0.1 now needs `--token` (the default `local` token is guessable). An embedder that stamped
