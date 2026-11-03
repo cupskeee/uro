@@ -22,6 +22,12 @@ jobs:
         run: |
           version=$(python3 -c "import tomllib; print(tomllib.load(open('packages/uro-server/pyproject.toml','rb'))['project']['version'])")
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # only on the release tag: ghcr tags are mutable, so a run from main would replace the
+          # released :<version> image with unreleased code
+          if [ "$GITHUB_REF_TYPE" != tag ] || [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "run this on the release tag v$version (got $GITHUB_REF_TYPE $GITHUB_REF_NAME)" >&2
+            exit 1
+          fi
       - name: Build
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/uro-server"
@@ -30,8 +36,13 @@ jobs:
       - name: Smoke
         run: |
           docker run --rm "$IMAGE:latest" --help
+          docker run --rm --entrypoint python "$IMAGE:latest" -c "import asyncpg, httpx, cryptography, nats"
           # a public bind without a token is refused (the default 'local' token is guessable)
-          ! docker run --rm "$IMAGE:latest" serve --host 0.0.0.0
+          set +e
+          out=$(docker run --rm "$IMAGE:latest" serve --host 0.0.0.0 2>&1)
+          rc=$?
+          set -e
+          test "$rc" -eq 2 && grep -q "needs --token" <<<"$out"
       - name: Push
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin

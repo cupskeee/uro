@@ -1,5 +1,5 @@
 # The uro-server image (D-94): `uro serve` and the rest of the `uro` CLI, built from the locked
-# workspace. The store stays external (D-43: Postgres + pgvector is the one store) — point it at
+# workspace with every extra (postgres, llm, nats — so `serve --nats` and `outbox relay` work). The store stays external (D-43: Postgres + pgvector is the one store) — point it at
 # one with URO_DATABASE_URL, and pass URO_SECRET_KEY for the model registry's credentials. Nothing
 # secret is baked in (.dockerignore keeps .env, uro.toml and local data out).
 #
@@ -15,7 +15,7 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY packages ./packages
-RUN uv sync --frozen --all-packages --no-dev
+RUN uv sync --frozen --all-packages --all-extras --no-dev
 
 COPY worlds ./worlds
 RUN useradd --create-home --uid 10001 uro && chown -R uro /app

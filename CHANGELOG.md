@@ -14,10 +14,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   a game's `pass_time` or a time-skip fork, a line beside the intent says how many days passed since
   the turns it's shown. In a live A/B the narration treated the gap as passed 43/60 times with it,
   18/60 without, and never overrode the player's action.
-- **Closed-tier provenance is checked** (D-89). The store and `import_world` refuse an event stamped
+- **Closed-tier provenance is checked** (D-89; breaking for embedders). The store and `import_world` refuse an event stamped
   `external` that Chronicler distillation can't make, or `module` that the rules gauntlet can't
   make. An embedder that stamped `external_cause` on its own events now gets a `ProvenanceError`:
-  use its own (`system`) cause.
+  use its own (`system`) cause. A world whose log already holds such an event (committed before
+  this) still exports, but this version won't import it.
 - **A container image, published only when the owner runs it** (D-94). `docker build -t uro-server
   .` builds `uro serve`; the `image` workflow pushes it to ghcr on demand.
 - **A game decides what moves its world's day** (D-80). `Engine.pass_time(campaign, days)` passes
@@ -27,7 +28,8 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   never move the day (the D-77 default stays on).
 
 ### Fixed
-- **`uro serve` refuses a public bind without `--token`** (D-94). With no `--token` it binds the
+- **`uro serve` refuses a public bind without `--token`** (D-94; breaking for a public bind with
+  no `--token`). With no `--token` it binds the
   guessable token `local`, fine on 127.0.0.1 and nowhere else.
 - **Probes read the judge's verdict from its first word** (D-92). "not refused" counted as a
   refusal; each distinct planner/extractor model, and a separately bound dialogue model, is now

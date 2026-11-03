@@ -4,8 +4,10 @@ Two causes have closed producers: `external` events come only from distilling a 
 bundle (`_distill_core`, shared by the untrusted Chronicler route and the trusted embedder tier),
 and `module` events come only from the rules gauntlet (`engines/rules_gauntlet.py`). So an event
 stamped with either cause must be one those producers can make. This check runs where events are
-committed (`EventStore._append`) and imported, so a log that says `caused_by=external` or
-`caused_by=module` says the event came through distillation or the gauntlet.
+committed (`EventStore._append`) and imported, so a closed-tier label is limited to the event
+shapes its producer can make. It doesn't prove the event came through distillation or the
+gauntlet: an `external` ActorDied an embedder commits itself passes, unchecked against the D-32
+ceiling (which lives in distillation).
 
 What it is not: an authority fence. An embedder holds root and can commit anything under its own
 `system` cause; the D-32 protection ceiling stays enforced at distillation. The open causes

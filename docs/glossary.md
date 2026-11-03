@@ -5,7 +5,7 @@ One line per term; the linked doc is the authority. Terms are used *exactly* thi
 | Term | Meaning | Doc |
 |---|---|---|
 | **Actor** | Any character, NPC or PC; one type, tiered T0–T3 | `02` |
-| **Adaptation pass** | History service re-evaluating threads/claims after major events, forks, or time-skips | `03` |
+| **Adaptation pass** | Not an engine pass (D-88): a cataclysm's ripple is the world's reaction rules on the event; a time-skip's `AdaptationApplied` is only its header | `03` |
 | **Affordance** | A mechanics capability a ruleset declares (e.g. `persuade`), the only rules vocabulary the planner may invoke | `06` |
 | **Backfill** | Opt-in AI generation filling sufficiency-check gaps in a world pack, provenance-tagged | `09` |
 | **Beat** | One player intent, resolved end-to-end through the pipeline; the unit of play in free-roam | `05` |

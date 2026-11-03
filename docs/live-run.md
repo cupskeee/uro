@@ -261,11 +261,12 @@ SELECT branch_id, count(*) AS live, sum(length(stakes)) / 4 AS approx_tokens
 FROM proj_threads WHERE state IN ('active', 'offered')
 GROUP BY branch_id ORDER BY live DESC LIMIT 5;
 
--- Background extraction's trigger (D-90): the extractor's latency tail.
-SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS p50,
+-- Background extraction's trigger (D-90): the extractor's latency tail, per model.
+SELECT model, count(*), percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS p50,
        percentile_cont(0.9) WITHIN GROUP (ORDER BY latency_ms) AS p90, max(latency_ms)
 FROM llm_calls WHERE stage_tag = 'extractor' AND error IS NULL
-  AND created_at > now() - interval '30 days';
+  AND created_at > now() - interval '30 days'
+GROUP BY model ORDER BY count(*) DESC;
 ```
 
 The cap is built (the shelved D-79 design, exactly) when a played branch holds more than 12 live

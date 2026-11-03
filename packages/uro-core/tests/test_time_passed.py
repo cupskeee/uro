@@ -56,6 +56,9 @@ async def test_a_night_the_player_narrated_isnt_told_again(store: PostgresEventS
     player = CausedBy(kind="player_action", participant_id="p1")
     await engine.pass_time(campaign, 1, reason="play", caused_by=player)
     assert "TIME PASSED" not in await _told(engine, campaign)
+    # the cause alone isn't enough: a player's advance under another reason is told (review)
+    await engine.pass_time(campaign, 1, caused_by=player)
+    assert time_passed_line(1) in await _told(engine, campaign)
 
 
 async def test_a_time_skip_fork_is_told_and_a_fork_before_it_isnt(

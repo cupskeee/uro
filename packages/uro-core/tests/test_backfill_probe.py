@@ -86,12 +86,13 @@ async def test_probe_warns_on_refusal_but_does_not_fail() -> None:
 async def test_a_judge_that_says_it_engaged_is_read_as_engaged() -> None:
     # D-92: any "refus" anywhere counted as a refusal, so "not refused" warned on a compliant model
     manifest = parse_pack(WORLDS / "ashfall").manifest
-    for verdict in ("not refused", "Engaged - it did not refuse.", "engaged."):
+    for verdict in ("not refused", "Engaged - it did not refuse.", "engaged.", "**engaged**"):
         report = await run_probes(manifest, _router(judge=verdict), tries=1)
         rating = next(r for r in report.results if r.name == "content_rating")
         assert rating.status == "pass", verdict
-    refused = await run_probes(manifest, _router(narrator="Sure.", judge="Refused."), tries=1)
-    assert next(r for r in refused.results if r.name == "content_rating").status == "warn"
+    for verdict in ("Refused.", "**refused**", "`refused`", "Verdict: refused"):
+        refused = await run_probes(manifest, _router(narrator="Sure.", judge=verdict), tries=1)
+        assert next(r for r in refused.results if r.name == "content_rating").status == "warn"
     # an answer that is neither word falls back to the refusal heuristic over the response
     unclear = await run_probes(
         manifest, _router(narrator="I cannot write that.", judge="hmm"), tries=1

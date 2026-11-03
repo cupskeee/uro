@@ -253,9 +253,10 @@ async def test_time_skip_is_carried_and_isolated_on_fork(store: PostgresEventSto
 
 async def test_the_meteor_ripple_is_authored(store: PostgresEventStore) -> None:
     # OQ-8 closed (D-88): the "adaptation ripple" after a cataclysm is the world's own rules, not an
-    # engine sweep. One world rule on PlaceDestroyed kills the festival plot, opens a refugee plot,
-    # records the news and spreads it to those who knew the city; it commits as a module beat
-    # after the strike, forks away cleanly before it, and travels with the world.
+    # engine sweep. One world rule on PlaceDestroyed kills the festival plot, creates a (dormant)
+    # refugee plot, records the news as a rumor and bumps a grief counter on a named contact's
+    # knows-neighbours; it commits as a module beat after the strike, forks away cleanly before
+    # it, and travels with the world.
     from uro_core.domain.events import edge_added, thread_created
     from uro_core.pipeline.engine import Engine
     from uro_core.providers.adapters.stub import StubProvider
