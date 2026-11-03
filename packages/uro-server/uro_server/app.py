@@ -1342,7 +1342,11 @@ def create_app(
                 parsed = parse_pack(root)
             except PackError as exc:  # a malformed pack is bad INPUT → 400, not a 500
                 raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
-            report = check_sufficiency(parsed)
+            # a server with a store knows whether play may create actors (generate_population, D-49)
+            makes_people = (
+                (await deps.store.get_extraction_policy()).extract_actors if deps.store else True
+            )
+            report = check_sufficiency(parsed, play_creates_actors=makes_people)
             rid = parsed.manifest.ruleset.id
             problem = ruleset_problem(parsed)  # an unknown id, or settings it refuses (D-62)
             return {

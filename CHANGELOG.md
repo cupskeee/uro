@@ -17,6 +17,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   never move the day (the D-77 default stays on).
 
 ### Fixed
+- **`generate_population = true` is honest** (D-81). It means the world's people are made in play,
+  so it now counts only while the instance's extraction policy lets play create actors; with that
+  off, a pack that relies on it is refused as insufficient, saying why.
+- **`scripts/extraction_replay.py` replays the campaign, not a longer fork.** It took the branch with
+  the most beats, so a fork that played on past the campaign became the source; it now takes the
+  played campaign's branch, and `--branch` picks one.
 - **Rules triggered on `TimeAdvanced` fire** (D-80). They were accepted and never ran; now they run
   on a time-skip, an intent's days and `pass_time`, and can tell them apart by `reason`.
 

@@ -66,7 +66,7 @@ integrity as *keyless* tamper-evidence, `history.simulate_years` (stamped, not s
 | Procedural history seeding (reproducible + seed-varying) | proven | pure fn of (manifest, seed). |
 | `history.simulate_years` scales the sim | proxy | stamped, not a deeper simulation. |
 | AI backfill · capability probes | **stub-only** *(superseded: live-validated once in "the v0.7 live run", below)* | logic tested with a fake/stub provider; **never run live**. |
-| `generate_population=true` actually generates a populace | **stub-only / overclaim** | the flag lets a 0-actor pack grade `runnable`, but **nothing consumes it** (reconciled: doc note + it should gate on real actors). |
+| `generate_population=true` actually generates a populace | **reconciled (D-81)** | it never generated anyone up front, and still doesn't: the flag now means the people are made in play (the narrator names them, the extractor records them, D-49/D-50), and it counts only while the instance's extraction policy lets play create actors — otherwise the pack is refused as insufficient (`test_a_pack_relying_on_play_for_its_people_needs_play_to_make_them`). |
 | Ruleset registry (`id@version` → impl) | partial | resolves; unknown fails loudly; **version not enforced**, `config` reserved. |
 
 ## Phase 5 — server/federation · Phase 7 — multiplayer · Phase 8 — Chronicler

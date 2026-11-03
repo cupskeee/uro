@@ -57,13 +57,25 @@ def _label(e: DomainEvent | dict[str, Any]) -> str:
     return f"{t.removesuffix('Created').removesuffix('Recorded')}: {text}"
 
 
-async def _beat_branch(store: PostgresEventStore, world_id: str) -> tuple[str, int]:
-    """The source world's branch with the most beats (its played campaign). An earlier replay is
-    a fork of this world with as many beats, so it is never a candidate (review)."""
+async def _beat_branch(
+    store: PostgresEventStore, world_id: str, branch: str | None = None
+) -> tuple[str, int]:
+    """The source branch: `branch` (a name or id) if given, else the played campaign's — the
+    branch of a campaign on this world with the most beats. Only without a campaign, the branch
+    with the most beats. An earlier replay is a fork of this world with as many beats, so it is
+    never a candidate (review); nor is a fork that played on past the campaign (a held-out run's
+    fork outnumbered the campaign it continued, 2026-11-02)."""
+    branches = [b for b in await store.list_branches(world_id) if not b.name.startswith("replay-")]
+    if branch is not None:
+        chosen = [b for b in branches if branch in (b.branch_id, b.name)]
+        if not chosen:
+            raise SystemExit(f"no branch {branch!r} in this world")
+        branches = chosen
+    else:
+        played = {c.branch_id for c in await store.list_campaigns(world_id)}
+        branches = [b for b in branches if b.branch_id in played] or branches
     best = ("", -1)
-    for b in await store.list_branches(world_id):
-        if b.name.startswith("replay-"):
-            continue
+    for b in branches:
         n = len(await store.recent_beats(b.branch_id, 10_000))
         best = max(best, (b.branch_id, n), key=lambda x: x[1])
     return best
@@ -157,7 +169,7 @@ async def _extract(
     return None, 3
 
 
-async def _main(source: str, provider: str) -> None:
+async def _main(source: str, provider: str, branch: str | None = None) -> None:
     load_dotenv(find_dotenv(usecwd=True))  # URO_SECRET_KEY decrypts the registry's credentials
     store = PostgresEventStore(DSN)
     await store.connect()
@@ -171,7 +183,7 @@ async def _main(source: str, provider: str) -> None:
             if not named:
                 raise SystemExit(f"no world {source!r}")
             src = named[0]
-        src_branch, n = await _beat_branch(store, src.world_id)
+        src_branch, n = await _beat_branch(store, src.world_id, branch)
         beats = await store.recent_beats(src_branch, 10_000)
         if provider == "stub":
             router = ProviderRouter({}, default=StubProvider())
@@ -228,5 +240,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("world", help="the source world (id or name) whose narrations to replay")
     ap.add_argument("--provider", choices=["registry", "stub"], default="registry")
+    ap.add_argument("--branch", help="the source branch (name or id); default: the campaign's")
     args = ap.parse_args()
-    asyncio.run(_main(args.world, args.provider))
+    asyncio.run(_main(args.world, args.provider, args.branch))

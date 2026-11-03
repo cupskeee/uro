@@ -132,7 +132,7 @@ The **sufficiency check** scores the assembled world against a coverage rubric �
 | Dimension | Question | Minimum for "runnable" |
 |---|---|---|
 | Geography | Somewhere to be? | ≥1 region, ≥1 settlement, ≥1 site |
-| Population | Someone to meet? | ≥3 seeded actors or explicit "generate freely" flag |
+| Population | Someone to meet? | ≥3 seeded actors, or `generate_population = true` while the instance lets play create actors (D-81: the people are made in play — the narrator names them, the extractor records them; nothing is generated up front) |
 | Power | Who runs things? | ≥1 faction or ruler |
 | Conflict seeds | Anything to play about? | ≥1 tension/thread hook |
 | Tone | How should it sound? | tone tags or style template present |

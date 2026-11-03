@@ -75,3 +75,18 @@ def test_parse_errors(tmp_path: Path) -> None:
     (tmp_path / "entities" / "places.yaml").write_text("not: a-list\n")
     with pytest.raises(PackError):  # entities file is not a YAML list
         parse_pack(tmp_path)
+
+
+def test_generate_population_counts_only_while_play_makes_people() -> None:
+    # The flag means the world's people are made in play — the narrator names them and the
+    # extractor records them (D-49/D-50) — so it stands in for seeded actors only while the
+    # instance's extraction policy lets play create actors.
+    pack = _pack(manifest=WorldManifest(name="T", tone=["x"], generate_population=True))
+    on = next(d for d in check_sufficiency(pack).dimensions if d.name == "population")
+    off = next(
+        d
+        for d in check_sufficiency(pack, play_creates_actors=False).dimensions
+        if d.name == "population"
+    )
+    assert on.ok and "made in play" in on.detail
+    assert not off.ok and "keeps play from creating actors" in off.detail

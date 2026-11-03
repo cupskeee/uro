@@ -56,11 +56,13 @@ async def import_pack(
     problem = ruleset_problem(pack)
     if problem is not None:
         raise PackError(f"pack declares a ruleset this build can't play: {problem}")
-    report = check_sufficiency(pack)
+    # generate_population stands in for seeded actors only while play may create them (D-49)
+    makes_people = (await store.get_extraction_policy()).extract_actors
+    report = check_sufficiency(pack, play_creates_actors=makes_people)
     added: list[str] = []
     if backfill_router is not None and report.grade != "runnable":
         pack, added = await backfill_gaps(pack, backfill_router, report=report)
-        report = check_sufficiency(pack)
+        report = check_sufficiency(pack, play_creates_actors=makes_people)
     if report.grade == "insufficient":
         raise PackError(f"pack is INSUFFICIENT to run: {'; '.join(report.gaps)}")
     world = await store.create_world(
