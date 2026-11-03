@@ -15,7 +15,7 @@ seq          int
 event_type   str                  # from this catalog
 entity_refs  [entity_id]          # every entity the event touches (recall index)
 world_time   {day: int, segment: morning|afternoon|evening|night}   # absolute day since world epoch;
-                                                                    # world-pack calendar derives years & seasons (D-22).
+                                                                    # world-pack calendar would derive years & seasons (D-22); parsed, not yet consumed (D-93).
                                                                     # Named eras are event-driven (History layer), not arithmetic.
 caused_by    (below)
 payload      {v: 1, ...}          # versioned per event type
@@ -25,9 +25,9 @@ payload      {v: 1, ...}          # versioned per event type
 
 ## Emitter whitelist
 
-Each event type declares who may emit it — the core hallucination defense: the LLM-fed extractor can only ever *propose* types marked **X**; mechanical outcomes only ever come from the ruleset. **How it's enforced (PoC):** structurally at the source, not by a generic commit-time emitter check. The extractor's output schema (`Extraction`, `pipeline/extraction.py`) can only express actors, places, factions, threads, claims, `member_of`/`located_in` affiliations (D-49/D-50), and the ids of known threads the narration settles (D-52), so `run_gauntlet` emits only `ActorCreated`/`PlaceCreated`/`FactionCreated`/`ThreadCreated`/`EdgeAdded`/`ClaimRecorded`/`BeliefChanged` `ThreadStateChanged` (→ `resolved`, a live EMERGENT thread only), `EntityAliasAdded` (an alias on a KNOWN actor, D-56), and `ClaimTruthChanged` (→ `false`, `cause=superseded`: a fact the NARRATOR established, retired by a narrated change, D-70 — never an authored, mechanical, external or module fact) — the LLM is *incapable* of proposing a mechanical event. The ruleset/pipeline/system emitters are likewise the only code paths that mint their event types. A generic per-commit `caused_by`-vs-whitelist validator is not (yet) a separate gate; this table is the source-of-truth contract those emitters are written to.
+Each event type declares who may emit it — the core hallucination defense: the LLM-fed extractor can only ever *propose* types marked **X**; mechanical outcomes only ever come from the ruleset. **How it's enforced (PoC):** structurally at the source, not by a generic commit-time emitter check. The extractor's output schema (`Extraction`, `pipeline/extraction.py`) can only express actors, places, factions, threads, claims, `member_of`/`located_in` affiliations (D-49/D-50), and the ids of known threads the narration settles (D-52), so `run_gauntlet` emits only `ActorCreated`/`PlaceCreated`/`FactionCreated`/`ThreadCreated`/`EdgeAdded`/`ClaimRecorded`/`BeliefChanged` `ThreadStateChanged` (→ `resolved`, a live EMERGENT thread only), `EntityAliasAdded` (an alias on a KNOWN actor, D-56), and `ClaimTruthChanged` (→ `false`, `cause=superseded`: a fact the NARRATOR established, retired by a narrated change, D-70 — never an authored, mechanical, external or module fact) — the LLM is *incapable* of proposing a mechanical event. The ruleset/pipeline/system emitters are likewise the only code paths that mint their event types. For the two CLOSED tiers there is now also a commit-time gate (D-89): `EventStore._append` and `import_world` refuse an event stamped `external` that distillation can't make (only `ActorDied`, `ItemTransferred`, and `ClaimRecorded` with `truth=unknown`) or stamped `module` that the rules gauntlet can't make (`ClaimRecorded` `truth=unknown`, `ClaimTruthChanged` `truth=false`, `ThreadCreated` `provenance=module`, `ThreadStateChanged`, `EdgeAdded`/`EdgeRemoved`, `CounterChanged`, `BeliefChanged`) — `domain/provenance.py`. The open causes stay by source: this table is the contract those emitters are written to, not a gate on an embedder (who holds root).
 
-Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects · **H** = History service (seeding, adaptation, and mid-play thread consequences) · **A** = Actor service (off-screen sim) · **P** = pipeline core · **S** = system/API (import, seeding, admin, fork ops) · **M** = module / Reaction Layer (D-33 — pack-authored declarative rules; a CLOSED action set gauntleted to `truth=unknown`/`origin=module` testimony + thread-state/edge changes, scope-fenced, never canon/mechanics) · **E** = external resolver (Chronicler mode, D-25 — the encounter it was handed: mechanical facts reported back (deaths/loot) commit directly; interpretive content (a feat) commits as `truth=unknown` **testimony** + witness beliefs, NOT as protected canon. *PoC: feat testimony is not yet run through the extractor gauntlet — that tier/contradiction validation is the OQ-12 refinement.*).
+Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects · **H** = History service (seeding at genesis, and a time-skip's header — D-88: no mid-play adaptation pass) · **A** = Actor service (off-screen sim) · **P** = pipeline core · **S** = system/API (import, seeding, admin, fork ops) · **M** = module / Reaction Layer (D-33 — pack-authored declarative rules; a CLOSED action set gauntleted to `truth=unknown`/`origin=module` testimony + thread-state/edge changes, scope-fenced, never canon/mechanics) · **E** = external resolver (Chronicler mode, D-25 — the encounter it was handed: mechanical facts reported back (deaths/loot) commit directly; interpretive content (a feat) commits as `truth=unknown` **testimony** + witness beliefs, NOT as protected canon. *PoC: feat testimony is not yet run through the extractor gauntlet — that tier/contradiction validation is the OQ-12 refinement.*).
 
 ## Catalog v0
 
@@ -37,8 +37,8 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | `WorldGenesis` | world_name, tone[], prompt_overrides{}, ruleset_id, ruleset_version, ruleset_config{}, rule_pack{}, clock{} | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) + its declared ruleset (`06`, D-30 — a campaign started on the world binds it) and that ruleset's settings (`ruleset_config`, D-62 — every ruleset built for the world's campaigns gets them), and its `[clock]` settings (`clock`, D-80 — `{}` = the defaults) |
 | `PlaceCreated` | place entity, tier of detail | X H S | extractor may create Sites only |
 | `PlaceStateChanged` | place_id, changes{} | X H A | population, government ref, economy flavor |
-| `TerrainChanged` | place_id, description, effects[] | H R S | the meteor crater; slow-layer physical change. Mid-play, History emits it as a **thread's consequence-on-resolution** (`02`), `caused_by=player_action` — this is how a player-triggered cataclysm is recorded during a campaign (not extractor/pipeline) |
-| `PlaceDestroyed` | place_id, cause | H R S | as above — a thread consequence or ruleset effect, not extractor-proposed |
+| `TerrainChanged` | place_id, description, effects[] | H R S | the meteor crater; slow-layer physical change. Committed by whoever authors the cataclysm — a game or embedder (`append_and_react`), History seeding, or a ruleset effect — never the extractor or pipeline; its ripple is the world's reaction rules on it (D-88) |
+| `PlaceDestroyed` | place_id, cause | H R S | as above — authored or a ruleset effect, never extractor-proposed; a pack rule triggered on it carries the ripple (`caused_by=module`, D-88) |
 
 ### Actors
 | event_type | payload | emit | notes |
@@ -69,7 +69,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Claims & beliefs (epistemic layer)
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `ClaimRecorded` | claim_id, statement, subject_refs, truth, origin, created_day | X H P S E M | narration-asserted → `truth=true`; character-asserted → `truth=unknown` (see `05`); `S` covers authored pack claims at import (`09`); `E` covers a Chronicler feat, committed as `truth=unknown` **testimony** (never protected canon), `origin=external` (`chronicler.py`, D-25); `M` covers module rumors (`origin=module`); `created_day` is the in-fiction birth day for `expire_claims` (C5, D-34) |
+| `ClaimRecorded` | claim_id, statement, subject_refs, truth, origin, created_day | X H P S E M | narration-asserted → `truth=true`; character-asserted → `truth=unknown` (see `05`); `S` covers authored pack claims at import (`09`); `E` covers a Chronicler feat, committed as `truth=unknown` **testimony** (never protected canon), `origin=external` (`chronicler.py`, D-25); `M` covers module rumors (`origin=module`); `created_day` is the in-fiction birth day for `expire_claims` (C5, D-34) — filled only on module claims; on every other origin it is 0 and display-only (D-85) |
 | `ClaimTruthChanged` | claim_id, truth, cause | P H M X | investigation resolves `unknown`; contradiction repair; `X` covers a narrated CHANGE of state retiring the narrator fact it supersedes to `truth=false`, `cause=superseded` (D-70 — never an authored, mechanical, external or module fact); `M` covers `expire_claims` retracting a stale MODULE rumor to `truth=false` (C5, D-34 — structurally never a `truth=true`/canon claim) |
 | `BeliefChanged` | actor_id, claim_id, confidence, learned_from | X A P | rumor spread = BeliefChanged fan-out |
 
@@ -97,10 +97,10 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 |---|---|---|---|
 | `CampaignStarted` | campaign_id, branch_id, party[], ruleset_id, ruleset_version, seed | S | pins the governing ruleset id **and version** (D-30) so a later play/fork rebinds the same ruleset via the registry (`06`) |
 | `CampaignEnded` | campaign_id, outcome, marker_ref | S | usually paired with a marker |
-| `SceneEntered` | place_id, present_actors[], mode | P | |
+| `SceneEntered` | place_id, present_actors[], mode | P | reserved: no producer exists (D-87 — recall's on-stage set is "named in the window", not presence) |
 | `ModeChanged` | from, to (`freeroam|encounter|downtime`), cause | P R | |
 | `BeatResolved` | beat_id, participant_id, intent_text, synopsis, narration | P | exactly one per beat commit; the chronicle's raw material |
-| `TimeAdvanced` | from, to, reason (+ evidence, beat_id when play passed it) | P H S | P: a free-roam beat by the seated solo player whose intent passes whole days (D-77): reason `play`, its own commit after the beat and its reactions, evidence = the intent's sentence, caused by `player_action`; S: a game's `Engine.pass_time` (D-80), reason `play`, caused by `system` unless the game passes a cause; H: `time-skip` (in place) / `time-skip on fork`. A reaction rule may trigger on it on every path (D-80). |
+| `TimeAdvanced` | from, to, reason (+ evidence, beat_id when play passed it) | P H S | P: a free-roam beat by the seated solo player whose intent passes whole days (D-77): reason `play`, its own commit after the beat and its reactions, evidence = the intent's sentence, caused by `player_action`; S: a game's `Engine.pass_time` (D-80), reason `game` unless the game passes one (`operator` from the REST/CLI no-downtime skip), caused by `system` unless it passes a cause — time a player's own beat already narrated stays off the next beat's TIME PASSED count only as reason `play` with a `player_action` cause (D-84); H: `time-skip` (in place) / `time-skip on fork`. A reaction rule may trigger on it on every path (D-80). |
 
 ### Encounter (ruleset-driven)
 | event_type | payload | emit | notes |
@@ -113,7 +113,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | event_type | payload | emit | notes |
 |---|---|---|---|
 | `HistorySeeded` | seed, simulated_years, era_summary | H | seeding also emits ordinary Created/Edge events; this is the header |
-| `AdaptationApplied` | trigger_refs, scope (`timeskip` in place, `fork-timeskip` on a fork), summary | H | header for an adaptation pass — at fork/time-skip AND after a major in-play event (OQ-8); ripple events carry `caused_by=history, pass=adaptation` |
+| `AdaptationApplied` | trigger_refs, scope (`timeskip` in place, `fork-timeskip` on a fork), summary | H | a time-skip's honest header only (no LLM ripple). There is no engine adaptation pass (D-88): a cataclysm's ripple is the world's reaction rules, `caused_by=module` |
 
 ## Rules of the catalog
 

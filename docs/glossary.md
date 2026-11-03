@@ -5,7 +5,7 @@ One line per term; the linked doc is the authority. Terms are used *exactly* thi
 | Term | Meaning | Doc |
 |---|---|---|
 | **Actor** | Any character, NPC or PC; one type, tiered T0–T3 | `02` |
-| **Adaptation pass** | History service re-evaluating threads/claims after major events, forks, or time-skips | `03` |
+| **Adaptation pass** | Not an engine pass (D-88): a cataclysm's ripple is the world's reaction rules on the event; a time-skip's `AdaptationApplied` is only its header | `03` |
 | **Affordance** | A mechanics capability a ruleset declares (e.g. `persuade`), the only rules vocabulary the planner may invoke | `06` |
 | **Backfill** | Opt-in AI generation filling sufficiency-check gaps in a world pack, provenance-tagged | `09` |
 | **Beat** | One player intent, resolved end-to-end through the pipeline; the unit of play in free-roam | `05` |
@@ -49,4 +49,4 @@ One line per term; the linked doc is the authority. Terms are used *exactly* thi
 | **Trust model** | The evidence hierarchy for canon: state > narrator prose > dialogue (testimony) > player text (never evidence) | `13` |
 | **World** | The container universe: definition + timeline; content settings live here | `02` |
 | **World pack** | The portable directory/archive defining a world (manifest, lore, seeds, prompts) | `09` |
-| **World time** | In-fiction time: absolute day counter + segment; the world-pack calendar derives years & seasons (D-22); named eras are event-driven, not arithmetic; never wall-clock | `12` |
+| **World time** | In-fiction time: absolute day counter + segment; the world-pack calendar is meant to derive years & seasons (D-22; parsed, not yet consumed, D-93); named eras are event-driven, not arithmetic; never wall-clock | `12` |

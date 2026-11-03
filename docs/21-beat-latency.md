@@ -73,8 +73,15 @@ The full version commits a beat in two steps:
   follow-on commit; an extraction that fails leaves the narration without its facts (as a parse
   failure already does today).
 
-**Why deferred:** with `beat_narrated`, the time left after the story (3–7 s at `low`) passes
-while the player reads and types, so for a single player it would buy almost nothing. Its real
-benefit is in a party, where the next player's turn begins only when the previous beat is saved.
-Build it when that wait shows up in play, or when the extractor has to get slower (a larger model,
-longer narration) than a player's reading time.
+**Why deferred (settled, D-90):** the player waits on the work before the story (recall, planner,
+narrator: ~7 s), which background extraction can't shorten. The work after it — extraction plus
+embedding, p50 5.2 s and p90 10.0 s over a 146-beat campaign with the extractor at the default
+effort — finished before a reader got through the streamed narration (~76 words, ~18 s at a
+modelled 250 wpm) on 143 of 144 beats; the exception was one 63.8 s extractor call, and about 1% of
+calls take over 15 s. A party is no different: the next player reads the same narration. The costs
+are structural — two commits a beat, rules and the clock on a later commit, a fork or the live feed
+seeing narration without its facts, the next beat recalling without new entities (1 of 5 new actors
+was named in the very next intent). Reopen on human-paced timing showing over 5% of intents arriving
+before their predecessor commits, an extractor p90 over 12 s, a consumer with no reading pause, or
+`not_your_turn` retries in real party play (then first try holding the next holder's intent until
+the turn rotates).

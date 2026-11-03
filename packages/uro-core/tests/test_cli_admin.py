@@ -172,3 +172,14 @@ def test_serve_opens_its_store_and_accepts_a_player(
         client.websocket_connect(f"/campaigns/{env.campaign}/play?token=tok-a") as ws,
     ):
         assert any(ws.receive_json()["type"] == "participant_joined" for _ in range(5))
+
+
+def test_serve_refuses_a_public_bind_without_a_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    # D-94 review: the default 'local' token is a guessable name; on 0.0.0.0 (the container image's
+    # bind) anyone who reached the port could play as player-1 with it.
+    import uvicorn
+
+    served: list[Any] = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: served.append(app))
+    code, out = _uro("serve", "--host", "0.0.0.0", "--provider", "stub")
+    assert code == 2 and "needs --token" in out and served == []

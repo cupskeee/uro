@@ -598,7 +598,8 @@ def serve(
     ),
 ) -> None:
     """Run the Uro server (docs/08): a thin FastAPI shell over the engine. Each --token maps to
-    a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop).
+    a participant; with no --token, a single 'local' token binds player-1 (the solo dev loop, on
+    127.0.0.1 only: binding any other host needs --token).
 
     Each campaign plays under the ruleset it pinned, as with `uro play`: one server hosts d20,
     PbtA and Uro Pool campaigns side by side. `--ruleset` sets the default for unpinned ones."""
@@ -607,6 +608,14 @@ def serve(
     from uro_core.session import PartyArbiter, ProposalWindowArbiter, TurnArbiter, VoteArbiter
     from uro_server.app import create_app, engine_deps
 
+    # The default 'local' token is a guessable name, fine on loopback (the solo dev loop) and
+    # nowhere else: anyone who can reach a public bind could play as player-1 with it (D-94 review).
+    if not token and host not in ("127.0.0.1", "localhost", "::1"):
+        typer.echo(
+            f"error: binding {host} needs --token: the default 'local' token is only for 127.0.0.1",
+            err=True,
+        )
+        raise typer.Exit(2)
     toks = token or ["local"]
     # `TOK=participant` names the participant explicitly (gap G-16 — token order was load-bearing
     # config); a bare `TOK` falls back to positional player-1..N.

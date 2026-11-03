@@ -249,3 +249,77 @@ async def test_time_skip_is_carried_and_isolated_on_fork(store: PostgresEventSto
     assert await store.current_world_time(a.branch_id) == 100
     assert await store.current_world_time(b.branch_id) == 0  # sibling untouched
     assert await store.current_world_time(main) == 0
+
+
+async def test_the_meteor_ripple_is_authored(store: PostgresEventStore) -> None:
+    # OQ-8 closed (D-88): the "adaptation ripple" after a cataclysm is the world's own rules, not an
+    # engine sweep. One world rule on PlaceDestroyed kills the festival plot, creates a (dormant)
+    # refugee plot, records the news as a rumor and bumps a grief counter on a named contact's
+    # knows-neighbours; it commits as a module beat after the strike, forks away cleanly before
+    # it, and travels with the world.
+    from uro_core.domain.events import edge_added, thread_created
+    from uro_core.pipeline.engine import Engine
+    from uro_core.providers.adapters.stub import StubProvider
+    from uro_core.providers.router import ProviderRouter
+
+    ripple = {
+        "rules_api_version": 7,
+        "rules": [
+            {
+                "id": "vel-falls",
+                "trigger": {"event": "PlaceDestroyed", "where": {"place_id": "p:vel"}},
+                "then": [
+                    {"do": "set_thread_state", "thread": "t:vel-festival", "to": "dead"},
+                    {"do": "create_thread", "thread": "t:refugees",
+                     "stakes": "Vel's survivors crowd the coast road, and someone must feed them."},
+                    {"do": "record_rumor", "text": "A star fell on Vel.", "subjects": ["p:vel"]},
+                    {"do": "for_each", "traverse": "knows", "from": "a:mera", "as": "$n",
+                     "apply": [{"do": "adjust_counter", "scope_ref": "$n", "key": "grief",
+                                "delta": 1}]},
+                ],
+                "scope": {"world": True},
+            }
+        ],
+    }  # fmt: skip
+    world = await store.create_world(f"Ripple-{new_id()}", rule_pack=ripple)
+    main = world.main_branch_id
+    await store.append_beat(
+        main,
+        [
+            place_created(place_id="p:vel", name="Vel", kind="settlement"),
+            actor_created(actor_id="a:mera", name="Mera", tier=2),
+            actor_created(actor_id="a:weck", name="Old Weck", tier=1),
+            edge_added(src="a:mera", rel_type="knows", dst="a:weck"),
+            thread_created(
+                thread_id="t:vel-festival", stakes="Vel's tide festival", state="active"
+            ),
+        ],
+    )
+    campaign = await store.start_campaign(
+        world.world_id, main, participant_id=PLAYER, new_pc_name="Ysolde", new_pc_id="a:ysolde"
+    )
+    await store.create_marker(world.world_id, "pre-strike", main)
+    engine = Engine(store, ProviderRouter(bindings={}, default=StubProvider()))
+    strike = await engine.append_and_react(
+        campaign,
+        [place_destroyed(place_id="p:vel", caused_by=CausedBy(kind="player_action"))],
+    )
+    head, struck = await store.lineage(main, 2)
+    assert struck.commit_id == strike.commit_id and struck.event_types == ["PlaceDestroyed"]
+    detail = await store.commit_detail(world.world_id, head.commit_id)
+    by_type = {e.event_type: e for e in detail.events}  # type: ignore[union-attr]
+    assert by_type["ThreadStateChanged"].payload["to_state"] == "dead"
+    assert by_type["ThreadCreated"].payload["provenance"] == "module"
+    assert all(e.caused_by["kind"] == "module" for e in detail.events)  # type: ignore[union-attr]
+    states = {t.thread_id: t.state for t in await store.list_threads(main)}
+    assert states["t:vel-festival"] == "dead" and states["t:refugees"] == "dormant"
+    assert await store.get_counter(main, "a:weck", "grief") == 1
+
+    # the what-if from before the strike has none of it
+    fork = await store.fork_branch(world.world_id, "pre-strike", "vel-stands")
+    states = {t.thread_id: t.state for t in await store.list_threads(fork.branch_id)}
+    assert states == {"t:vel-festival": "active"}
+    # and the ripple travels with the world
+    imported = await store.import_world(await store.export_world(world.world_id))
+    states = {t.thread_id: t.state for t in await store.list_threads(imported.main_branch_id)}
+    assert states["t:vel-festival"] == "dead" and "t:refugees" in states

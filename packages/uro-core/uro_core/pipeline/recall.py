@@ -55,6 +55,9 @@ class RecallBundle(BaseModel):
     # FACTIONS the beat mentions (name-matched, like places) — shown to the extractor as KNOWN
     # FACTIONS so it reuses an existing faction's exact name instead of minting a variant (D-51).
     factions: list[FactionView] = Field(default_factory=list)
+    # In-fiction days the clock moved outside play since the turns in `recent_beats` (D-84): a
+    # skip, a game's pass_time, a time-skip fork. Set by the engine for the narrator only.
+    days_since_last_scene: int = 0
     # The acting player's out-of-world notes (B8) — knowledge that survives a fork (time-loop/NG+),
     # rendered as the player's private recollection ONLY; never canon, never an NPC belief.
     participant_notes: list[ParticipantNote] = Field(default_factory=list)
@@ -227,6 +230,14 @@ RECALL_HEADER = (
 # (`PLAYER_ACTION` is the marker; the intent always follows it, with or without blocks.)
 
 
+def time_passed_line(days: int) -> str:
+    span = "1 day has" if days == 1 else f"{days} days have"
+    return (
+        f"TIME PASSED: {span} gone by since the turns above. That scene is over; open on the "
+        "present, unless the player's action returns to it."
+    )
+
+
 def build_narrator_messages(
     recall: RecallBundle,
     intent_text: str,
@@ -264,6 +275,11 @@ def build_narrator_messages(
             f"narrate it as {acting_name}."
         )
     beside_intent = []  # D-78: the final user message, before the intent
+    # The turns above end where the last scene ended; if the clock moved since outside play, say
+    # so (D-84) — in two long runs no beat after a skip acknowledged the days, and 4 of 6 resumed
+    # the pre-skip moment. Only an integer comes from state.
+    if recall.days_since_last_scene > 0 and recall.recent_beats:
+        beside_intent.append(time_passed_line(recall.days_since_last_scene))
     if recall.memories:
         beside_intent.append(RECALL_HEADER + "\n" + "\n".join(f"- {m}" for m in recall.memories))
     # The player's out-of-world notes (B8): the player's PRIVATE edge across loops/lives. Addressed

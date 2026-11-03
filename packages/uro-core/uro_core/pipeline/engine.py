@@ -278,6 +278,10 @@ class Engine:
             participant_id=participant_id,
             world_ref=world_ref,
         )
+        try:  # days the clock moved outside play since the last scene (D-84), for the narrator
+            recall.days_since_last_scene = await self._store.days_since_last_beat(branch_id)
+        except Exception as exc:  # best-effort, like semantic recall
+            logger.warning("couldn't read the days since the last scene: %s", exc)
         if self._semantic_k <= 0:  # semantic recall off (review: the over-fetch let k=0 through)
             return recall
         recent_texts = {b.narration for b in recall.recent_beats}
@@ -813,7 +817,9 @@ class Engine:
         unless the branch is still on that day (compare-and-set) and None is returned. The reason
         defaults to `game` (an intent's days are `play`, a skip `time-skip`), so a rule can tell
         them apart; the cause defaults to `system` (a host's own write) — pass a `player_action`
-        cause for a player's.
+        cause for a player's. Time the player's own beat already narrated should be passed as
+        reason `play` with a `player_action` cause: only that pair stays off the next beat's
+        TIME PASSED line (D-84); any other advance is time the turns didn't show.
         Unlike the intent cue, no cap: the caller is the game, in process."""
         if days <= 0:
             raise ValueError("days must be positive")

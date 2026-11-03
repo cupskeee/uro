@@ -41,6 +41,8 @@ from uro_core.domain.events import (
 from uro_core.domain.extraction_policy import ExtractionPolicy
 from uro_core.domain.hashing import compute_commit_hash
 from uro_core.domain.ids import new_id
+from uro_core.domain.provenance import check_provenance, provenance_problem
+from uro_core.errors import ExportError
 from uro_core.export import (
     BundleBranch,
     BundleCommit,
@@ -467,6 +469,11 @@ class PostgresEventStore:
         the semantic-memory cache is re-inserted from the bundle (replay can't rebuild it) — so the
         world is immediately queryable, has long-range recall, and is continuable."""
         verify_bundle(bundle)  # ExportError if altered in transit
+        for c in bundle.commits:  # import writes events directly, so it checks them too (D-89)
+            for e in c.events:
+                problem = provenance_problem(e.event_type, e.caused_by.get("kind"), e.payload)
+                if problem is not None:
+                    raise ExportError(f"bundle refused: {problem}")
         commit_map = {c.commit_id: new_id() for c in bundle.commits}
         remapped = [
             BundleCommit(
@@ -1066,6 +1073,7 @@ class PostgresEventStore:
     ) -> Commit:
         """The commit core, on a caller-provided connection/transaction — so a campaign
         start or a time-skip can commit its events atomically alongside its own writes."""
+        check_provenance(events)  # a closed-tier cause its producer can't make (D-89)
         branch = await conn.fetchrow(
             "SELECT world_id, head_commit FROM branches WHERE branch_id = $1 FOR UPDATE",
             branch_id,
@@ -1114,6 +1122,35 @@ class PostgresEventStore:
             commit_hash=commit_hash,
             depth=depth,
         )
+
+    async def days_since_last_beat(self, branch_id: str) -> int:
+        async with self.pool.acquire() as conn:
+            days = await conn.fetchval(
+                """
+                WITH RECURSIVE chain AS (
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+                    WHERE b.branch_id = $1
+                    UNION ALL
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+                ),
+                last_beat AS (
+                    SELECT max(chain.depth) AS depth FROM chain
+                    JOIN events e ON e.commit_id = chain.commit_id
+                    WHERE e.event_type = 'BeatResolved'
+                )
+                SELECT coalesce(sum(
+                    (e.payload->>'to_day')::int - (e.payload->>'from_day')::int
+                ), 0)
+                FROM chain JOIN events e ON e.commit_id = chain.commit_id, last_beat
+                WHERE e.event_type = 'TimeAdvanced' AND chain.depth > last_beat.depth
+                  AND NOT (e.caused_by->>'kind' = 'player_action'
+                           AND e.payload->>'reason' = 'play')
+                """,
+                branch_id,
+            )
+        return int(days or 0)  # no beat: last_beat.depth is NULL, so nothing is counted
 
     async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:
         async with self.pool.acquire() as conn:

@@ -85,7 +85,7 @@ Per owner feedback: when a world declares requirements (e.g. mature content enab
 
 Result semantics: **compatibility report, not enforcement** — a world declaring NSFW bound to a refusing model gets a loud warning (and platforms can choose to hard-fail); the engine itself still runs. This is content-agnosticism made practical: policy stays with providers and platforms, *testability* lives in the engine.
 
-Scoring (D-24): probe outputs are graded by the **judge role** against per-probe rubrics, with refusal-pattern heuristics as fallback; every report attaches the raw transcripts so a human can overrule the machine. Bind a different model as judge than the one under test where possible (self-judging circularity: OQ-9). Probes are a **best-effort compatibility signal, not certification** — treat scores as smoke detection, not a guarantee.
+Scoring (D-24): `structured_output` is graded deterministically (does the JSON parse, for each distinct planner/extractor model); `content_rating` asks the **judge role** one word — refused or engaged, read from the verdict's first word — with refusal-pattern heuristics as fallback, and a judge on the narrator's model is labelled self-judged (D-92); every report attaches the raw transcripts so a human can overrule the machine. Bind a different model as judge than the one under test where possible (self-judging circularity: OQ-9). Probes are a **best-effort compatibility signal, not certification** — treat scores as smoke detection, not a guarantee.
 
 ## Memory & retrieval (current design; more brainstorming expected — OQ-2, OQ-3)
 

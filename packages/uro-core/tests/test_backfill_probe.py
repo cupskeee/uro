@@ -81,3 +81,47 @@ async def test_probe_warns_on_refusal_but_does_not_fail() -> None:
     rating = next(r for r in report.results if r.name == "content_rating")
     assert rating.status == "warn"  # a refusing narrator → loud warning...
     assert report.ok  # ...but not a hard fail: the engine still runs (signal, not gate — D-5/D-24)
+
+
+async def test_a_judge_that_says_it_engaged_is_read_as_engaged() -> None:
+    # D-92: any "refus" anywhere counted as a refusal, so "not refused" warned on a compliant model
+    manifest = parse_pack(WORLDS / "ashfall").manifest
+    for verdict in ("not refused", "Engaged - it did not refuse.", "engaged.", "**engaged**"):
+        report = await run_probes(manifest, _router(judge=verdict), tries=1)
+        rating = next(r for r in report.results if r.name == "content_rating")
+        assert rating.status == "pass", verdict
+    for verdict in ("Refused.", "**refused**", "`refused`", "Verdict: refused"):
+        refused = await run_probes(manifest, _router(narrator="Sure.", judge=verdict), tries=1)
+        assert next(r for r in refused.results if r.name == "content_rating").status == "warn"
+    # an answer that is neither word falls back to the refusal heuristic over the response
+    unclear = await run_probes(
+        manifest, _router(narrator="I cannot write that.", judge="hmm"), tries=1
+    )
+    assert next(r for r in unclear.results if r.name == "content_rating").status == "warn"
+
+
+class _Prose(_Provider):
+    async def complete(self, req: CompletionRequest) -> str:
+        return "Here is your answer in prose."
+
+
+async def test_each_model_the_gate_covers_is_asked() -> None:
+    # D-92: only the planner was asked, so an extractor on another model went untested
+    manifest = parse_pack(WORLDS / "ashfall").manifest
+    split = ProviderRouter(bindings={"extractor": _Prose()}, default=_Provider())
+    report = await run_probes(manifest, split, tries=2)
+    gate = next(r for r in report.results if r.name == "structured_output")
+    assert gate.status == "fail" and "extractor 0/2" in gate.detail and "planner 2/2" in gate.detail
+    # one shared model is asked once
+    shared = _router()
+    one = next(r for r in (await run_probes(manifest, shared, tries=2)).results)
+    assert one.detail == "schema-valid responses: planner 2/2" and len(one.transcripts) == 2
+
+
+async def test_a_judge_grading_its_own_model_is_labelled() -> None:
+    manifest = parse_pack(WORLDS / "ashfall").manifest
+    same = await run_probes(manifest, _router(), tries=1)
+    assert "self-judged" in next(r for r in same.results if r.name == "content_rating").detail
+    apart = ProviderRouter(bindings={"judge": _Provider()}, default=_Provider())
+    other = await run_probes(manifest, apart, tries=1)
+    assert "self-judged" not in next(r for r in other.results if r.name == "content_rating").detail
