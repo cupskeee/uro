@@ -9,6 +9,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-03
+Upgrading: no database migration. The pacing director is off unless a world turns it on, so a
+game's narration is unchanged by upgrading (`worlds/ashfall` opts in). For embedders and pack
+authors: an embedder's own store gains `world_pacing` (without it, the defaults) and
+`create_world(pacing=)`; a reaction rule that filters `where` on a list or dict field is refused
+at parse (it could never match); an imported bundle with an invalid `[pacing]` is refused.
+
 ### Added
 - **Which plots went quiet, for every game** (D-95): the extractor now also reports which KNOWN
   threads a narration developed (`develops`, no extra model call), and each `BeatResolved` records
@@ -1102,7 +1109,10 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/cupskeee/uro/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/cupskeee/uro/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/cupskeee/uro/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/cupskeee/uro/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/cupskeee/uro/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cupskeee/uro/compare/v0.10.0...v0.11.0
