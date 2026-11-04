@@ -180,3 +180,18 @@ def test_token_revoke_by_participant_and_list(monkeypatch) -> None:  # type: ign
         app, ["token", "revoke", "c1", "--participant", "bob", "--target", "t", "--token", "op"]
     )
     assert both.exit_code == 1
+
+
+def test_help_keeps_bracketed_names() -> None:
+    # Typer renders help with Rich, which takes `[pacing]` for a markup tag and drops it: the help
+    # read "off unless the world's `` turns it on". Escaped, the names survive.
+    from typer.testing import CliRunner
+    from uro_cli.main import app
+
+    for args, name in (
+        (["campaign", "pacing", "--help"], "[pacing]"),
+        (["world", "seed", "--help"], "[history.vocabulary]"),
+        (["ruleset", "list", "--help"], "[ruleset.config]"),
+    ):
+        out = CliRunner().invoke(app, args, env={"COLUMNS": "200"}).output
+        assert name in out, (args, out)

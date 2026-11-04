@@ -331,10 +331,10 @@ def world_seed(
         None, "--world", help="the world to seed (id or name; default: the pack's name)"
     ),
 ) -> None:
-    """Run History seeding on the world imported from <path>: layer a seed-dependent past (power
-    groups, their leaders and conflicts, in the pack's [history.vocabulary]) on top of the authored
-    geography (docs/09). Same pack + a different seed → a different history on identical
-    geography."""
+    """Run History seeding on the world imported from <path>: layer a seed-dependent past
+    (power groups, their leaders and conflicts, in the pack's \\[history.vocabulary]) on top of
+    the authored geography (docs/09). Same pack + a different seed → a different history on
+    identical geography."""
 
     async def _run() -> None:
         from uro_core.errors import PackError
@@ -1462,9 +1462,10 @@ def calls(
 
 @ruleset_app.command("list")
 def ruleset_list() -> None:
-    """The rulesets a world can declare (`[ruleset] id` in world.toml): the built-ins and installed
-    plugins (D-65), each with the settings a game may give it under `[ruleset.config]` and their
-    defaults (D-62). A plugin that can't be used is listed with the reason."""
+    """The rulesets a world can declare (`\\[ruleset] id` in world.toml): the built-ins and
+    installed plugins (D-65), each with the settings a game may give it under
+    `\\[ruleset.config]` and their defaults (D-62). A plugin that can't be used is listed with
+    the reason."""
     for rid in registry.available():
         try:  # one plugin's fault (e.g. a setting with no default) must not hide the rest
             rs = registry.resolve(rid)
@@ -1636,7 +1637,7 @@ def campaign_delete(
 @campaign_app.command("pacing")
 def campaign_pacing(campaign_id: str) -> None:
     """Which live plots have gone quiet, and the one the next beat would name to the narrator
-    (the pacing director, D-95: off unless the world's `[pacing]` turns it on, D-96)."""
+    (the pacing director, D-95: off unless the world's `\\[pacing]` turns it on, D-96)."""
 
     async def _run() -> None:
         from uro_core.pipeline.pacing import pacing_report
