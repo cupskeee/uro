@@ -9,6 +9,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Fixed
+- **CLI help keeps bracketed names**: `uro campaign pacing`, `uro world seed` and `uro ruleset
+  list` showed `` where `[pacing]`, `[history.vocabulary]` and `[ruleset.config]` belonged (the help
+  renderer read them as formatting tags).
+
 ## [0.17.0] - 2026-11-04
 Upgrading: no database migration. For pack authors, `uro world seed` needs a `[history.vocabulary]`
 and a fresh PC gets only the `[world] starting_gear` the pack names. For API clients, the seed
