@@ -665,3 +665,13 @@ the judge is the narrator's own model.
 | Removal | **proven (deterministic)** | `test_removal.py`: a world goes whole (every kind of row checked by id beforehand) and another world, sharing an embedding, is untouched; a branch takes only the commits it alone reaches (a child fork keeps its history); `main` and shared branches are refused for a campaign; over the API, operator-only with the same refusals; the CLI needs `--yes`; a beat committing during a world removal is removed with it, late memory and call writes for a removed branch are dropped, markers and snapshots on shared commits stay, and a removal closes the campaign's sockets and forgets its tokens (`test_removing_a_campaign_closes_its_sockets_and_forgets_its_tokens`). Kept by design: history a fork shares, the players' codex notes (until the world goes), calls metered with no world. |
 
 **Language (D-101):** play is supported in English. The prompt templates, History's sentences and the clock policy are the game's to change; the engine's three code-built lines, the clock's day-cue grammar and the extractor's text heuristics are English-only until a game needs another language.
+
+## Post-PoC — one-call playthroughs, rules first, and a plot's lifecycle (2026-11-04, D-100..D-102)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| A new game in one call | **proven (deterministic)** | `own_branch` forks the world and starts the campaign there; a failed start leaves no fork (`test_a_playthrough_gets_a_branch_of_its_own`, `test_campaign_new_on_its_own_branch`); the playthrough is removable alone. |
+| The rules' answer before the story | **proven (deterministic)** | `beat_checks` precedes the narration (`test_beat_checks_arrive_before_the_narration`, `test_the_rules_answer_comes_before_the_story`); only when a beat has a check or a fight. |
+| A plot's lifecycle signal | **proven (deterministic)** | `developments` and `beats_live` follow the recorded beats; a fork, a replay and a v2 snapshot agree; a v1 snapshot is skipped (`test_thread_lifecycle.py`). |
+| The game sets a plot's state | **proven (deterministic)** | `set_thread_state` commits and the world's rules react (an authored plot too); REST operator-only, CLI (`test_a_game_moves_a_plot_and_the_world_reacts`). |
+| A "bring it to its end" nudge | **measured, not shipped** | live A/B, 9 fork points: 22/90 against 6/90 (+18 points, gate +30), 0 overrides, 0 forced; it helps when the player's action engages the plot (20/45 vs 6/45), not on a neutral one (2/45). D-102. |

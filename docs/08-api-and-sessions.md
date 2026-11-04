@@ -67,6 +67,7 @@ GET  /campaigns/{c}/state        [?sections=actors,threads,…]      branch proj
 GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats
 GET  /campaigns/{c}/pacing                                         each live thread's quiet beats + the one the next beat would name, under the world's `[pacing]` (D-95)
 DELETE /campaigns/{c}                                              remove the campaign and its branch; one on `main` or sharing its branch → 400 (OPERATOR-only, D-99)
+POST /campaigns/{c}/threads/{t}/state {state}                      the game moves a plot through its lifecycle; the world's rules react (OPERATOR-only, D-102)
 POST /campaigns/{c}/time-skip    {days, downtime?}                 engine agenda_tick, or pass_time with downtime:false (D-80) (OPERATOR-only, D-46) (D-33)
 POST /campaigns/{c}/dry-run      {intent}                          preview a beat's events, commit nothing (BE-5)
 GET  /campaigns/{c}/consistency                                    narrator contradiction-survival proxy T2 (BE-5)

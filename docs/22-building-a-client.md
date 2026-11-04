@@ -130,6 +130,7 @@ Also broadcast: `participant_joined`/`participant_left`, and for parties `not_yo
 | preview a turn without saving | `POST /campaigns/{c}/dry-run` `{intent}` |
 | a new game (its own timeline) | `POST /worlds/{w}/campaigns` `{participant, new_pc_name, own_branch: true}` (optionally `from`: a marker or commit, `branch_name`): forks the world at `main`'s head and starts the campaign there, in one call (D-100; operator token) |
 | delete a playthrough (privacy) | `DELETE /campaigns/{c}` removes it and its branch for good; `DELETE /worlds/{w}` removes a whole world. A campaign on the world's `main` branch can't be removed alone, so start each separate game with `own_branch: true`. A campaign removal keeps history another branch shares (a fork made from it) and the player's codex notes for the world; only a world removal takes those |
+| a plot's lifecycle | `state?sections=threads` gives each thread's `developments` (beats that brought it into play) and `beats_live`; `POST /campaigns/{c}/threads/{t}/state` `{state}` lets your game open, park or end a plot (the world's rules react, D-102) |
 | plots gone quiet (a journal's "loose ends") | `GET /campaigns/{c}/pacing`: each live thread's beats since it came up; a world that opts in (`[pacing]`) also has the engine nudge the quietest back into the story (D-95, D-96) |
 | world history / timeline | `GET /worlds/{w}/branches`, `GET /worlds/{w}/log` |
 | import a world pack | `POST /worlds/create` (multipart field `pack`: a `.zip` of the pack folder); check it first with `POST /worlds/validate` |

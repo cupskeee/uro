@@ -8,6 +8,8 @@ The authoritative design history lives in [`docs/decisions.md`](docs/decisions.m
 capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
+Upgrading: run `uro db migrate` (027: two thread counters). For embedders, a `ThreadView` has
+`developments` and `beats_live`.
 
 ### Added
 - **A new game in one call** (D-100): `POST /worlds/{w}/campaigns` with `own_branch: true` (and
@@ -15,6 +17,18 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   can later be removed alone.
 - **The rules' answer before the story** (D-100): a `beat_checks` frame carries each check's
   outcome and whether a fight happened as soon as they resolve, before the narration.
+
+- **A plot's lifecycle, for every game** (D-102): each thread counts the beats that brought it
+  into play (`developments`) and the beats it has been live (`beats_live`), in the `threads` state
+  section and `uro campaign pacing`. A game sets a plot's state itself:
+  `POST /campaigns/{c}/threads/{t}/state` or `uro campaign thread-state`, and the world's rules
+  react. Migration 027.
+
+### Changed
+- **Snapshots are versioned** (D-102): one taken before this release lacks the new thread counts,
+  so it is skipped and replay covers it (a fork of an old campaign may replay further, once).
+- **English only, for now** (D-101): what is English-bound and what a game can already change is
+  recorded; nothing changed.
 
 ### Fixed
 - **CLI help keeps bracketed names**: `uro campaign pacing`, `uro world seed` and `uro ruleset

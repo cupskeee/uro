@@ -56,8 +56,8 @@ from uro_core.pipeline.mechanics import (
 from uro_core.pipeline.pacing import (
     PacingReport,
     PacingSettings,
-    paced_choice,
     pacing_report,
+    quiet_thread,
     world_settings,
 )
 from uro_core.pipeline.plan import (
@@ -196,10 +196,8 @@ class _Context(BaseModel):
     cue_days: int = 0
     cue_evidence: str = ""
     world_day: int = 0
-    # The thread the pacing director names to the narrator on this beat (D-95), if any, and why
-    # ("quiet", D-95, or "ripe", D-102).
+    # The quiet thread the pacing director names to the narrator on this beat (D-95), if any.
     paced_thread: ThreadView | None = None
-    paced_kind: str = ""
 
 
 class _Shared:
@@ -296,12 +294,10 @@ class Engine:
             cache[branch_id] = await self._store.world_clock(branch_id)
         return bool(cache[branch_id].get("from_intent", True))
 
-    async def _paced_thread(
-        self, branch_id: str, threads: list[ThreadView]
-    ) -> tuple[ThreadView, str] | None:
-        """The thread to name to the narrator on this beat and why — "quiet" (D-95) or "ripe"
-        (D-102) — from the branch's last beats; None when both are off, nothing is due, or one
-        was named recently. Best-effort, like semantic recall: a failed read names nothing."""
+    async def _paced_thread(self, branch_id: str, threads: list[ThreadView]) -> ThreadView | None:
+        """The quiet thread to name to the narrator on this beat (D-95), from the branch's last
+        beats; None when pacing is off, nothing has gone quiet, or one was named recently.
+        Best-effort, like semantic recall: a failed read names nothing."""
         try:
             settings = self._pacing
             if settings is None:
@@ -309,12 +305,12 @@ class Engine:
                 if branch_id not in cache:  # WorldGenesis is immutable, so cached
                     cache[branch_id] = await world_settings(self._store, branch_id)
                 settings = cache[branch_id]
-            if (settings.quiet_after <= 0 and settings.ripe_after <= 0) or not threads:
+            if settings.quiet_after <= 0 or not threads:
                 return None
             recent = await self._store.recent_beats(branch_id, settings.window)
-            return paced_choice(threads, recent, settings)
+            return quiet_thread(threads, recent, settings)
         except Exception as exc:
-            logger.warning("pacing: couldn't choose a thread to name: %s", exc)
+            logger.warning("pacing: couldn't choose a quiet thread: %s", exc)
             return None
 
     async def pacing(self, branch_id: str) -> PacingReport:
@@ -530,8 +526,7 @@ class Engine:
             resolved = await self._resolve_encounter(campaign, ctx, trigger)
             if resolved is not None:  # a valid fight formed; otherwise fall through to free-roam
                 events, traces = resolved
-                ctx.paced_thread = None  # a fight beat names no plot (D-95)
-                ctx.paced_kind = ""
+                ctx.paced_thread = None  # a fight beat names no quiet plot (D-95)
                 # Surface the fight's deterministic rounds in BeatResult.check_traces too: the
                 # encounter path resolves outside the free-roam gate, so without this a combat beat
                 # reports 0 checks despite rich mechanics (B9). Extend, don't overwrite — a mixed
@@ -556,7 +551,6 @@ class Engine:
             style=style,
             env=env,
             paced_thread=ctx.paced_thread,
-            paced_kind=ctx.paced_kind or "quiet",
         )
         return messages, None
 
@@ -601,8 +595,7 @@ class Engine:
                 cue_days=cue_days,
                 cue_evidence=cue_evidence,
                 world_day=world_day,
-                paced_thread=paced[0] if paced else None,
-                paced_kind=paced[1] if paced else "",
+                paced_thread=paced,
             )
         if plan is None:
             plan = await self._plan(campaign, intent_text, recall, pc_actor_id)
@@ -625,8 +618,7 @@ class Engine:
             cue_days=cue_days,
             cue_evidence=cue_evidence,
             world_day=world_day,
-            paced_thread=paced[0] if paced else None,
-            paced_kind=paced[1] if paced else "",
+            paced_thread=paced,
         )
 
     async def _acting_pc(self, campaign: Campaign, participant_id: str) -> str:
@@ -1210,7 +1202,6 @@ class Engine:
                     narration=narration,
                     threads=touched,
                     paced_thread=ctx.paced_thread.thread_id if ctx.paced_thread else "",
-                    paced_kind=ctx.paced_kind if ctx.paced_thread else "",
                 ),
                 *check_events,
                 *extracted,

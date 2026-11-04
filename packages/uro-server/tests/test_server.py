@@ -2752,7 +2752,7 @@ def test_pacing_any_player_reads_the_quiet_plots() -> None:
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["settings"] == {"quiet_after": 2, "every": 1, "ripe_after": 0}
+    assert body["settings"] == {"quiet_after": 2, "every": 1}
     assert body["beats_read"] == 3
     assert [t["thread_id"] for t in body["threads"]] == ["t:a"]  # dormant ones aren't live
     assert body["threads"][0]["quiet_beats"] == 3 and body["threads"][0]["at_least"] is True
