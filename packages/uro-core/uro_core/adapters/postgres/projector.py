@@ -3,7 +3,7 @@
 The projector is the ONLY writer of the proj_* tables. It runs inside the same
 transaction as the commit that produced the events (store.append_beat), so a
 projection failure rolls the whole beat back — projections can never drift ahead
-of, or behind, the log. Unknown event types (WorldGenesis, BeatResolved, …) are
+of, or behind, the log. Unknown event types (WorldGenesis, ModeChanged, …) are
 no-ops: they carry no projectable epistemic state.
 """
 
@@ -313,9 +313,10 @@ async def _thread_state_changed(
 
 async def _beat_resolved(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     # D-102: a thread's lifecycle signal. Every live thread has lived one more beat; the threads
-    # the beat brought into play (its recorded `threads`, D-95) developed once more. BeatResolved
-    # comes first in its commit, so a thread the beat itself creates starts at 0 (creation isn't
-    # development) and one it resolves still counts this beat.
+    # the beat brought into play (its recorded `threads`, D-95) developed once more. In a free-roam
+    # commit BeatResolved comes first, so a thread the beat itself creates starts at 0 (creation
+    # isn't development) and one it resolves still counts this beat; a fight's commit lists it
+    # last, but carries no thread events (and no `threads`).
     await conn.execute(
         "UPDATE proj_threads SET beats_live = beats_live + 1 "
         "WHERE branch_id = $1 AND state IN ('active', 'offered')",

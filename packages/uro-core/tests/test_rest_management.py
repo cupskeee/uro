@@ -1214,3 +1214,43 @@ async def test_a_game_sets_a_thread_state_over_the_api(store: PostgresEventStore
             _q(f"/campaigns/{cid}/threads/t:nope/state"), json={"state": "dead"}
         )
         assert missing.status_code == 404
+
+
+async def test_a_playthrough_from_a_marker_and_its_refusals(store: PostgresEventStore) -> None:
+    async with _client(store) as client:
+        wid = (await client.post(_q("/worlds"), json={"name": f"Play2-{new_id()}"})).json()[
+            "world_id"
+        ]
+        world = await store.get_world(wid)
+        assert world is not None
+        marker = await store.create_marker(wid, "start", world.main_branch_id)
+        body = {"participant": "alice", "new_pc_name": "Ash", "own_branch": True}
+        made = await client.post(_q(f"/worlds/{wid}/campaigns"), json={**body, "from": "start"})
+        assert made.status_code == 200, made.text
+        branch = await store.get_branch(made.json()["branch_id"])
+        assert branch is not None and branch.forked_from == marker.commit_id
+        before = len(await store.list_branches(wid))
+        bad_from = await client.post(
+            _q(f"/worlds/{wid}/campaigns"), json={**body, "from": "nowhere"}
+        )
+        assert bad_from.status_code in (400, 404) and len(await store.list_branches(wid)) == before
+        dup = await client.post(
+            _q(f"/worlds/{wid}/campaigns"), json={**body, "branch_name": branch.name}
+        )
+        assert dup.status_code == 400 and len(await store.list_branches(wid)) == before
+        stray = await client.post(
+            _q(f"/worlds/{wid}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "A", "from": "start"},
+        )
+        assert stray.status_code == 400  # `from` without own_branch is refused, not ignored
+        bob = (
+            await client.post(
+                _q(f"/campaigns/{made.json()['campaign_id']}/join"),
+                json={"participant": "bob", "new_pc_name": "Bane"},
+            )
+        ).json()["token"]
+        player = await client.post(
+            f"/worlds/{wid}/campaigns?token={bob}",
+            json={"participant": "bob", "new_pc_name": "B", "own_branch": True},
+        )
+        assert player.status_code == 403 and len(await store.list_branches(wid)) == before

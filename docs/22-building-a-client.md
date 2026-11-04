@@ -110,7 +110,7 @@ You get, in order (every frame that settles your intent echoes your `id` as `int
 | frame | meaning | the UI |
 |---|---|---|
 | `beat_started` | the turn began | show "the world answers…" |
-| `beat_checks` | (only when the beat has a check or a fight) `checks`, `mode`: what the rules decided, before the story | show the roll first |
+| `beat_checks` | (only when the beat has a check or a fight) `checks`, `mode`: what the rules decided, before the story; provisional until `beat_committed` | show the roll first (undo it on `beat_failed`) |
 | `narration_chunk` × N | `text` pieces of the narration, as the model writes them | stream them into the transcript |
 | `beat_narrated` | the story is fully told; the world is now being updated | re-enable input here, don't wait |
 | `beat_committed` | saved: `narration`, `commit_id`, and what the beat did: `checks` (`{actor_id, affordance, outcome}`, the ruleset's grade), `suggestions` (for the acting `participant_id`), `mode` (`encounter` = a fight was resolved), `world_day`, `created` (new people, places, factions, plots) | show the outcomes and what's new; update the day badge; offer suggestions only to the player who acted |
@@ -130,7 +130,7 @@ Also broadcast: `participant_joined`/`participant_left`, and for parties `not_yo
 | preview a turn without saving | `POST /campaigns/{c}/dry-run` `{intent}` |
 | a new game (its own timeline) | `POST /worlds/{w}/campaigns` `{participant, new_pc_name, own_branch: true}` (optionally `from`: a marker or commit, `branch_name`): forks the world at `main`'s head and starts the campaign there, in one call (D-100; operator token) |
 | delete a playthrough (privacy) | `DELETE /campaigns/{c}` removes it and its branch for good; `DELETE /worlds/{w}` removes a whole world. A campaign on the world's `main` branch can't be removed alone, so start each separate game with `own_branch: true`. A campaign removal keeps history another branch shares (a fork made from it) and the player's codex notes for the world; only a world removal takes those |
-| a plot's lifecycle | `state?sections=threads` gives each thread's `developments` (beats that brought it into play) and `beats_live`; `POST /campaigns/{c}/threads/{t}/state` `{state}` lets your game open, park or end a plot (the world's rules react, D-102) |
+| a plot's lifecycle | `state?sections=threads` gives each thread's `developments` (beats that brought it into play) and `beats_live`; `POST /campaigns/{c}/threads/{t}/state` `{state}` (operator token) lets your game open, park or end a plot (the world's rules react, D-102) |
 | plots gone quiet (a journal's "loose ends") | `GET /campaigns/{c}/pacing`: each live thread's beats since it came up; a world that opts in (`[pacing]`) also has the engine nudge the quietest back into the story (D-95, D-96) |
 | world history / timeline | `GET /worlds/{w}/branches`, `GET /worlds/{w}/log` |
 | import a world pack | `POST /worlds/create` (multipart field `pack`: a `.zip` of the pack folder); check it first with `POST /worlds/validate` |

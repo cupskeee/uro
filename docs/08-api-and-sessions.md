@@ -58,7 +58,7 @@ POST /worlds/import              {…WorldBundle JSON…}              verify ch
 GET  /worlds/{w}/chronicle       [?branch=&limit=]                a named branch's recent beats (OPERATOR-only) (BE-10)
 GET  /worlds/{w}/state           [?branch= | ?at=][&sections=]    projections at a branch head or ANY commit, read-only (OPERATOR-only, D-45)
 GET  /worlds/{w}/diff            ?a=&b=[&sections=]               what differs between two branches, per projection (OPERATOR-only, D-45) (docs/18 B5)
-POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id, branch?, seed?}   start_campaign on any branch (name or id; default main)
+POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id, branch?, seed?, own_branch?, from?, branch_name?}   start_campaign on any branch (name or id; default main); with `own_branch: true` it forks `branch` (at its head, or at `from`) into a new branch and starts there (OPERATOR-only, D-100); `from`/`branch_name` without it → 400
 GET  /campaigns                  [?world_id=]                      list
 GET  /campaigns/{c}                                                one campaign
 POST /campaigns/{c}/join         {participant, new_pc_name|adopt_actor_id}   bind an additional PC
@@ -218,7 +218,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 | `beat_started` | `participant_id`, `intent`, `intent_id`† |
 | `beat_narrated` | `participant_id`, `intent`, `intent_id`† *(D-71: the narration is complete; the beat is being extracted and normally commits next (`beat_committed`), or ends in `beat_failed` if extraction or the commit fails. `uro connect` frees its prompt here. Not sent for an empty narration, which fails the beat.)* |
 | `narration_chunk` | `participant_id`, `text` |
-| `beat_checks` | `participant_id`, `intent`, `mode`, `checks[]`, `intent_id`† *(D-100: what the rules decided — each check's outcome, and `mode: encounter` for a fight — sent BEFORE the narration, since checks and fights resolve before the narrator speaks; only when a beat has a check or a fight)* |
+| `beat_checks` | `participant_id`, `intent`, `mode`, `checks[]`, `intent_id`† *(D-100: what the rules decided — each check's outcome, and `mode: encounter` for a fight — sent BEFORE the narration, since checks and fights resolve before the narrator speaks; only when a beat has a check or a fight; provisional until `beat_committed` — a `beat_failed` after it means nothing took effect)* |
 | `beat_committed` | `participant_id`, `intent`, `narration`, `commit_id` *(D-67)*, `intent_id`†; and *(D-98)* `checks[]` (`{actor_id, affordance, outcome}` per free-roam check: the ruleset's grade, never its trace, which may carry sheet values a player isn't shown, D-46), `suggestions[]` (the acting player's next-action hints from the planner, D-23; empty without a ruleset), `mode` (`encounter` when a fight resolved in the beat, else `freeroam`), `world_day` (the in-fiction day once the beat and any day it passed are committed), `created[]` (`{kind: actor\|place\|faction\|thread, id, name}` the beat made — scene-safe like the `state` sections; never claims, whose truth is operator-only, D-45) |
 | `beat_failed` | `participant_id`, `intent`, `error`, `intent_id`† |
 | `not_your_turn` | `participant_id`, `text` *(round-robin, D-31)*, `intent_id`† |

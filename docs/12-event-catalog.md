@@ -84,7 +84,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | event_type | payload | emit | notes |
 |---|---|---|---|
 | `ThreadCreated` | thread_id, stakes, state, originator, provenance | X H A P S | off-screen plots included; `S` covers authored + AI-backfilled pack conflict-seeds at import (`provenance=author\|ai_backfill`, `09`); projected to `proj_threads` |
-| `ThreadStateChanged` | thread_id, to_state (`dormant|offered|active|resolved|dead`), from_state (advisory) | X M P H A | LIVE via emitter M (D-33): a pack rule advances a thread's lifecycle; and via X (D-52): the extractor moves a live (`active`/`offered`) EMERGENT thread to `resolved` when the narration settles it — never an authored thread, never another state. Projector sets `proj_threads.state` (never mints a thread) |
+| `ThreadStateChanged` | thread_id, to_state (`dormant|offered|active|resolved|dead`), from_state (advisory) | X M P H A S | LIVE via emitter M (D-33): a pack rule advances a thread's lifecycle; and via X (D-52): the extractor moves a live (`active`/`offered`) EMERGENT thread to `resolved` when the narration settles it — never an authored thread, never another state. Projector sets `proj_threads.state` (never mints a thread) And via S (D-102): a game sets any thread's state, authored or made in play, through `Engine.set_thread_state` / `POST /campaigns/{c}/threads/{t}/state` / `uro campaign thread-state` (cause `system`); then the world's rules react. |
 | `ThreadStepCompleted` | thread_id, step, outcome | P | reserved (no live emitter) |
 
 ### Computation (numeric state)

@@ -454,7 +454,9 @@ def engine_deps(
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
-        playing = await engine_for(campaign)  # its own ruleset's engine: the rules that react
+        # its own ruleset's engine; a world whose ruleset this server can't build still moves its
+        # plots (the world's rules need no ruleset), like a time-skip (review)
+        playing = await time_engine(lambda: engine_for(campaign), f"campaign {campaign_id}")
         try:
             commit = await playing.set_thread_state(campaign, thread_id, state)
         except KeyError as exc:
@@ -1920,6 +1922,8 @@ def create_app(
         own = body.get("own_branch", False)
         if not isinstance(own, bool):
             raise HTTPException(status_code=400, detail="own_branch must be true or false")
+        if not own and (body.get("from") is not None or body.get("branch_name") is not None):
+            raise HTTPException(status_code=400, detail="from and branch_name go with own_branch")
         if own:
             _require_operator(request)
             from uro_core.timeline.playthrough import playthrough_branch

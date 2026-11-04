@@ -137,3 +137,93 @@ async def test_a_game_moves_a_plot_and_the_world_reacts(store: PostgresEventStor
         await engine.set_thread_state(campaign, "t:heir", "finished")
     with pytest.raises(ValueError, match="already"):
         await engine.set_thread_state(campaign, "t:heir", "active")
+
+
+# --- review fixes (D-100..D-102 phase-end review) ---
+
+
+async def _played(store: PostgresEventStore) -> tuple[str, str]:
+    world = await store.create_world(
+        f"rebuild-{new_id()}",
+        extra_events=[
+            thread_created(thread_id="t:a", stakes="A", state="active", provenance="emergent")
+        ],
+    )
+    for _ in range(3):
+        await store.append_beat(world.main_branch_id, [_beat("t:a")])
+    return world.world_id, world.main_branch_id
+
+
+async def test_a_rebuild_counts_a_campaign_played_before_the_counts(
+    store: PostgresEventStore,
+) -> None:
+    world_id, branch = await _played(store)
+    # as a branch looks right after migration 027: its rows defaulted to 0, and a snapshot taken
+    # from them since would carry the zeros on
+    async with store.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE proj_threads SET developments = 0, beats_live = 0 WHERE branch_id = $1", branch
+        )
+    await store.create_marker(world_id, "after-upgrade", branch)
+    assert (await _counts(store, branch))["t:a"][:2] == (0, 0)
+    done = await store.rebuild_projections(world_id)
+    assert done["branches"] == 1 and done["snapshots_dropped"] >= 1
+    assert (await _counts(store, branch))["t:a"][:2] == (3, 3)  # its whole past counted
+    marker = next(m for m in await store.list_markers(world_id) if m.name == "after-upgrade")
+    fork = await store.fork_branch(world_id, marker.commit_id, "after")  # no stale snapshot left
+    assert (await _counts(store, fork.branch_id))["t:a"][:2] == (3, 3)
+
+
+async def test_a_newer_snapshot_replaces_an_older_one_only(store: PostgresEventStore) -> None:
+    world_id, branch = await _played(store)
+    m = await store.create_marker(world_id, "m1", branch)
+    async with store.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE snapshots SET state = jsonb_set(state, '{v}', '1'::jsonb) WHERE commit_id = $1",
+            m.commit_id,
+        )
+    await store.create_marker(world_id, "m2", branch)  # same head: re-snapshots it
+    async with store.pool.acquire() as conn:
+        v = await conn.fetchval(
+            "SELECT (state->>'v')::int FROM snapshots WHERE commit_id = $1", m.commit_id
+        )
+        await conn.execute(  # a current one is never overwritten
+            "UPDATE snapshots SET state_hash = 'kept' WHERE commit_id = $1", m.commit_id
+        )
+    await store.create_marker(world_id, "m3", branch)
+    async with store.pool.acquire() as conn:
+        kept = await conn.fetchval(
+            "SELECT state_hash FROM snapshots WHERE commit_id = $1", m.commit_id
+        )
+    assert v == 2 and kept == "kept"
+
+
+async def test_a_branch_diff_ignores_the_counts(store: PostgresEventStore) -> None:
+    world_id, branch = await _played(store)
+    head = (await store.get_branch(branch)).head_commit  # type: ignore[union-attr]
+    fork = await store.fork_branch(world_id, head, "sibling")  # type: ignore[arg-type]
+    await store.append_beat(fork.branch_id, [_beat("t:a")])  # one more beat on the fork
+    diff = await store.diff_branches(branch, fork.branch_id, ["threads"])
+    assert diff == {}  # the same plots; only their counts moved
+
+
+async def test_a_plot_moves_on_a_world_whose_ruleset_is_gone(store: PostgresEventStore) -> None:
+    from uro_server.app import engine_deps
+
+    world = await store.create_world(
+        f"lost-ruleset-{new_id()}",
+        ruleset_id="uro-basic",
+        extra_events=[thread_created(thread_id="t:a", stakes="A", state="active")],
+    )
+    campaign = await store.create_campaign(world.world_id, world.main_branch_id)
+    async with store.pool.acquire() as conn:  # a plugin ruleset uninstalled after creation
+        await conn.execute(
+            "UPDATE events SET payload = jsonb_set(payload, '{ruleset_id}', '\"uro-gone\"') "
+            "WHERE event_type = 'WorldGenesis' AND commit_id IN "
+            "(SELECT commit_id FROM commits WHERE world_id = $1)",
+            world.world_id,
+        )
+    deps = engine_deps(store, _engine(store), {"tok": "p1"})
+    assert deps.set_thread_state is not None
+    out = await deps.set_thread_state(campaign.campaign_id, "t:a", "resolved")
+    assert out["state"] == "resolved"

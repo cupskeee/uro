@@ -212,6 +212,31 @@ def db_migrate() -> None:
     _run_async(_run)
 
 
+@db_app.command("rebuild-projections")
+def db_rebuild_projections(
+    world: str = typer.Option(None, "--world", help="one world (name or id); default: every world"),
+) -> None:
+    """Rebuild projections from history (D-102): after `uro db migrate` adds a projection column
+    (027: each thread's development and beat counts), so campaigns played before it count their
+    whole past. Drops the world's snapshots (a cache) and replays each branch. Run it while the
+    world isn't being played."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            world_id = (await _world_or_exit(store, world)).world_id if world else None
+            done = await store.rebuild_projections(world_id)
+        finally:
+            await store.close()
+        typer.echo(
+            f"rebuilt {done['branches']} branches in {done['worlds']} worlds "
+            f"({done['snapshots_dropped']} snapshots dropped; new ones form as play goes on)"
+        )
+
+    _run_async(_run)
+
+
 @world_app.command("new")
 def world_new(
     name: str,
@@ -1681,8 +1706,9 @@ def campaign_thread_state(
         await connect_store(store)
         try:
             c = await _campaign_or_exit(store, campaign_id)
-            # the world's rules need no LLM, so a stub router suffices (like `campaign time-skip`)
-            ruleset = await registry.resolve_for_campaign(store, c)
+            # the world's rules need no LLM, so a stub router suffices (like `campaign time-skip`);
+            # and no ruleset either: one that can't be built doesn't block moving a plot (review)
+            ruleset = await _time_skip_ruleset(registry.resolve_for_campaign(store, c))
             engine = Engine(store, build_router("stub", None), ruleset=ruleset)
             try:
                 commit = await engine.set_thread_state(c, thread_id, state)
@@ -1726,7 +1752,8 @@ def campaign_pacing(campaign_id: str) -> None:
         for t in sorted(report.threads, key=lambda t: (-t.quiet_beats, t.thread_id)):
             quiet = f"{t.quiet_beats}{'+' if t.at_least else ''}"
             mark = "  ← next" if t.thread_id == report.next_paced else ""
-            typer.echo(f"  {quiet:>4} beats quiet  [{t.thread_id}] {t.stakes}{mark}")
+            life = f"developed {t.developments}, live {t.beats_live}"  # D-102
+            typer.echo(f"  {quiet:>4} beats quiet  [{t.thread_id}] {t.stakes}  ({life}){mark}")
 
     _run_async(_run)
 
@@ -1783,6 +1810,9 @@ def campaign_new(
     from_ref: str = typer.Option(
         None, "--from", help="with --own-branch: fork at this marker or commit, not the head"
     ),
+    branch_name: str = typer.Option(
+        None, "--branch-name", help="with --own-branch: the new branch's name (default play-…)"
+    ),
 ) -> None:
     """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one).
     With --own-branch it gets a branch of its own, so it can later be removed alone (D-99)."""
@@ -1799,30 +1829,33 @@ def campaign_new(
             if b is None:
                 typer.echo(f"no such branch: {branch}", err=True)
                 raise typer.Exit(1)
-            if from_ref is not None and not own_branch:
-                typer.echo("--from goes with --own-branch", err=True)
+            if (from_ref is not None or branch_name is not None) and not own_branch:
+                typer.echo("--from and --branch-name go with --own-branch", err=True)
                 raise typer.Exit(1)
             if own_branch:
                 from uro_core.timeline.playthrough import playthrough_branch
 
                 try:
-                    b = await playthrough_branch(store, w.world_id, b, from_ref=from_ref)
+                    b = await playthrough_branch(
+                        store, w.world_id, b, from_ref=from_ref, name=branch_name
+                    )
                 except (ValueError, KeyError) as exc:
                     typer.echo(f"error: {exc}", err=True)
                     raise typer.Exit(1) from exc
-            # Bind the WORLD's declared ruleset (docs/06, D-30): a PbtA world's campaign is
-            # played under uro_pbta, not the hard-coded default. ('' → registry default.)
-            pin = await store.world_ruleset(b.branch_id)
-            rs = await registry.resolve_for_branch(store, b.branch_id)  # with the world's settings
-            # Every PC needs a sheet so the mechanics gate can check it. A fresh PC gets one; an
-            # adopted actor is sheeted only if it lacks one (a re-adopted PC keeps its sheet).
-            pc_sheet = None
-            if pc is not None or (
-                adopt is not None and await store.get_sheet(b.branch_id, adopt) is None
-            ):
-                pc_sheet = _build_pc_sheet(rs)
-            ruleset_id = rs.id
-            try:
+            try:  # from here on, a failure removes the playthrough's fork (D-100 review)
+                # Bind the WORLD's declared ruleset (docs/06, D-30): a PbtA world's campaign is
+                # played under uro_pbta, not the hard-coded default. ('' → registry default.)
+                pin = await store.world_ruleset(b.branch_id)
+                # with the world's settings
+                rs = await registry.resolve_for_branch(store, b.branch_id)
+                # Every PC needs a sheet so the mechanics gate can check it. A fresh PC gets one; an
+                # adopted actor is sheeted only if it lacks one (a re-adopted PC keeps its sheet).
+                pc_sheet = None
+                if pc is not None or (
+                    adopt is not None and await store.get_sheet(b.branch_id, adopt) is None
+                ):
+                    pc_sheet = _build_pc_sheet(rs)
+                ruleset_id = rs.id
                 campaign = await store.start_campaign(
                     w.world_id,
                     b.branch_id,
