@@ -55,6 +55,8 @@ class ThreadPacing(BaseModel):
     stakes: str
     state: str
     provenance: str
+    developments: int = 0  # D-102: beats that brought it into play
+    beats_live: int = 0  # D-102: beats it has been active or offered
     # Beats since the thread last came up or was named. With `at_least`, it didn't within the
     # beats read (the window), so this is the window's length: a thread quiet longer than that, or
     # one that became live outside a beat (a rule woke it, an author's commit added it). Either way
@@ -120,6 +122,8 @@ def thread_pacing(
                 stakes=t.stakes,
                 state=t.state,
                 provenance=t.provenance,
+                developments=t.developments,
+                beats_live=t.beats_live,
                 quiet_beats=len(recent) - 1 - last[t.thread_id] if seen else len(recent),
                 at_least=not seen,
             )
@@ -130,12 +134,12 @@ def thread_pacing(
 def quiet_thread(
     threads: list[ThreadView], recent: list[BeatResolvedPayload], settings: PacingSettings
 ) -> ThreadView | None:
-    """The live thread to name on the next beat, or None. `recent` is the branch's last
-    `settings.window` beats, oldest first."""
+    """The quiet live thread to name on the next beat, or None (D-95). `recent` is the
+    branch's last `settings.window` beats, oldest first."""
     if settings.quiet_after <= 0 or len(recent) < settings.quiet_after:
         return None  # off, or too few beats played for anything to have gone quiet
-    if any(b.paced_thread for b in recent[max(0, len(recent) - (settings.every - 1)) :]):
-        return None  # a thread was named in the last `every` beats
+    if _named_lately(recent, settings):
+        return None
     quiet = [p for p in thread_pacing(threads, recent) if p.quiet_beats >= settings.quiet_after]
     if not quiet:
         return None
@@ -143,6 +147,11 @@ def quiet_thread(
     # in the store's order (by id), so the pick is deterministic.
     best = max(quiet, key=lambda p: (p.at_least, p.quiet_beats))
     return next(t for t in threads if t.thread_id == best.thread_id)
+
+
+def _named_lately(recent: list[BeatResolvedPayload], settings: PacingSettings) -> bool:
+    """A thread was named in the last `every` beats (the spacing)."""
+    return any(b.paced_thread for b in recent[max(0, len(recent) - (settings.every - 1)) :])
 
 
 async def pacing_report(

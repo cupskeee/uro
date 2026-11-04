@@ -50,7 +50,7 @@ from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.errors import ExportError
 from uro_core.export import BundleCommit, WorldBundle
-from uro_core.pipeline.engine import NARRATION_DONE, BeatResult, Engine
+from uro_core.pipeline.engine import NARRATION_DONE, BeatMechanics, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
@@ -248,9 +248,9 @@ class ServerDeps:
 
     resolve_participant: Callable[[str], str | None]  # bearer token → participant_id (None = deny)
     campaign_exists: Callable[[str], Awaitable[bool]]
-    # (campaign, participant, intent) → narration chunks, then (D-98) the committed beat's
-    # BeatResult as the last item, so `beat_committed` can carry what the engine knows about it
-    run_beat: Callable[[str, str, str], AsyncIterator[str | BeatResult]]
+    # (campaign, participant, intent) → (D-100) the BeatMechanics first, when a check or a fight
+    # resolved, then the narration chunks, then (D-98) the committed beat's BeatResult last
+    run_beat: Callable[[str, str, str], AsyncIterator[str | BeatResult | BeatMechanics]]
     # Chronicler mode (D-25): distill an external game's outcome bundle → committed events.
     report_outcome: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None
     # campaign → the commit its last beat run here made (D-67): sent with `beat_committed`, and
@@ -264,6 +264,8 @@ class ServerDeps:
     # None → those endpoints return 501 (a fake-deps test that only exercises play/outcome).
     store: EngineStore | None = None
     advance_time: Callable[[str, int, bool], Awaitable[dict[str, Any]]] | None = None
+    # (campaign, thread, state) → the game sets a plot's state; the world's rules react (D-102)
+    set_thread_state: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
     # Branch-scoped time-skip + downtime agendas (BE-2 fork `--time-skip-days`): engine.agenda_tick
     # on a raw branch id (a fork has no campaign), returning the new in-fiction day. None → fork's
     # optional time-skip leg returns 501.
@@ -382,7 +384,7 @@ def engine_deps(
 
     async def run_beat(
         campaign_id: str, participant: str, text: str
-    ) -> AsyncIterator[str | BeatResult]:
+    ) -> AsyncIterator[str | BeatResult | BeatMechanics]:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             return
@@ -393,6 +395,7 @@ def engine_deps(
             announced.add(commit_id, campaign_id)  # beat_committed will tell this campaign
 
         results: list[BeatResult] = []
+        mechanics: list[BeatMechanics] = []
         stream = playing.run_beat_stream(
             campaign,
             participant,
@@ -400,8 +403,11 @@ def engine_deps(
             on_commit=committed,
             mark_narrated=True,
             on_result=results.append,
+            on_mechanics=mechanics.append,
         )
         async for chunk in stream:
+            if mechanics:  # resolved before the first chunk: the rules' answer goes first
+                yield mechanics.pop()
             yield chunk
         if results:  # the beat committed: its result goes last (D-98)
             yield results[0]
@@ -443,6 +449,21 @@ def engine_deps(
             await playing.pass_time(campaign, days, reason="operator")
         world_day = await store.current_world_time(campaign.branch_id)
         return {"branch_id": campaign.branch_id, "world_day": world_day}
+
+    async def set_thread_state(campaign_id: str, thread_id: str, state: str) -> dict[str, Any]:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        # its own ruleset's engine; a world whose ruleset this server can't build still moves its
+        # plots (the world's rules need no ruleset), like a time-skip (review)
+        playing = await time_engine(lambda: engine_for(campaign), f"campaign {campaign_id}")
+        try:
+            commit = await playing.set_thread_state(campaign, thread_id, state)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such thread") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"commit_id": commit.commit_id, "thread_id": thread_id, "state": state}
 
     async def advance_branch_time(branch_id: str, days: int) -> int:
         # BE-2 fork `--time-skip-days`: the same helper the CLI `uro branch fork` uses — agenda_tick
@@ -620,6 +641,7 @@ def engine_deps(
         announced=announced,
         store=store,
         advance_time=advance_time,
+        set_thread_state=set_thread_state,
         advance_branch_time=advance_branch_time,
         preview_beat=preview_beat,
         mint_token=registry.mint,
@@ -1895,6 +1917,29 @@ def create_app(
             branch = by_id if by_id is not None and by_id.world_id == world_id else None
         if branch is None:
             raise HTTPException(status_code=404, detail=f"no such branch: {branch_ref}")
+        # `own_branch` (D-100): a playthrough of its own — fork `branch` (at its head, or at `from`:
+        # a marker or a commit) and start there; removable alone (D-99). Operator-only, like a fork.
+        own = body.get("own_branch", False)
+        if not isinstance(own, bool):
+            raise HTTPException(status_code=400, detail="own_branch must be true or false")
+        if not own and (body.get("from") is not None or body.get("branch_name") is not None):
+            raise HTTPException(status_code=400, detail="from and branch_name go with own_branch")
+        if own:
+            _require_operator(request)
+            from uro_core.timeline.playthrough import playthrough_branch
+
+            from_ref = body.get("from")
+            name = body.get("branch_name")
+            if (from_ref is not None and not isinstance(from_ref, str)) or (
+                name is not None and not isinstance(name, str)
+            ):
+                raise HTTPException(status_code=400, detail="from and branch_name are strings")
+            try:
+                branch = await playthrough_branch(
+                    store, world_id, branch, from_ref=from_ref, name=name
+                )
+            except (ValueError, KeyError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             # Pin the WORLD's declared ruleset + sheet the PC (D-30 + Phase-3), like the CLI `uro
             # campaign new` path — a REST-created PbtA campaign must not silently fall to an empty
@@ -1927,7 +1972,13 @@ def create_app(
                 seed=seed,
             )
         except (ValueError, KeyError) as exc:  # bad PC choice, or world pins an absent ruleset
+            if own:  # nothing half-made: the playthrough's fork goes with the failed start
+                await store.delete_branch(branch.branch_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            if own:
+                await store.delete_branch(branch.branch_id)
+            raise
         return {"campaign_id": c.campaign_id, "branch_id": c.branch_id}
 
     def _campaign_view(c: Campaign, admin: bool) -> dict[str, Any]:
@@ -2168,6 +2219,25 @@ def create_app(
         return {"beats": [b.model_dump() for b in beats]}
 
     _MAX_TIMESKIP_DAYS = 100 * 365  # cap the in-fiction jump (a runaway skip fires N agenda rounds)
+
+    @app.post("/campaigns/{campaign_id}/threads/{thread_id}/state", **_out(S.ThreadStateSet))
+    async def campaign_thread_state(
+        campaign_id: str,
+        thread_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The game moves a plot through its lifecycle (D-102, `uro campaign thread-state`): one
+        ThreadStateChanged commit, then the world's rules react. OPERATOR-only (D-44): a structural
+        write on the shared campaign branch, like a time-skip."""
+        _require_operator(request)
+        _reject_foreign_scope(request, campaign_id)
+        if deps.set_thread_state is None:
+            raise HTTPException(status_code=501, detail="thread state not enabled")
+        state = _require(body, "state")
+        if not isinstance(state, str):
+            raise HTTPException(status_code=400, detail="state must be a string")
+        return await deps.set_thread_state(campaign_id, thread_id, state)
 
     @app.post("/campaigns/{campaign_id}/time-skip", **_out(S.TimeSkipped))
     async def campaign_time_skip(
@@ -2510,6 +2580,19 @@ async def _run_and_broadcast(
         async for chunk in deps.run_beat(campaign_id, participant, text):
             if isinstance(chunk, BeatResult):  # the committed beat (D-98), after the narration
                 result = chunk
+                continue
+            if isinstance(chunk, BeatMechanics):  # what the rules decided, before it (D-100)
+                await hub.publish(
+                    campaign_id,
+                    {
+                        "type": "beat_checks",
+                        "participant_id": participant,
+                        "intent": text,
+                        "mode": chunk.mode,
+                        "checks": [c.model_dump() for c in chunk.outcomes],
+                        **echo,
+                    },
+                )
                 continue
             if chunk == NARRATION_DONE:  # D-71: the story is told; the player may type again
                 await hub.publish(

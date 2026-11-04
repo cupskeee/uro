@@ -17,6 +17,7 @@ import asyncpg
 from uro_core.adapters.crypto import clean_secret, decrypt_secret, encrypt_secret
 from uro_core.adapters.postgres.projector import (
     _SNAPSHOT_TABLES,
+    SNAPSHOT_VERSION,
     apply_event,
     apply_raw,
     restore_snapshot,
@@ -199,6 +200,10 @@ async def _outbox_row(
 # reaction or a time-skip commit of its own)
 _RECENT_COMMITS = 40
 
+
+# Columns a branch diff doesn't compare (D-102): a thread's counts move on every beat played, so
+# comparing them would report every live thread of two siblings as changed. The row still shows.
+_DIFF_IGNORED: dict[str, tuple[str, ...]] = {"threads": ("developments", "beats_live")}
 
 # D-99: a set of branch heads' whole ancestry (one row per commit).
 _ANCESTRY = (
@@ -1673,8 +1678,8 @@ class PostgresEventStore:
         """A branch's conflict-seed threads (docs/09), authored + AI-backfilled (provenance)."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT thread_id, stakes, state, provenance FROM proj_threads "
-                "WHERE branch_id = $1 ORDER BY thread_id",
+                "SELECT thread_id, stakes, state, provenance, developments, beats_live "
+                "FROM proj_threads WHERE branch_id = $1 ORDER BY thread_id",
                 branch_id,
             )
         return [ThreadView(**dict(r)) for r in rows]
@@ -2152,7 +2157,14 @@ class PostgresEventStore:
             b_by = {_key(r): r for r in both[branch_b][section]}
             added = [b_by[k] for k in b_by if k not in a_by]
             removed = [a_by[k] for k in a_by if k not in b_by]
-            changed = [b_by[k] for k in b_by if k in a_by and b_by[k] != a_by[k]]
+            ignored = _DIFF_IGNORED.get(section, ())
+
+            def _content(row: dict[str, Any]) -> dict[str, Any]:
+                return {c: v for c, v in row.items() if c not in ignored}  # noqa: B023
+
+            changed = [
+                b_by[k] for k in b_by if k in a_by and _content(b_by[k]) != _content(a_by[k])
+            ]
             if added or removed or changed:
                 result[section] = {"added": added, "removed": removed, "changed": changed}
         return result
@@ -2333,6 +2345,44 @@ class PostgresEventStore:
         )
         return rows
 
+    async def rebuild_projections(self, world_id: str | None = None) -> dict[str, int]:
+        """Rebuild every branch's projections from its history (D-102), for a world or the whole
+        instance: the world's snapshots are dropped (a cache: one taken from rows a migration
+        defaulted would carry them on), then each branch's rows are replayed from genesis — what a
+        fork does, so the result is what any fork, replay or import shows. A maintenance step
+        after a migration that adds a projection column (027: the thread counts); run it while
+        the world isn't being played (each world's branches are locked while it runs)."""
+        async with self.pool.acquire() as conn:
+            worlds = (
+                [world_id]
+                if world_id is not None
+                else [r["world_id"] for r in await conn.fetch("SELECT world_id FROM worlds")]
+            )
+        done = {"worlds": 0, "branches": 0, "snapshots_dropped": 0}
+        for wid in worlds:
+            async with self.pool.acquire() as conn, conn.transaction():
+                branches = await conn.fetch(
+                    "SELECT branch_id, head_commit FROM branches WHERE world_id = $1 FOR UPDATE",
+                    wid,
+                )
+                dropped = await conn.execute(
+                    "DELETE FROM snapshots WHERE commit_id IN "
+                    "(SELECT commit_id FROM commits WHERE world_id = $1)",
+                    wid,
+                )
+                done["snapshots_dropped"] += int(dropped.split()[-1])
+                for b in branches:
+                    for section in _SNAPSHOT_TABLES:
+                        await conn.execute(
+                            f"DELETE FROM proj_{section} WHERE branch_id = $1", b["branch_id"]
+                        )
+                    if b["head_commit"] is not None:
+                        ancestry = await self._ancestry(conn, b["head_commit"])
+                        await self._materialize_into(conn, b["branch_id"], ancestry)
+                    done["branches"] += 1
+            done["worlds"] += 1
+        return done
+
     async def _materialize_into(
         self, conn: asyncpg.Connection, target_branch: str, ancestry: list[asyncpg.Record]
     ) -> int:
@@ -2344,8 +2394,10 @@ class PostgresEventStore:
         snap = await conn.fetchrow(
             "SELECT s.commit_id, s.state, c.depth "
             "FROM snapshots s JOIN commits c ON c.commit_id = s.commit_id "
-            "WHERE s.commit_id = ANY($1::text[]) ORDER BY c.depth DESC LIMIT 1",
+            "WHERE s.commit_id = ANY($1::text[]) AND (s.state->>'v')::int >= $2 "
+            "ORDER BY c.depth DESC LIMIT 1",
             ancestry_ids,
+            SNAPSHOT_VERSION,  # an older snapshot lacks columns since added: replay instead
         )
         if snap is not None:
             await restore_snapshot(conn, target_branch, snap["state"])
@@ -2403,10 +2455,12 @@ class PostgresEventStore:
         ).hexdigest()
         await conn.execute(
             "INSERT INTO snapshots (commit_id, state_hash, state) VALUES ($1, $2, $3) "
-            "ON CONFLICT (commit_id) DO NOTHING",
+            "ON CONFLICT (commit_id) DO UPDATE SET state = EXCLUDED.state, "
+            "state_hash = EXCLUDED.state_hash WHERE (snapshots.state->>'v')::int < $4",
             commit_id,
             state_hash,
             blob,
+            SNAPSHOT_VERSION,  # an older version is replaced; a current one stands
         )
 
     # --- metering (docs/07, D-14). Operational, prunable; not world truth. ---

@@ -2678,7 +2678,7 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 60
+    assert len([op for ops in spec["paths"].values() for op in ops]) == 61
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).
@@ -2752,7 +2752,8 @@ def test_pacing_any_player_reads_the_quiet_plots() -> None:
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["settings"] == {"quiet_after": 2, "every": 1} and body["beats_read"] == 3
+    assert body["settings"] == {"quiet_after": 2, "every": 1}
+    assert body["beats_read"] == 3
     assert [t["thread_id"] for t in body["threads"]] == ["t:a"]  # dormant ones aren't live
     assert body["threads"][0]["quiet_beats"] == 3 and body["threads"][0]["at_least"] is True
     assert body["next_paced"] == "t:a"
@@ -2857,3 +2858,27 @@ def test_the_token_registry_forgets_removed_campaigns() -> None:
     reg._cache[_hash("t2")] = ("cy", "camp-2")
     assert reg.forget_campaigns({"camp-1"}) == 1
     assert reg.resolve("t1") is None and reg.resolve("t2") == "cy"
+
+
+def test_beat_checks_arrive_before_the_narration() -> None:
+    from uro_core.pipeline.engine import BeatMechanics, CheckOutcome
+
+    deps = _fake_deps()
+
+    async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[Any]:
+        yield BeatMechanics(
+            mode="encounter",
+            outcomes=[CheckOutcome(actor_id="a:sam", affordance="shove", outcome="partial")],
+        )
+        yield "The diver staggers."
+
+    deps.run_beat = run_beat
+    with TestClient(create_app(deps)).websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        ws.send_json({"type": "intent", "text": "I shove past", "id": "i-1"})
+        msgs = _recv_until(ws, "beat_committed")
+    types = [m["type"] for m in msgs]
+    assert types.index("beat_checks") < types.index("narration_chunk")
+    checks = next(m for m in msgs if m["type"] == "beat_checks")
+    assert checks["mode"] == "encounter" and checks["intent_id"] == "i-1"
+    assert checks["checks"] == [{"actor_id": "a:sam", "affordance": "shove", "outcome": "partial"}]
+    assert msgs[-1]["narration"] == "The diver staggers."

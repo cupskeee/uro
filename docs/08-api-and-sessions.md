@@ -58,7 +58,7 @@ POST /worlds/import              {…WorldBundle JSON…}              verify ch
 GET  /worlds/{w}/chronicle       [?branch=&limit=]                a named branch's recent beats (OPERATOR-only) (BE-10)
 GET  /worlds/{w}/state           [?branch= | ?at=][&sections=]    projections at a branch head or ANY commit, read-only (OPERATOR-only, D-45)
 GET  /worlds/{w}/diff            ?a=&b=[&sections=]               what differs between two branches, per projection (OPERATOR-only, D-45) (docs/18 B5)
-POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id, branch?, seed?}   start_campaign on any branch (name or id; default main)
+POST /worlds/{w}/campaigns       {participant, new_pc_name|adopt_actor_id, branch?, seed?, own_branch?, from?, branch_name?}   start_campaign on any branch (name or id; default main); with `own_branch: true` it forks `branch` (at its head, or at `from`) into a new branch and starts there (OPERATOR-only, D-100); `from`/`branch_name` without it → 400
 GET  /campaigns                  [?world_id=]                      list
 GET  /campaigns/{c}                                                one campaign
 POST /campaigns/{c}/join         {participant, new_pc_name|adopt_actor_id}   bind an additional PC
@@ -67,6 +67,7 @@ GET  /campaigns/{c}/state        [?sections=actors,threads,…]      branch proj
 GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats
 GET  /campaigns/{c}/pacing                                         each live thread's quiet beats + the one the next beat would name, under the world's `[pacing]` (D-95)
 DELETE /campaigns/{c}                                              remove the campaign and its branch; one on `main` or sharing its branch → 400 (OPERATOR-only, D-99)
+POST /campaigns/{c}/threads/{t}/state {state}                      the game moves a plot through its lifecycle; the world's rules react (OPERATOR-only, D-102)
 POST /campaigns/{c}/time-skip    {days, downtime?}                 engine agenda_tick, or pass_time with downtime:false (D-80) (OPERATOR-only, D-46) (D-33)
 POST /campaigns/{c}/dry-run      {intent}                          preview a beat's events, commit nothing (BE-5)
 GET  /campaigns/{c}/consistency                                    narrator contradiction-survival proxy T2 (BE-5)
@@ -217,6 +218,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 | `beat_started` | `participant_id`, `intent`, `intent_id`† |
 | `beat_narrated` | `participant_id`, `intent`, `intent_id`† *(D-71: the narration is complete; the beat is being extracted and normally commits next (`beat_committed`), or ends in `beat_failed` if extraction or the commit fails. `uro connect` frees its prompt here. Not sent for an empty narration, which fails the beat.)* |
 | `narration_chunk` | `participant_id`, `text` |
+| `beat_checks` | `participant_id`, `intent`, `mode`, `checks[]`, `intent_id`† *(D-100: what the rules decided — each check's outcome, and `mode: encounter` for a fight — sent BEFORE the narration, since checks and fights resolve before the narrator speaks; only when a beat has a check or a fight; provisional until `beat_committed` — a `beat_failed` after it means nothing took effect)* |
 | `beat_committed` | `participant_id`, `intent`, `narration`, `commit_id` *(D-67)*, `intent_id`†; and *(D-98)* `checks[]` (`{actor_id, affordance, outcome}` per free-roam check: the ruleset's grade, never its trace, which may carry sheet values a player isn't shown, D-46), `suggestions[]` (the acting player's next-action hints from the planner, D-23; empty without a ruleset), `mode` (`encounter` when a fight resolved in the beat, else `freeroam`), `world_day` (the in-fiction day once the beat and any day it passed are committed), `created[]` (`{kind: actor\|place\|faction\|thread, id, name}` the beat made — scene-safe like the `state` sections; never claims, whose truth is operator-only, D-45) |
 | `beat_failed` | `participant_id`, `intent`, `error`, `intent_id`† |
 | `not_your_turn` | `participant_id`, `text` *(round-robin, D-31)*, `intent_id`† |
@@ -231,7 +233,7 @@ Every frame is a JSON object with a `type`. There is **no** universal envelope: 
 
 † `intent_id` echoes the `id` the client sent with that intent (absent if it sent none), so a client can tell its own outcome from another player's identical text.
 
-**Deliberately NOT emitted yet (a future GROW, not drift).** Since D-98 the beat's mode, check results and suggestions ride `beat_committed` (above). Still not sent: a `scene_update` (the engine keeps no scene: `SceneEntered` is reserved, D-87), check results *before* the narration (they resolve first, but only arrive with the commit), and a `beat_committed` `beat_id` (for deep-linking a committed beat). `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
+**Deliberately NOT emitted yet (a future GROW, not drift).** Since D-98 the beat's mode, check results and suggestions ride `beat_committed` (above). Since D-100 the check outcomes also arrive before the narration (`beat_checks`). Still not sent: a `scene_update` (the engine keeps no scene: `SceneEntered` is reserved, D-87), and a `beat_committed` `beat_id` (for deep-linking a committed beat). `encounter_action` waits on interactive per-turn play (D-29); `pin_actor` on PC-anchored recall. Each is a deliberate transport extension, tracked for when its engine state exists.
 
 Beat results may carry `suggestions[]` — 2–4 affordance-grounded next-action hints emitted by the planner at no extra LLM cost (D-23). **Free-text intent is canonical**; suggestions are hints clients may ignore entirely (the CLI renders them dimmed), never a constrained choice list. Since D-98 they ride `beat_committed`, which every seat receives; they belong to the acting `participant_id` (`uro connect` offers them only under the player's own beats, `uro play` under every beat).
 

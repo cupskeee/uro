@@ -8,6 +8,31 @@ The authoritative design history lives in [`docs/decisions.md`](docs/decisions.m
 capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
+Upgrading: run `uro db migrate` (027: two thread counters), then `uro db rebuild-projections` so
+campaigns played before it count their past (it replays each branch and drops the snapshot cache;
+run it while nothing is being played). For embedders, a `ThreadView` has `developments` and
+`beats_live`, and a custom `ServerDeps.run_beat` may yield a `BeatMechanics` before its narration.
+
+### Added
+- **A new game in one call** (D-100): `POST /worlds/{w}/campaigns` with `own_branch: true` (and
+  `uro campaign new --own-branch`) forks the world and starts the campaign on its own branch, so it
+  can later be removed alone (`from` picks a marker or commit, `branch_name` the name).
+- **The rules' answer before the story** (D-100): a `beat_checks` frame carries each check's
+  outcome and whether a fight happened as soon as they resolve, before the narration.
+
+- **A plot's lifecycle, for every game** (D-102): each thread counts the beats that brought it
+  into play (`developments`) and the beats it has been live (`beats_live`), in the `threads` state
+  section and `uro campaign pacing`. A game sets a plot's state itself:
+  `POST /campaigns/{c}/threads/{t}/state` or `uro campaign thread-state`, and the world's rules
+  react. Migration 027. Beats played before v0.16.0 record no threads, so they add no developments
+  (they do count as beats live).
+
+### Changed
+- **Snapshots are versioned** (D-102): one taken before this release lacks the new thread counts,
+  so it is skipped and replay covers it (`uro db rebuild-projections` drops them; new ones form as
+  play goes on). A branch diff no longer compares the counts.
+- **English only, for now** (D-101): what is English-bound and what a game can already change is
+  recorded; nothing changed.
 
 ### Fixed
 - **CLI help keeps bracketed names**: `uro campaign pacing`, `uro world seed` and `uro ruleset

@@ -400,7 +400,8 @@ async def paced(store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch) -> s
 def test_campaign_pacing(paced: str) -> None:
     code, out = _uro("campaign", "pacing", paced)
     assert code == 0 and "names a plot quiet 2+ beats, at most once every 1" in out
-    assert "3+ beats quiet  [t:wagons] The salt wagons stopped.  ← next" in out
+    assert "3+ beats quiet  [t:wagons] The salt wagons stopped." in out and "← next" in out
+    assert "(developed 0, live 3)" in out  # D-102: the counts (these beats record no threads)
 
 
 def test_world_delete_needs_yes_and_removes(world: SimpleNamespace) -> None:
@@ -416,3 +417,33 @@ def test_world_delete_needs_yes_and_removes(world: SimpleNamespace) -> None:
     assert code == 0 and "1 worlds" in out
     code, out = _uro("world", "list")
     assert world.name not in out
+
+
+def test_campaign_new_on_its_own_branch(world: SimpleNamespace) -> None:
+    code, out = _uro("campaign", "new", world.name, "--pc", "Wren", "--own-branch")
+    assert code == 0 and "(branch 'play-" in out, out
+    cid = out.split("campaign: ")[1].split()[0]
+    code, out = _uro("campaign", "delete", cid, "--yes")  # removable alone (D-99)
+    assert code == 0 and "1 campaigns" in out
+    code, out = _uro("campaign", "new", world.name, "--pc", "Wren", "--from", "x")
+    assert code == 1 and "--own-branch" in out
+
+
+def test_campaign_thread_state(paced: str) -> None:
+    code, out = _uro("campaign", "thread-state", paced, "t:wagons", "resolved")
+    assert code == 0 and "t:wagons → resolved" in out
+    code, out = _uro("campaign", "thread-state", paced, "t:wagons", "resolved")
+    assert code == 1 and "already resolved" in out
+
+
+def test_a_failed_own_branch_start_leaves_no_fork(world: SimpleNamespace) -> None:
+    code, before = _uro("branch", "list", world.name)
+    code, _ = _uro("campaign", "new", world.name, "--adopt", "a:nobody", "--own-branch")
+    assert code != 0
+    code, after = _uro("branch", "list", world.name)
+    assert after == before  # the playthrough's fork went with the failed start
+
+
+def test_db_rebuild_projections(world: SimpleNamespace) -> None:
+    code, out = _uro("db", "rebuild-projections", "--world", world.name)
+    assert code == 0 and "rebuilt 2 branches in 1 worlds" in out

@@ -1151,3 +1151,106 @@ async def test_seeding_a_pack_with_no_vocabulary_is_a_400(store: PostgresEventSt
         assert made.status_code == 200, made.text
         r = await client.post(_q(f"/worlds/{made.json()['world_id']}/seed"), files=upload)
         assert r.status_code == 400 and "no vocabulary" in r.json()["detail"]
+
+
+async def test_a_playthrough_gets_a_branch_of_its_own(store: PostgresEventStore) -> None:
+    # D-100: one call starts a separate game — a fork of `main` (or of a marker) — removable alone
+    async with _client(store) as client:
+        wid = (await client.post(_q("/worlds"), json={"name": f"Play-{new_id()}"})).json()[
+            "world_id"
+        ]
+        world = await store.get_world(wid)
+        assert world is not None
+        main_head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+        body = {"participant": "alice", "new_pc_name": "Ash", "own_branch": True}
+        made = await client.post(_q(f"/worlds/{wid}/campaigns"), json=body)
+        assert made.status_code == 200, made.text
+        branch = await store.get_branch(made.json()["branch_id"])
+        assert branch is not None and branch.name.startswith("play-")
+        assert branch.forked_from == main_head  # forked at main's head
+        named = await client.post(
+            _q(f"/worlds/{wid}/campaigns"), json={**body, "branch_name": "second-run"}
+        )
+        assert (await store.get_branch(named.json()["branch_id"])).name == "second-run"  # type: ignore[union-attr]
+        # a failed start leaves no orphan fork behind
+        before = len(await store.list_branches(wid))
+        bad = await client.post(
+            _q(f"/worlds/{wid}/campaigns"),
+            json={"participant": "alice", "adopt_actor_id": "a:nobody", "own_branch": True},
+        )
+        assert bad.status_code == 400 and len(await store.list_branches(wid)) == before
+        # a playthrough can be removed alone (D-99), and main is untouched
+        r = await client.delete(_q(f"/campaigns/{made.json()['campaign_id']}"))
+        assert r.status_code == 200
+        assert (await store.get_branch(world.main_branch_id)) is not None
+
+
+async def test_a_game_sets_a_thread_state_over_the_api(store: PostgresEventStore) -> None:
+    # D-102: operator-only; 404 for an unknown thread, 400 for a bad or unchanged state
+    from uro_core.domain.events import thread_created
+
+    world = await store.create_world(
+        f"threads-{new_id()}",
+        extra_events=[thread_created(thread_id="t:feud", stakes="The feud.", state="active")],
+    )
+    async with _client(store) as client:
+        made = await client.post(
+            _q(f"/worlds/{world.world_id}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "Ash"},
+        )
+        cid = made.json()["campaign_id"]
+        bob = (
+            await client.post(
+                _q(f"/campaigns/{cid}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+            )
+        ).json()["token"]
+        url = f"/campaigns/{cid}/threads/t:feud/state"
+        assert (await client.post(f"{url}?token={bob}", json={"state": "dead"})).status_code == 403
+        r = await client.post(_q(url), json={"state": "resolved"})
+        assert r.status_code == 200 and r.json()["state"] == "resolved" and r.json()["commit_id"]
+        assert (await client.post(_q(url), json={"state": "resolved"})).status_code == 400
+        assert (await client.post(_q(url), json={"state": "done"})).status_code == 400
+        missing = await client.post(
+            _q(f"/campaigns/{cid}/threads/t:nope/state"), json={"state": "dead"}
+        )
+        assert missing.status_code == 404
+
+
+async def test_a_playthrough_from_a_marker_and_its_refusals(store: PostgresEventStore) -> None:
+    async with _client(store) as client:
+        wid = (await client.post(_q("/worlds"), json={"name": f"Play2-{new_id()}"})).json()[
+            "world_id"
+        ]
+        world = await store.get_world(wid)
+        assert world is not None
+        marker = await store.create_marker(wid, "start", world.main_branch_id)
+        body = {"participant": "alice", "new_pc_name": "Ash", "own_branch": True}
+        made = await client.post(_q(f"/worlds/{wid}/campaigns"), json={**body, "from": "start"})
+        assert made.status_code == 200, made.text
+        branch = await store.get_branch(made.json()["branch_id"])
+        assert branch is not None and branch.forked_from == marker.commit_id
+        before = len(await store.list_branches(wid))
+        bad_from = await client.post(
+            _q(f"/worlds/{wid}/campaigns"), json={**body, "from": "nowhere"}
+        )
+        assert bad_from.status_code in (400, 404) and len(await store.list_branches(wid)) == before
+        dup = await client.post(
+            _q(f"/worlds/{wid}/campaigns"), json={**body, "branch_name": branch.name}
+        )
+        assert dup.status_code == 400 and len(await store.list_branches(wid)) == before
+        stray = await client.post(
+            _q(f"/worlds/{wid}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "A", "from": "start"},
+        )
+        assert stray.status_code == 400  # `from` without own_branch is refused, not ignored
+        bob = (
+            await client.post(
+                _q(f"/campaigns/{made.json()['campaign_id']}/join"),
+                json={"participant": "bob", "new_pc_name": "Bane"},
+            )
+        ).json()["token"]
+        player = await client.post(
+            f"/worlds/{wid}/campaigns?token={bob}",
+            json={"participant": "bob", "new_pc_name": "B", "own_branch": True},
+        )
+        assert player.status_code == 403 and len(await store.list_branches(wid)) == before

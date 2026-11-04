@@ -13,13 +13,14 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, cast, get_args
 
 from pydantic import BaseModel, Field
 
 from uro_core.domain.events import (
     CausedBy,
     DomainEvent,
+    ThreadState,
     WorldTime,
     beat_resolved,
     check_resolved,
@@ -27,6 +28,7 @@ from uro_core.domain.events import (
     item_transferred,
     mode_changed,
     sheet_updated,
+    thread_state_changed,
     time_advanced,
 )
 from uro_core.domain.ids import new_id
@@ -133,6 +135,14 @@ class CheckOutcome(BaseModel):
     outcome: str  # the ruleset's grade ("success", "partial", "miss", …), opaque to the engine
 
 
+class BeatMechanics(BaseModel):
+    """What the rules decided, before the narration (D-100): the checks resolve and a fight
+    resolves before the narrator speaks, so a client can show the roll first."""
+
+    mode: str = "freeroam"  # "encounter" when a fight resolved in this beat
+    outcomes: list[CheckOutcome] = Field(default_factory=list)
+
+
 class CreatedEntity(BaseModel):
     kind: str  # "actor" | "place" | "faction" | "thread"
     id: str
@@ -145,6 +155,13 @@ _CREATED_KINDS = {
     "FactionCreated": ("faction", "faction_id", "name"),
     "ThreadCreated": ("thread", "thread_id", "stakes"),
 }
+
+
+def _outcomes(ctx: _Context) -> list[CheckOutcome]:
+    return [
+        CheckOutcome(actor_id=c.actor_id, affordance=c.affordance, outcome=c.result.outcome)
+        for c in ctx.checks
+    ]
 
 
 def _created(events: list[DomainEvent]) -> list[CreatedEntity]:
@@ -427,6 +444,7 @@ class Engine:
         on_commit: Callable[[str], None] | None = None,
         mark_narrated: bool = False,
         on_result: Callable[[BeatResult], None] | None = None,
+        on_mechanics: Callable[[BeatMechanics], None] | None = None,
     ) -> AsyncIterator[str]:
         """Stream narration to the caller, then extract + commit once the stream ends.
 
@@ -442,9 +460,18 @@ class Engine:
 
         `on_result` receives the beat's `BeatResult` once it is committed (D-98): the check
         results, suggestions, mode, day and new entities a streaming client can show.
+        `on_mechanics` receives the checks' outcomes and the beat's mode as soon as they resolve,
+        before the narration (D-100) — only when there is something: a check or a fight.
         """
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
+        if on_mechanics is not None and (ctx.checks or encounter_events is not None):
+            on_mechanics(
+                BeatMechanics(
+                    mode="encounter" if encounter_events is not None else "freeroam",
+                    outcomes=_outcomes(ctx),
+                )
+            )
         role = self._narration_role(ctx, encounter_events)
         collected: list[str] = []
         async for chunk in self._router.stream(
@@ -703,10 +730,7 @@ class Engine:
             mode="encounter" if encounter_events is not None else "freeroam",
             world_day=await self._day_after(campaign.branch_id, ctx.world_day),
             created=_created(events),
-            outcomes=[
-                CheckOutcome(actor_id=c.actor_id, affordance=c.affordance, outcome=c.result.outcome)
-                for c in ctx.checks
-            ],
+            outcomes=_outcomes(ctx),
         )
 
     async def _day_after(self, branch_id: str, fallback: int) -> int:
@@ -950,6 +974,38 @@ class Engine:
             )
             if commit is not None:
                 await self._time_passed(campaign.branch_id, commit)
+        return commit
+
+    async def set_thread_state(
+        self,
+        campaign: Campaign,
+        thread_id: str,
+        state: str,
+        *,
+        caused_by: CausedBy | None = None,
+    ) -> Commit:
+        """A game moves a plot through its lifecycle (D-102): one ThreadStateChanged on the
+        campaign's branch as its own commit, then the world's rules react to it — what a rule's
+        `set_thread_state` or the extractor's resolution (D-52) does, for a game that decides when
+        a plot opens, sleeps or ends. Any thread, authored or made in play: the game's call. The
+        cause defaults to `system` (a host's own write). KeyError for an unknown thread;
+        ValueError for an unknown state or the one it already has."""
+        if state not in get_args(ThreadState):
+            raise ValueError(f"unknown thread state {state!r}; one of {get_args(ThreadState)}")
+        current = {t.thread_id: t for t in await self._store.list_threads(campaign.branch_id)}
+        if thread_id not in current:
+            raise KeyError(thread_id)
+        if current[thread_id].state == state:
+            raise ValueError(f"thread {thread_id!r} is already {state}")
+        event = thread_state_changed(
+            thread_id=thread_id,
+            to_state=cast(ThreadState, state),
+            from_state=current[thread_id].state,
+            caused_by=caused_by or CausedBy(kind="system"),
+        )
+        async with self._react_lock(campaign.branch_id):
+            commit = await self._store.append_beat(campaign.branch_id, [event])
+            await self._react_pass(campaign.branch_id, commit.commit_id, [event])
         return commit
 
     async def _agenda_pass(

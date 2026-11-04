@@ -3,7 +3,7 @@
 The projector is the ONLY writer of the proj_* tables. It runs inside the same
 transaction as the commit that produced the events (store.append_beat), so a
 projection failure rolls the whole beat back — projections can never drift ahead
-of, or behind, the log. Unknown event types (WorldGenesis, BeatResolved, …) are
+of, or behind, the log. Unknown event types (WorldGenesis, ModeChanged, …) are
 no-ops: they carry no projectable epistemic state.
 """
 
@@ -311,6 +311,27 @@ async def _thread_state_changed(
     )
 
 
+async def _beat_resolved(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    # D-102: a thread's lifecycle signal. Every live thread has lived one more beat; the threads
+    # the beat brought into play (its recorded `threads`, D-95) developed once more. In a free-roam
+    # commit BeatResolved comes first, so a thread the beat itself creates starts at 0 (creation
+    # isn't development) and one it resolves still counts this beat; a fight's commit lists it
+    # last, but carries no thread events (and no `threads`).
+    await conn.execute(
+        "UPDATE proj_threads SET beats_live = beats_live + 1 "
+        "WHERE branch_id = $1 AND state IN ('active', 'offered')",
+        branch_id,
+    )
+    touched = p.get("threads") or []
+    if touched:
+        await conn.execute(
+            "UPDATE proj_threads SET developments = developments + 1 "
+            "WHERE branch_id = $1 AND thread_id = ANY($2::text[])",
+            branch_id,
+            touched,
+        )
+
+
 async def _counter_changed(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     # Computation Layer (docs/19, D-34): UPSERT the absolute value; PRESERVE created_day on conflict
     # (only updated_day moves) so counter/claim age math works. Idempotent by (branch, scope, key).
@@ -348,6 +369,7 @@ _HANDLERS = {
     "ItemTransferred": _item_transferred,
     "ThreadCreated": _thread_created,
     "ThreadStateChanged": _thread_state_changed,
+    "BeatResolved": _beat_resolved,
     "CounterChanged": _counter_changed,
     "FactionCreated": _faction_created,
     "EdgeAdded": _edge_added,
@@ -377,6 +399,10 @@ async def apply_event(conn: asyncpg.Connection, branch_id: str, event: DomainEve
 # output captured verbatim, and restoring it is replay's equal (same rows the handlers
 # above would have produced). Keeping both here preserves that invariant end-to-end.
 
+# A snapshot's version: one taken before a projection gained columns can't restore them, so it is
+# skipped (replay covers it). v2: the threads' lifecycle counts (D-102).
+SNAPSHOT_VERSION = 2
+
 _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "actors": ("actor_id", "name", "tier", "role", "aliases", "status"),
     "claims": ("claim_id", "statement", "subject_refs", "truth", "origin", "created_day"),
@@ -387,7 +413,7 @@ _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
     "items": ("item_id", "name", "kind", "owner_ref"),
     "factions": ("faction_id", "name", "kind", "description"),
     "edges": ("src", "rel_type", "dst", "weight", "attrs"),
-    "threads": ("thread_id", "stakes", "state", "provenance"),
+    "threads": ("thread_id", "stakes", "state", "provenance", "developments", "beats_live"),
     "counters": ("scope_ref", "key", "value", "created_day", "updated_day"),
 }
 
@@ -395,7 +421,7 @@ _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
 async def snapshot_state(conn: asyncpg.Connection, branch_id: str) -> dict[str, Any]:
     """Serialize a branch's current projection rows to a plain, deterministically-ordered
     dict (stable across runs, so its state_hash is reproducible)."""
-    state: dict[str, Any] = {"v": 1}
+    state: dict[str, Any] = {"v": SNAPSHOT_VERSION}
     for section, columns in _SNAPSHOT_TABLES.items():
         # Order by ALL columns for a TOTAL order — ordering by only the first two leaves rows
         # that share them (e.g. edges with the same src+rel_type but different dst) in an
