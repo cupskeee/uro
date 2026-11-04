@@ -8,6 +8,8 @@ The authoritative design history lives in [`docs/decisions.md`](docs/decisions.m
 capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
+
+## [0.18.0] - 2026-11-04
 Upgrading: run `uro db migrate` (027: two thread counters), then `uro db rebuild-projections` so
 campaigns played before it count their past (it replays each branch and drops the snapshot cache;
 run it while nothing is being played). For embedders, a `ThreadView` has `developments` and
@@ -19,7 +21,6 @@ run it while nothing is being played). For embedders, a `ThreadView` has `develo
   can later be removed alone (`from` picks a marker or commit, `branch_name` the name).
 - **The rules' answer before the story** (D-100): a `beat_checks` frame carries each check's
   outcome and whether a fight happened as soon as they resolve, before the narration.
-
 - **A plot's lifecycle, for every game** (D-102): each thread counts the beats that brought it
   into play (`developments`) and the beats it has been live (`beats_live`), in the `threads` state
   section and `uro campaign pacing`. A game sets a plot's state itself:
@@ -1180,7 +1181,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/cupskeee/uro/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/cupskeee/uro/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/cupskeee/uro/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/cupskeee/uro/compare/v0.14.0...v0.15.0
