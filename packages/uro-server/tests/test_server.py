@@ -2769,7 +2769,7 @@ def test_pacing_404_for_an_unknown_campaign_and_401_without_a_token() -> None:
 
 
 def test_beat_committed_carries_the_beats_details() -> None:
-    from uro_core.pipeline.engine import BeatResult, CheckOutcome, CreatedEntity
+    from uro_core.pipeline.engine import BeatResult, CheckOutcome, CreatedEntity, ThreadChange
 
     deps = _fake_deps()
 
@@ -2785,6 +2785,14 @@ def test_beat_committed_carries_the_beats_details() -> None:
             mode="encounter",
             world_day=3,
             created=[CreatedEntity(kind="place", id="p:lock", name="The Dive Lock")],
+            threads_changed=[
+                ThreadChange(
+                    thread_id="t:v",
+                    stakes="Varga's fate.",
+                    from_state="active",
+                    to_state="resolved",
+                )
+            ],
         )
 
     deps.run_beat = run_beat
@@ -2798,6 +2806,14 @@ def test_beat_committed_carries_the_beats_details() -> None:
     assert done["suggestions"] == ["follow the drag marks"]
     assert done["mode"] == "encounter" and done["world_day"] == 3
     assert done["created"] == [{"kind": "place", "id": "p:lock", "name": "The Dive Lock"}]
+    assert done["threads_changed"] == [
+        {
+            "thread_id": "t:v",
+            "stakes": "Varga's fate.",
+            "from_state": "active",
+            "to_state": "resolved",
+        }
+    ]
     assert not any("claim" in k for k in done)  # no claims: their truth is operator-only (D-45)
 
 

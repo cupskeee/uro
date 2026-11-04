@@ -5,6 +5,7 @@ replay and a snapshot agree. A game moves a plot's state itself (`set_thread_sta
 world's rules react. (A "bring it toward its end" nudge was measured and not shipped: D-102.)"""
 
 import json
+import re
 
 import pytest
 from uro_core.adapters.postgres.store import PostgresEventStore
@@ -16,6 +17,7 @@ from uro_core.domain.events import (
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.engine import Engine
 from uro_core.providers.adapters.stub import StubProvider
+from uro_core.providers.base import CompletionRequest
 from uro_core.providers.router import ProviderRouter
 
 
@@ -227,3 +229,251 @@ async def test_a_plot_moves_on_a_world_whose_ruleset_is_gone(store: PostgresEven
     assert deps.set_thread_state is not None
     out = await deps.set_thread_state(campaign.campaign_id, "t:a", "resolved")
     assert out["state"] == "resolved"
+
+
+class _Extracting(StubProvider):
+    """Reports every KNOWN thread the narration quotes as developed (the stub narrates the
+    intent, so an intent naming `t:x` develops it)."""
+
+    async def complete(self, req: CompletionRequest) -> str:
+        if req.stage_tag != "extractor":
+            return await super().complete(req)
+        text = req.messages[-1].content
+        narration = text.split("NARRATION:\n", 1)[1]
+        known = text.split("KNOWN THREADS:\n", 1)[1].split("\n\n", 1)[0]
+        ids = re.findall(r"\[(t:[\w-]+)\]", known)
+        return json.dumps({"develops": [i for i in ids if i in narration], "claims": []})
+
+
+# --- D-103: a world's rules read the counts; a beat reports the plots it moved ---
+
+_FINALE = {
+    "rules_api_version": 8,
+    "rules": [
+        {
+            "id": "a-long-hunt-wakes-its-finale",
+            "trigger": {"event": "BeatResolved"},
+            "when": {
+                "kind": "all",
+                "all": [
+                    {
+                        "kind": "thread_life",
+                        "thread": "t:hunt",
+                        "measure": "developments",
+                        "op": ">=",
+                        "value": 2,
+                    },
+                    {"kind": "thread_state", "thread": "t:finale", "state": "dormant"},
+                ],
+            },
+            "then": [{"do": "set_thread_state", "thread": "t:finale", "to": "active"}],
+            "scope": {"world": True},
+        }
+    ],
+}
+
+
+async def test_a_world_rule_closes_in_on_a_long_plot(store: PostgresEventStore) -> None:
+    world = await store.create_world(
+        f"finale-{new_id()}",
+        rule_pack=_FINALE,
+        extra_events=[
+            thread_created(
+                thread_id="t:hunt",
+                stakes="The hunt for the beast.",
+                state="active",
+                provenance="emergent",
+            ),
+            thread_created(thread_id="t:finale", stakes="The beast's lair.", state="dormant"),
+        ],
+    )
+    campaign = await store.start_campaign(
+        world.world_id, world.main_branch_id, participant_id="p1", new_pc_name="Wren"
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Extracting()))
+    first = await engine.run_beat(campaign, "p1", "I track the beast [t:hunt].")
+    assert first.threads_changed == []  # developed once: not yet
+    second = await engine.run_beat(campaign, "p1", "I follow the tracks [t:hunt].")
+    states = {t.thread_id: t.state for t in await store.list_threads(campaign.branch_id)}
+    assert states["t:finale"] == "active"  # the world's rule read the count and woke the finale
+    assert [(c.thread_id, c.from_state, c.to_state) for c in second.threads_changed] == [
+        ("t:finale", "dormant", "active")
+    ]
+
+
+class _Resolving(StubProvider):
+    """An extractor that settles t:mystery and starts a new plot."""
+
+    async def complete(self, req: CompletionRequest) -> str:
+        if req.stage_tag != "extractor":
+            return await super().complete(req)
+        return json.dumps(
+            {
+                "resolves": ["t:mystery"],
+                "threads": [{"stakes": "Who sent the letter?"}],
+                "claims": [],
+            }
+        )
+
+
+async def test_a_beat_reports_the_plots_it_moved(store: PostgresEventStore) -> None:
+    world = await store.create_world(
+        f"moved-{new_id()}",
+        extra_events=[
+            thread_created(
+                thread_id="t:mystery",
+                stakes="Who took the boats?",
+                state="active",
+                provenance="emergent",
+            )
+        ],
+    )
+    campaign = await store.start_campaign(
+        world.world_id, world.main_branch_id, participant_id="p1", new_pc_name="Wren"
+    )
+    result = await Engine(store, ProviderRouter(bindings={}, default=_Resolving())).run_beat(
+        campaign, "p1", "I confront the smuggler."
+    )
+    assert [(c.thread_id, c.from_state, c.to_state) for c in result.threads_changed] == [
+        ("t:mystery", "active", "resolved")
+    ]  # the new plot the narration started is in `created`, not here
+    assert any(c.kind == "thread" and c.name == "Who sent the letter?" for c in result.created)
+    from uro_cli.main import beat_detail_lines
+
+    lines = beat_detail_lines(
+        {"threads_changed": [c.model_dump() for c in result.threads_changed]}, None
+    )
+    assert lines == ["  ~ plot active → resolved: Who took the boats?"]
+
+
+def test_thread_life_is_parsed_and_its_measure_is_checked() -> None:
+    from pydantic import ValidationError
+    from uro_core.worldpack.rules import RulePack
+
+    assert RulePack.model_validate(_FINALE).rules[0].id == "a-long-hunt-wakes-its-finale"
+    bad = json.loads(json.dumps(_FINALE))
+    bad["rules"][0]["when"]["all"][0]["measure"] = "age"
+    with pytest.raises(ValidationError):
+        RulePack.model_validate(bad)
+
+
+async def test_thread_life_reads_each_measure_binds_trigger_and_runs_in_agendas(
+    store: PostgresEventStore,
+) -> None:
+    pack = {
+        "rules_api_version": 8,
+        "rules": [
+            {  # beats_live, not developments: t:siege lives without being developed
+                "id": "a-long-siege-breaks",
+                "trigger": {"event": "BeatResolved"},
+                "when": {
+                    "kind": "all",
+                    "all": [
+                        {
+                            "kind": "thread_life",
+                            "thread": "t:siege",
+                            "measure": "beats_live",
+                            "op": ">=",
+                            "value": 2,
+                        },
+                        {
+                            "kind": "thread_life",
+                            "thread": "t:siege",
+                            "measure": "developments",
+                            "op": "==",
+                            "value": 0,
+                        },
+                        {"kind": "thread_state", "thread": "t:breach", "state": "dormant"},
+                    ],
+                },
+                "then": [{"do": "set_thread_state", "thread": "t:breach", "to": "offered"}],
+                "scope": {"world": True},
+            },
+            {  # a $trigger-bound thread: whichever plot was just resolved, if it ran long
+                "id": "a-long-plot-ending-wakes-the-epilogue",
+                "trigger": {"event": "ThreadStateChanged", "where": {"to_state": "resolved"}},
+                "when": {
+                    "kind": "thread_life",
+                    "thread": "$trigger.thread_id",
+                    "measure": "beats_live",
+                    "op": ">=",
+                    "value": 2,
+                },
+                "then": [{"do": "set_thread_state", "thread": "t:epilogue", "to": "active"}],
+                "scope": {"world": True},
+            },
+        ],
+        "agendas": [
+            {
+                "id": "weekly-siege-report",
+                "every_days": 7,
+                "when": {
+                    "kind": "thread_life",
+                    "thread": "t:siege",
+                    "measure": "beats_live",
+                    "op": ">=",
+                    "value": 2,
+                },
+                "then": [{"do": "set_thread_state", "thread": "t:report", "to": "active"}],
+                "scope": {"world": True},
+            }
+        ],
+    }
+    world = await store.create_world(
+        f"measures-{new_id()}",
+        rule_pack=pack,
+        extra_events=[
+            thread_created(thread_id=t, stakes=t, state=s)
+            for t, s in (
+                ("t:siege", "active"),
+                ("t:breach", "dormant"),
+                ("t:epilogue", "dormant"),
+                ("t:report", "dormant"),
+            )
+        ],
+    )
+    campaign = await store.start_campaign(
+        world.world_id, world.main_branch_id, participant_id="p1", new_pc_name="Wren"
+    )
+    engine = _engine(store)
+    for _ in range(2):
+        await engine.run_beat(campaign, "p1", "I wait on the walls.")
+    states = {t.thread_id: t.state for t in await store.list_threads(campaign.branch_id)}
+    assert states["t:breach"] == "offered"  # beats_live 2, developments 0
+    await engine.set_thread_state(campaign, "t:siege", "resolved")
+    states = {t.thread_id: t.state for t in await store.list_threads(campaign.branch_id)}
+    assert states["t:epilogue"] == "active"  # bound from the trigger's thread_id
+    await engine.agenda_tick(campaign.branch_id, 7)
+    states = {t.thread_id: t.state for t in await store.list_threads(campaign.branch_id)}
+    assert states["t:report"] == "active"  # the agenda read the count too
+
+
+async def test_a_rule_setting_a_state_a_thread_already_has_emits_nothing(
+    store: PostgresEventStore,
+) -> None:
+    world = await store.create_world(
+        f"noop-{new_id()}",
+        rule_pack={
+            "rules_api_version": 8,
+            "rules": [
+                {
+                    "id": "keep-it-open",
+                    "trigger": {"event": "BeatResolved"},
+                    "then": [{"do": "set_thread_state", "thread": "t:a", "to": "active"}],
+                    "scope": {"world": True},
+                }
+            ],
+        },
+        extra_events=[thread_created(thread_id="t:a", stakes="A", state="active")],
+    )
+    campaign = await store.start_campaign(
+        world.world_id, world.main_branch_id, participant_id="p1", new_pc_name="Wren"
+    )
+    await _engine(store).run_beat(campaign, "p1", "I wait.")
+    async with store.pool.acquire() as conn:
+        n = await conn.fetchval(
+            "SELECT count(*) FROM events e JOIN commits c ON c.commit_id = e.commit_id "
+            "WHERE c.world_id = $1 AND e.event_type = 'ThreadStateChanged'",
+            world.world_id,
+        )
+    assert n == 0  # no module beat re-setting it every turn

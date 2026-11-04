@@ -300,10 +300,18 @@ async def _translate(
     if a.do == "set_thread_state":
         if not _in_scope(allowed, a.thread):
             return _drop(drops, fired, a.thread, "out of scope")
-        exists = any(t.thread_id == a.thread for t in await store.list_threads(branch_id))
-        if not exists:  # never mint a thread via a state change
+        current = next(
+            (t for t in await store.list_threads(branch_id) if t.thread_id == a.thread), None
+        )
+        if current is None:  # never mint a thread via a state change
             return _drop(drops, fired, a.thread, "thread does not exist")
-        return [thread_state_changed(thread_id=a.thread, to_state=a.to, caused_by=cause)]
+        if current.state == a.to:  # already there: a no-op emits nothing (D-103 review, as D-59)
+            return []
+        return [
+            thread_state_changed(
+                thread_id=a.thread, to_state=a.to, from_state=current.state, caused_by=cause
+            )
+        ]
     if a.do == "create_thread":
         if not _in_scope(allowed, a.thread):
             return _drop(drops, fired, a.thread, "out of scope")

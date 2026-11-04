@@ -29,13 +29,14 @@ from uro_core.domain.events import ThreadState
 # D-34). The additions are purely additive, so v1 packs (no counters) remain valid — the engine
 # accepts the whole SUPPORTED set; a pack outside it fails loud at parse. A counter-using pack
 # should declare 2 so an old (v1) engine rejects it with a clear version error.
-RULES_API_VERSION = 7
+RULES_API_VERSION = 8
+# v8 (D-103): a `thread_life` condition reads a thread's lifecycle counts (D-102).
 # v7 (C6, D-54): a rule may trigger on CounterChanged — the bounded reaction cascade.
 # v6 (OQ-1, D-53): computed counter writes — set_counter.value / adjust_counter.delta take an
 # integer EXPRESSION over other counters. v5 (RL-6): $trigger.<field>-aware `when` +
 # trigger.per_event. v4 (for_each/roll_table/expire_claims), v3 multi-ref, v2 counters all still
 # valid (a literal int is still an expression, so no older pack changes meaning).
-_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
+_SUPPORTED_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
 
 
 def _event_payload_fields() -> dict[str, frozenset[str]]:
@@ -125,6 +126,20 @@ class CondThreadState(BaseModel):
     kind: Literal["thread_state"]
     thread: str
     state: ThreadState
+
+
+class CondThreadLife(BaseModel):
+    """Compare a thread's lifecycle count (D-103, over D-102's signal): `developments` (beats that
+    brought it into play) or `beats_live` (beats it has been active or offered). What lets a world
+    pack — a game with no code — decide when a plot has run long enough ("developed 10 times →
+    wake its finale"). An unknown thread is false."""
+
+    model_config = _STRICT
+    kind: Literal["thread_life"]
+    thread: str
+    measure: Literal["developments", "beats_live"]
+    op: CmpOp
+    value: int = Field(ge=0)
 
 
 class CondActorTier(BaseModel):
@@ -268,6 +283,7 @@ class CondNot(BaseModel):
 
 Condition = Annotated[
     CondThreadState
+    | CondThreadLife
     | CondActorTier
     | CondActorIsPC
     | CondEdgeExists
@@ -288,6 +304,7 @@ Condition = Annotated[
 # counter_compare's refs are nested in left/right and are handled explicitly by the walker.
 _COND_REF_SLOTS: dict[str, frozenset[str]] = {
     "thread_state": frozenset({"thread"}),
+    "thread_life": frozenset({"thread"}),
     "actor_tier": frozenset({"actor"}),
     "actor_is_pc": frozenset({"actor"}),
     "edge_exists": frozenset({"src", "dst"}),

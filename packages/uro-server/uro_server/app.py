@@ -2526,6 +2526,7 @@ def _beat_details(result: BeatResult) -> dict[str, object]:
         "mode": result.mode,
         "world_day": result.world_day,
         "created": [c.model_dump() for c in result.created],
+        "threads_changed": [t.model_dump() for t in result.threads_changed],  # D-103
     }
 
 
