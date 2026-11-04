@@ -127,6 +127,16 @@ class BeatResult(BaseModel):
     # each free-roam check's ruleset-graded outcome, without its trace: a trace is the ruleset's
     # own text and may carry sheet values (an opponent's AC), which a player isn't shown (D-46)
     outcomes: list[CheckOutcome] = Field(default_factory=list)
+    # D-103: the plots whose state the beat changed — through its narration (D-52), the world's
+    # rules reacting to it, or the days it passed — and the ones its rules created
+    threads_changed: list[ThreadChange] = Field(default_factory=list)
+
+
+class ThreadChange(BaseModel):
+    thread_id: str
+    stakes: str
+    from_state: str  # "" for a plot the beat's reactions created
+    to_state: str
 
 
 class CheckOutcome(BaseModel):
@@ -701,6 +711,7 @@ class Engine:
         events, extracted_n, beat_id = await self._beat_events(
             campaign, participant_id, intent_text, narration, ctx, encounter_events
         )
+        threads_before = await self._thread_states(campaign.branch_id)
         commit = await self._store.append_beat(campaign.branch_id, events)
         if on_appended is not None:
             on_appended(commit.commit_id)
@@ -731,7 +742,42 @@ class Engine:
             world_day=await self._day_after(campaign.branch_id, ctx.world_day),
             created=_created(events),
             outcomes=_outcomes(ctx),
+            threads_changed=await self._threads_changed(campaign.branch_id, threads_before, events),
         )
+
+    async def _thread_states(self, branch_id: str) -> dict[str, str] | None:
+        """Every thread's state, for the beat's `threads_changed` (D-103); None if the read fails
+        (the beat goes on: it is only a client's convenience)."""
+        try:
+            return {t.thread_id: t.state for t in await self._store.list_threads(branch_id)}
+        except Exception as exc:
+            logger.warning("couldn't read the threads before a beat: %s", exc)
+            return None
+
+    async def _threads_changed(
+        self, branch_id: str, before: dict[str, str] | None, events: list[DomainEvent]
+    ) -> list[ThreadChange]:
+        """The threads whose state moved between before the beat and after it, its reactions
+        and its days (D-103). A thread the beat's own narration created is in `created`, not
+        here; one its reactions created is here (from_state \"\"). Never fails the beat."""
+        if before is None:
+            return []
+        try:
+            after = await self._store.list_threads(branch_id)
+        except Exception as exc:
+            logger.warning("couldn't read the threads after a beat: %s", exc)
+            return []
+        own = {c.id for c in _created(events) if c.kind == "thread"}
+        return [
+            ThreadChange(
+                thread_id=t.thread_id,
+                stakes=t.stakes,
+                from_state=before.get(t.thread_id, ""),
+                to_state=t.state,
+            )
+            for t in after
+            if before.get(t.thread_id) != t.state and t.thread_id not in own
+        ]
 
     async def _day_after(self, branch_id: str, fallback: int) -> int:
         """The branch's day once the beat is committed, for its result (D-98). The beat is durable

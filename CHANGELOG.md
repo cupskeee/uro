@@ -26,6 +26,11 @@ run it while nothing is being played). For embedders, a `ThreadView` has `develo
   `POST /campaigns/{c}/threads/{t}/state` or `uro campaign thread-state`, and the world's rules
   react. Migration 027. Beats played before v0.16.0 record no threads, so they add no developments
   (they do count as beats live).
+- **World rules can read a plot's counts** (D-103): a `thread_life` condition (`developments` or
+  `beats_live`, compared to a number), so a world pack can wake a finale once a plot has run long
+  enough. Rule grammar v8; older packs are unchanged.
+- **A beat reports the plots it moved** (D-103): `beat_committed`, `uro play` and `uro connect` list
+  `threads_changed` (opened, woke or ended by the narration, the world's rules or the days passed).
 
 ### Changed
 - **Snapshots are versioned** (D-102): one taken before this release lacks the new thread counts,

@@ -162,6 +162,15 @@ async def _eval(
         thread = _bind(cond.thread, trigger_payload)  # type: ignore[union-attr]
         threads = await store.list_threads(branch_id)
         return any(t.thread_id == thread and t.state == cond.state for t in threads)  # type: ignore[union-attr]
+    if kind == "thread_life":  # D-103: a thread's lifecycle count (D-102)
+        thread = _bind(cond.thread, trigger_payload)  # type: ignore[union-attr]
+        found = next(
+            (t for t in await store.list_threads(branch_id) if t.thread_id == thread), None
+        )
+        if found is None:
+            return False
+        count = found.developments if cond.measure == "developments" else found.beats_live  # type: ignore[union-attr]
+        return _cmp(count, cond.op, cond.value)  # type: ignore[union-attr]
     if kind == "actor_tier":
         actor = await store.get_actor(branch_id, _bind(cond.actor, trigger_payload))  # type: ignore[union-attr]
         return actor is not None and _cmp(actor.tier, cond.op, cond.value)  # type: ignore[union-attr]
