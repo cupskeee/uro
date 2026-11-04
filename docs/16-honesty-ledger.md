@@ -499,7 +499,7 @@ held-out ones (40 beats).
 
 | Capability | Status | Evidence |
 |---|---|---|
-| `/openapi.json` describes every response | **proven** | `test_openapi_describes_every_response`: all 56 routes (60 with D-95's `/pacing` and D-99's three removals) have a response schema, none a bare object. |
+| `/openapi.json` describes every response | **proven** | `test_openapi_describes_every_response`: all 56 routes (61 with D-95's `/pacing`, D-99's three removals and D-102's thread state) have a response schema, none a bare object. |
 | A handler can't send an undeclared key | **proven (structural) for every shape a handler builds** | the envelopes, the state rows and the core models a route returns whole are strict (`additionalProperties: false`, asserted for every route's top-level response), and FastAPI validates every response; the whole suite reaches all 56 routes with a response (measured by recording each validated response). A core model nested in an envelope is a dump of itself and is not checked for extra keys. Mutations caught: an extra key, a dropped row column, an untyped route, a route back on a non-strict model, optional keys sent as `null`, the export losing `v`. |
 | State rows match the projections | **proven** | `test_state_rows_match_the_projection_catalog` (models vs `_SNAPSHOT_TABLES`) and a real-store read of all eleven sections. |
 | WebSocket frames | **documented, not in OpenAPI** | OpenAPI has no WebSocket model; docs/08 lists the frames and `test_server.py` pins their key sets (BE-11). |

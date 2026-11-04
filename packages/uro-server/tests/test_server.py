@@ -2678,7 +2678,7 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 60
+    assert len([op for ops in spec["paths"].values() for op in ops]) == 61
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).
@@ -2752,7 +2752,8 @@ def test_pacing_any_player_reads_the_quiet_plots() -> None:
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["settings"] == {"quiet_after": 2, "every": 1} and body["beats_read"] == 3
+    assert body["settings"] == {"quiet_after": 2, "every": 1, "ripe_after": 0}
+    assert body["beats_read"] == 3
     assert [t["thread_id"] for t in body["threads"]] == ["t:a"]  # dormant ones aren't live
     assert body["threads"][0]["quiet_beats"] == 3 and body["threads"][0]["at_least"] is True
     assert body["next_paced"] == "t:a"

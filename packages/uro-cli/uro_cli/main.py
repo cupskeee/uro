@@ -1667,6 +1667,38 @@ def campaign_delete(
     _run_async(_run)
 
 
+@campaign_app.command("thread-state")
+def campaign_thread_state(
+    campaign_id: str,
+    thread_id: str,
+    state: str = typer.Argument(..., help="dormant | offered | active | resolved | dead"),
+) -> None:
+    """Move a plot through its lifecycle (D-102): one commit, then the world's rules react. Any
+    thread, authored or made in play: when a plot opens, sleeps or ends is the game's call."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            # the world's rules need no LLM, so a stub router suffices (like `campaign time-skip`)
+            ruleset = await registry.resolve_for_campaign(store, c)
+            engine = Engine(store, build_router("stub", None), ruleset=ruleset)
+            try:
+                commit = await engine.set_thread_state(c, thread_id, state)
+            except KeyError as exc:
+                typer.echo(f"no such thread on this campaign: {thread_id}", err=True)
+                raise typer.Exit(1) from exc
+            except ValueError as exc:
+                typer.echo(f"error: {exc}", err=True)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        typer.echo(f"thread {thread_id} → {state}  (commit {commit.commit_id})")
+
+    _run_async(_run)
+
+
 @campaign_app.command("pacing")
 def campaign_pacing(campaign_id: str) -> None:
     """Which live plots have gone quiet, and the one the next beat would name to the narrator

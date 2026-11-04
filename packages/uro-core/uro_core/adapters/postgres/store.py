@@ -17,6 +17,7 @@ import asyncpg
 from uro_core.adapters.crypto import clean_secret, decrypt_secret, encrypt_secret
 from uro_core.adapters.postgres.projector import (
     _SNAPSHOT_TABLES,
+    SNAPSHOT_VERSION,
     apply_event,
     apply_raw,
     restore_snapshot,
@@ -1673,8 +1674,8 @@ class PostgresEventStore:
         """A branch's conflict-seed threads (docs/09), authored + AI-backfilled (provenance)."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT thread_id, stakes, state, provenance FROM proj_threads "
-                "WHERE branch_id = $1 ORDER BY thread_id",
+                "SELECT thread_id, stakes, state, provenance, developments, beats_live "
+                "FROM proj_threads WHERE branch_id = $1 ORDER BY thread_id",
                 branch_id,
             )
         return [ThreadView(**dict(r)) for r in rows]
@@ -2344,8 +2345,10 @@ class PostgresEventStore:
         snap = await conn.fetchrow(
             "SELECT s.commit_id, s.state, c.depth "
             "FROM snapshots s JOIN commits c ON c.commit_id = s.commit_id "
-            "WHERE s.commit_id = ANY($1::text[]) ORDER BY c.depth DESC LIMIT 1",
+            "WHERE s.commit_id = ANY($1::text[]) AND (s.state->>'v')::int >= $2 "
+            "ORDER BY c.depth DESC LIMIT 1",
             ancestry_ids,
+            SNAPSHOT_VERSION,  # an older snapshot lacks columns since added: replay instead
         )
         if snap is not None:
             await restore_snapshot(conn, target_branch, snap["state"])
@@ -2403,10 +2406,12 @@ class PostgresEventStore:
         ).hexdigest()
         await conn.execute(
             "INSERT INTO snapshots (commit_id, state_hash, state) VALUES ($1, $2, $3) "
-            "ON CONFLICT (commit_id) DO NOTHING",
+            "ON CONFLICT (commit_id) DO UPDATE SET state = EXCLUDED.state, "
+            "state_hash = EXCLUDED.state_hash WHERE (snapshots.state->>'v')::int < $4",
             commit_id,
             state_hash,
             blob,
+            SNAPSHOT_VERSION,  # an older version is replaced; a current one stands
         )
 
     # --- metering (docs/07, D-14). Operational, prunable; not world truth. ---

@@ -1183,3 +1183,34 @@ async def test_a_playthrough_gets_a_branch_of_its_own(store: PostgresEventStore)
         r = await client.delete(_q(f"/campaigns/{made.json()['campaign_id']}"))
         assert r.status_code == 200
         assert (await store.get_branch(world.main_branch_id)) is not None
+
+
+async def test_a_game_sets_a_thread_state_over_the_api(store: PostgresEventStore) -> None:
+    # D-102: operator-only; 404 for an unknown thread, 400 for a bad or unchanged state
+    from uro_core.domain.events import thread_created
+
+    world = await store.create_world(
+        f"threads-{new_id()}",
+        extra_events=[thread_created(thread_id="t:feud", stakes="The feud.", state="active")],
+    )
+    async with _client(store) as client:
+        made = await client.post(
+            _q(f"/worlds/{world.world_id}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "Ash"},
+        )
+        cid = made.json()["campaign_id"]
+        bob = (
+            await client.post(
+                _q(f"/campaigns/{cid}/join"), json={"participant": "bob", "new_pc_name": "Bane"}
+            )
+        ).json()["token"]
+        url = f"/campaigns/{cid}/threads/t:feud/state"
+        assert (await client.post(f"{url}?token={bob}", json={"state": "dead"})).status_code == 403
+        r = await client.post(_q(url), json={"state": "resolved"})
+        assert r.status_code == 200 and r.json()["state"] == "resolved" and r.json()["commit_id"]
+        assert (await client.post(_q(url), json={"state": "resolved"})).status_code == 400
+        assert (await client.post(_q(url), json={"state": "done"})).status_code == 400
+        missing = await client.post(
+            _q(f"/campaigns/{cid}/threads/t:nope/state"), json={"state": "dead"}
+        )
+        assert missing.status_code == 404

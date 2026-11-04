@@ -264,6 +264,8 @@ class ServerDeps:
     # None → those endpoints return 501 (a fake-deps test that only exercises play/outcome).
     store: EngineStore | None = None
     advance_time: Callable[[str, int, bool], Awaitable[dict[str, Any]]] | None = None
+    # (campaign, thread, state) → the game sets a plot's state; the world's rules react (D-102)
+    set_thread_state: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
     # Branch-scoped time-skip + downtime agendas (BE-2 fork `--time-skip-days`): engine.agenda_tick
     # on a raw branch id (a fork has no campaign), returning the new in-fiction day. None → fork's
     # optional time-skip leg returns 501.
@@ -448,6 +450,19 @@ def engine_deps(
         world_day = await store.current_world_time(campaign.branch_id)
         return {"branch_id": campaign.branch_id, "world_day": world_day}
 
+    async def set_thread_state(campaign_id: str, thread_id: str, state: str) -> dict[str, Any]:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        playing = await engine_for(campaign)  # its own ruleset's engine: the rules that react
+        try:
+            commit = await playing.set_thread_state(campaign, thread_id, state)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such thread") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"commit_id": commit.commit_id, "thread_id": thread_id, "state": state}
+
     async def advance_branch_time(branch_id: str, days: int) -> int:
         # BE-2 fork `--time-skip-days`: the same helper the CLI `uro branch fork` uses — agenda_tick
         # advances in-fiction time AND fires the world's downtime agenda rules (D-33), no LLM. A
@@ -624,6 +639,7 @@ def engine_deps(
         announced=announced,
         store=store,
         advance_time=advance_time,
+        set_thread_state=set_thread_state,
         advance_branch_time=advance_branch_time,
         preview_beat=preview_beat,
         mint_token=registry.mint,
@@ -2199,6 +2215,25 @@ def create_app(
         return {"beats": [b.model_dump() for b in beats]}
 
     _MAX_TIMESKIP_DAYS = 100 * 365  # cap the in-fiction jump (a runaway skip fires N agenda rounds)
+
+    @app.post("/campaigns/{campaign_id}/threads/{thread_id}/state", **_out(S.ThreadStateSet))
+    async def campaign_thread_state(
+        campaign_id: str,
+        thread_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The game moves a plot through its lifecycle (D-102, `uro campaign thread-state`): one
+        ThreadStateChanged commit, then the world's rules react. OPERATOR-only (D-44): a structural
+        write on the shared campaign branch, like a time-skip."""
+        _require_operator(request)
+        _reject_foreign_scope(request, campaign_id)
+        if deps.set_thread_state is None:
+            raise HTTPException(status_code=501, detail="thread state not enabled")
+        state = _require(body, "state")
+        if not isinstance(state, str):
+            raise HTTPException(status_code=400, detail="state must be a string")
+        return await deps.set_thread_state(campaign_id, thread_id, state)
 
     @app.post("/campaigns/{campaign_id}/time-skip", **_out(S.TimeSkipped))
     async def campaign_time_skip(

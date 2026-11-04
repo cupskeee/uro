@@ -426,3 +426,10 @@ def test_campaign_new_on_its_own_branch(world: SimpleNamespace) -> None:
     assert code == 0 and "1 campaigns" in out
     code, out = _uro("campaign", "new", world.name, "--pc", "Wren", "--from", "x")
     assert code == 1 and "--own-branch" in out
+
+
+def test_campaign_thread_state(paced: str) -> None:
+    code, out = _uro("campaign", "thread-state", paced, "t:wagons", "resolved")
+    assert code == 0 and "t:wagons → resolved" in out
+    code, out = _uro("campaign", "thread-state", paced, "t:wagons", "resolved")
+    assert code == 1 and "already resolved" in out

@@ -41,6 +41,9 @@ class PacingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")  # a misspelt setting is an error, not a no-op
     quiet_after: int = Field(default=0, ge=0, le=200)  # 0 = never name one (the default, D-96)
     every: int = Field(default=EVERY, ge=1, le=200)
+    # D-102: name a live, play-made plot (provenance emergent) to bring toward its end once it has
+    # been developed this many times. 0 = never (the default: closing plots is the game's call).
+    ripe_after: int = Field(default=0, ge=0, le=500)
 
     @property
     def window(self) -> int:
@@ -55,6 +58,8 @@ class ThreadPacing(BaseModel):
     stakes: str
     state: str
     provenance: str
+    developments: int = 0  # D-102: beats that brought it into play
+    beats_live: int = 0  # D-102: beats it has been active or offered
     # Beats since the thread last came up or was named. With `at_least`, it didn't within the
     # beats read (the window), so this is the window's length: a thread quiet longer than that, or
     # one that became live outside a beat (a rule woke it, an author's commit added it). Either way
@@ -69,8 +74,9 @@ class PacingReport(BaseModel):
     beats_read: int  # how many beats the counts are over (fewer than the window on a new branch)
     threads: list[ThreadPacing]
     # The thread the next beat would name to the narrator, "" if none (not quiet long enough, a
-    # thread was named in the last `every` beats, or pacing is off).
+    # thread was named in the last `every` beats, or pacing is off), and why: "quiet" or "ripe".
     next_paced: str = ""
+    next_kind: str = ""
 
 
 def pacing_line(stakes: str, env: PromptEnv | None = None) -> str:
@@ -78,6 +84,16 @@ def pacing_line(stakes: str, env: PromptEnv | None = None) -> str:
     or translate it, D-96), rendered with `stakes` (its trailing period dropped). The default
     template is the wording that passed the D-95 A/B."""
     return (env or DEFAULT_ENV).render("pacing.j2", stakes=stakes.rstrip("."))
+
+
+def ripe_line(stakes: str, env: PromptEnv | None = None) -> str:
+    """The narrator's line for a plot ready to turn (D-102): the world's `ripe.j2`, rendered with
+    `stakes` (its trailing period dropped)."""
+    return (env or DEFAULT_ENV).render("ripe.j2", stakes=stakes.rstrip("."))
+
+
+def line_for(kind: str, stakes: str, env: PromptEnv | None = None) -> str:
+    return ripe_line(stakes, env) if kind == "ripe" else pacing_line(stakes, env)
 
 
 def settings_from(raw: dict[str, object]) -> PacingSettings:
@@ -120,6 +136,8 @@ def thread_pacing(
                 stakes=t.stakes,
                 state=t.state,
                 provenance=t.provenance,
+                developments=t.developments,
+                beats_live=t.beats_live,
                 quiet_beats=len(recent) - 1 - last[t.thread_id] if seen else len(recent),
                 at_least=not seen,
             )
@@ -130,12 +148,12 @@ def thread_pacing(
 def quiet_thread(
     threads: list[ThreadView], recent: list[BeatResolvedPayload], settings: PacingSettings
 ) -> ThreadView | None:
-    """The live thread to name on the next beat, or None. `recent` is the branch's last
-    `settings.window` beats, oldest first."""
+    """The quiet live thread to name on the next beat, or None (D-95). `recent` is the
+    branch's last `settings.window` beats, oldest first."""
     if settings.quiet_after <= 0 or len(recent) < settings.quiet_after:
         return None  # off, or too few beats played for anything to have gone quiet
-    if any(b.paced_thread for b in recent[max(0, len(recent) - (settings.every - 1)) :]):
-        return None  # a thread was named in the last `every` beats
+    if _named_lately(recent, settings):
+        return None
     quiet = [p for p in thread_pacing(threads, recent) if p.quiet_beats >= settings.quiet_after]
     if not quiet:
         return None
@@ -143,6 +161,49 @@ def quiet_thread(
     # in the store's order (by id), so the pick is deterministic.
     best = max(quiet, key=lambda p: (p.at_least, p.quiet_beats))
     return next(t for t in threads if t.thread_id == best.thread_id)
+
+
+def ripe_thread(
+    threads: list[ThreadView], recent: list[BeatResolvedPayload], settings: PacingSettings
+) -> ThreadView | None:
+    """The plot to bring toward its end on the next beat, or None (D-102): a live thread play
+    made (provenance `emergent` — the ones play may resolve, D-52; an authored plot ends when the
+    game or its rules say), developed at least `ripe_after` times, and not named in the beats
+    read. Most developed first; among equals the store's order."""
+    if settings.ripe_after <= 0 or _named_lately(recent, settings):
+        return None
+    named = {b.paced_thread for b in recent if b.paced_thread}
+    ripe = [
+        t
+        for t in threads
+        if t.state in LIVE
+        and t.provenance == "emergent"
+        and t.developments >= settings.ripe_after
+        and t.thread_id not in named
+    ]
+    return max(ripe, key=lambda t: t.developments) if ripe else None
+
+
+def paced_choice(
+    threads: list[ThreadView], recent: list[BeatResolvedPayload], settings: PacingSettings
+) -> tuple[ThreadView, str] | None:
+    """The thread to name on the next beat and why ("quiet" or "ripe"), or None. With both
+    kinds due, they take turns: the kind not named last goes first (quiet before ripe at the
+    start)."""
+    quiet = quiet_thread(threads, recent, settings)
+    ripe = ripe_thread(threads, recent, settings)
+    if quiet is None and ripe is None:
+        return None
+    last = next((b.paced_kind or "quiet" for b in reversed(recent) if b.paced_thread), "")
+    if quiet is not None and (ripe is None or last != "quiet"):
+        return quiet, "quiet"
+    assert ripe is not None
+    return ripe, "ripe"
+
+
+def _named_lately(recent: list[BeatResolvedPayload], settings: PacingSettings) -> bool:
+    """A thread was named in the last `every` beats (spacing, shared by both kinds)."""
+    return any(b.paced_thread for b in recent[max(0, len(recent) - (settings.every - 1)) :])
 
 
 async def pacing_report(
@@ -155,10 +216,11 @@ async def pacing_report(
         settings = await world_settings(store, branch_id)
     threads = await store.list_threads(branch_id)
     recent = await store.recent_beats(branch_id, settings.window)
-    paced = quiet_thread(threads, recent, settings)
+    choice = paced_choice(threads, recent, settings)
     return PacingReport(
         settings=settings,
         beats_read=len(recent),
         threads=thread_pacing(threads, recent),
-        next_paced=paced.thread_id if paced else "",
+        next_paced=choice[0].thread_id if choice else "",
+        next_kind=choice[1] if choice else "",
     )

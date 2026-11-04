@@ -135,6 +135,9 @@ class ThreadView(BaseModel):
     stakes: str
     state: str  # dormant | offered | active
     provenance: str  # author | ai_backfill
+    # D-102, the lifecycle signal: beats that brought it into play, and beats it has been live
+    developments: int = 0
+    beats_live: int = 0
 
 
 class ParticipantNote(BaseModel):

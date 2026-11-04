@@ -379,6 +379,8 @@ class ThreadRow(Out):
     stakes: str
     state: str
     provenance: str
+    developments: int  # D-102: beats that brought it into play
+    beats_live: int  # D-102: beats it has been active or offered
 
 
 class CounterRow(Out):
@@ -486,6 +488,14 @@ class PacingOut(PacingReport):
     """`GET /campaigns/{c}/pacing` (D-95): each live thread's quiet beats + the next named one."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class ThreadStateSet(Out):
+    """`POST /campaigns/{c}/threads/{t}/state` (D-102)."""
+
+    commit_id: str
+    thread_id: str
+    state: str
 
 
 class TimeSkipped(Out):

@@ -94,8 +94,10 @@ class BeatResolvedPayload(BaseModel):
     # The live threads this beat brought into play (D-95): the KNOWN threads the extractor says
     # the narration developed, plus any it created or resolved. What the pacing director reads.
     threads: list[str] = Field(default_factory=list)
-    # The quiet thread the engine named to the narrator on this beat (D-95), "" if none.
+    # The thread the engine named to the narrator on this beat (D-95), "" if none, and why:
+    # "quiet" (it hadn't come up, D-95) or "ripe" (to bring it toward its end, D-102).
     paced_thread: str = ""
+    paced_kind: str = ""
 
 
 # --- Constructors (the only sanctioned way to mint these events) ---
@@ -141,6 +143,7 @@ def beat_resolved(
     synopsis: str = "",
     threads: list[str] | None = None,
     paced_thread: str = "",
+    paced_kind: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="BeatResolved",
@@ -153,6 +156,7 @@ def beat_resolved(
             synopsis=synopsis,
             threads=threads or [],
             paced_thread=paced_thread,
+            paced_kind=paced_kind,
         ).model_dump(),
     )
 
