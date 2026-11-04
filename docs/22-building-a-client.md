@@ -7,7 +7,8 @@ checked out. It assumes the product shape we're building:
 - **Bring your own model.** No credits: the player connects their own LLM provider in the client
   (an API key, a local model, or a ChatGPT subscription), through Uro's provider registry.
 
-Everything below was run against this repo; the commands are the real ones.
+Everything below was run against this repo; the commands are the real ones. Play is supported in
+English for now (D-101).
 
 ## What Uro is, and isn't
 
