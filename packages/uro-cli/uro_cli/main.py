@@ -636,7 +636,7 @@ def beat_detail_lines(
     day = details.get("world_day")
     if day is not None and day != previous_day:
         lines.append(f"  · day {day}")
-    for t in details.get("threads_changed") or []:  # D-103: a plot opened, woke or ended
+    for t in details.get("threads_changed") or []:  # D-103: any plot whose state moved
         moved = f"{t['from_state']} → {t['to_state']}" if t["from_state"] else t["to_state"]
         lines.append(f"  ~ plot {moved}: {t['stakes']}")
     created = details.get("created") or []

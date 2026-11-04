@@ -113,7 +113,7 @@ You get, in order (every frame that settles your intent echoes your `id` as `int
 | `beat_checks` | (only when the beat has a check or a fight) `checks`, `mode`: what the rules decided, before the story; provisional until `beat_committed` | show the roll first (undo it on `beat_failed`) |
 | `narration_chunk` × N | `text` pieces of the narration, as the model writes them | stream them into the transcript |
 | `beat_narrated` | the story is fully told; the world is now being updated | re-enable input here, don't wait |
-| `beat_committed` | saved: `narration`, `commit_id`, and what the beat did: `checks` (`{actor_id, affordance, outcome}`, the ruleset's grade), `suggestions` (for the acting `participant_id`), `mode` (`encounter` = a fight was resolved), `world_day`, `created` (new people, places, factions, plots), `threads_changed` (plots that opened, woke or ended) | show the outcomes and what's new; update the day badge; offer suggestions only to the player who acted |
+| `beat_committed` | saved: `narration`, `commit_id`, and what the beat did: `checks` (`{actor_id, affordance, outcome}`, the ruleset's grade), `suggestions` (for the acting `participant_id`), `mode` (`encounter` = a fight was resolved), `world_day`, `created` (new people, places, factions, plots), `threads_changed` (any plot whose state moved, including a dormant one a rule created, which you may hide until it wakes) | show the outcomes and what's new; update the day badge; offer suggestions only to the player who acted |
 | `beat_failed` | `error` (generic) | show a retry; nothing was saved |
 
 Also broadcast: `participant_joined`/`participant_left`, and for parties `not_your_turn`,
