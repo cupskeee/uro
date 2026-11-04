@@ -18,7 +18,7 @@ from typing import Any
 import typer
 from dotenv import find_dotenv, load_dotenv
 from uro_core.adapters.postgres.store import PostgresEventStore
-from uro_core.pipeline.engine import BeatResult, Engine
+from uro_core.pipeline.engine import BeatMechanics, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
@@ -545,13 +545,25 @@ def play(
                     continue
                 try:
                     results: list[BeatResult] = []
+                    mechanics: list[BeatMechanics] = []
                     async for chunk in engine.run_beat_stream(
-                        campaign, PARTICIPANT, intent, on_result=results.append
+                        campaign,
+                        PARTICIPANT,
+                        intent,
+                        on_result=results.append,
+                        on_mechanics=mechanics.append,
                     ):
+                        if mechanics:  # the rules' answer, before the story (D-100)
+                            m = mechanics.pop()
+                            checks = [c.model_dump() for c in m.outcomes]
+                            for line in mechanics_lines({"checks": checks, "mode": m.mode}):
+                                typer.echo(line)
                         sys.stdout.write(chunk)
                         sys.stdout.flush()
                     sys.stdout.write("\n")
-                    for line in beat_detail_lines(_details(results[0]) if results else {}, day):
+                    for line in beat_detail_lines(
+                        _details(results[0]) if results else {}, day, mechanics_shown=True
+                    ):
                         typer.echo(line)
                     if results:
                         day = results[0].world_day
@@ -575,15 +587,26 @@ def _details(result: BeatResult) -> dict[str, Any]:
     }
 
 
+def mechanics_lines(details: dict[str, Any]) -> list[str]:
+    """Each check's outcome and a fight — what the rules decided (shown before the narration
+    when the server sends `beat_checks`, D-100)."""
+    lines = [f"  · {c['affordance']}: {c['outcome']}" for c in details.get("checks") or []]
+    if details.get("mode") == "encounter":
+        lines.append("  · a fight was resolved")
+    return lines
+
+
 def beat_detail_lines(
-    details: dict[str, Any], previous_day: int | None, *, mine: bool = True
+    details: dict[str, Any],
+    previous_day: int | None,
+    *,
+    mine: bool = True,
+    mechanics_shown: bool = False,
 ) -> list[str]:
     """What `uro play` and `uro connect` show under a beat (D-98): each check's outcome, a
     fight, the day (when it moved, or first seen), what the beat made, and — under the player's
     OWN beat only — the planner's suggestions (in a party they belong to whoever acted)."""
-    lines = [f"  · {c['affordance']}: {c['outcome']}" for c in details.get("checks") or []]
-    if details.get("mode") == "encounter":
-        lines.append("  · a fight was resolved")
+    lines = [] if mechanics_shown else mechanics_lines(details)
     day = details.get("world_day")
     if day is not None and day != previous_day:
         lines.append(f"  · day {day}")
@@ -795,6 +818,7 @@ def connect(
                 pending: dict[str, tuple[str, asyncio.Event]] = {}
                 echoes = False
                 seen_day: int | None = None  # the day the last beat_committed showed
+                checked: set[str] = set()  # intents whose beat_checks were already printed
 
                 def settle(msg: dict[str, Any]) -> None:
                     if "intent_id" in msg:
@@ -824,9 +848,18 @@ def connect(
                             settle(msg)
                         if kind == "narration_chunk":
                             typer.echo(msg["text"], nl=False)
+                        elif kind == "beat_checks":  # what the rules decided, first (D-100)
+                            checked.add(str(msg.get("intent_id", msg.get("intent"))))
+                            for line in mechanics_lines(msg):
+                                typer.echo(line)
                         elif kind == "beat_committed":
                             typer.echo(f"\n  ✓ [{msg['participant_id']}] {msg['intent']!r}")
-                            for line in beat_detail_lines(msg, seen_day, mine=ours):
+                            key = str(msg.get("intent_id", msg.get("intent")))
+                            shown = key in checked
+                            checked.discard(key)
+                            for line in beat_detail_lines(
+                                msg, seen_day, mine=ours, mechanics_shown=shown
+                            ):
                                 typer.echo(line)
                             seen_day = msg.get("world_day", seen_day)
                             typer.echo("")
@@ -1712,8 +1745,15 @@ def campaign_new(
     seed: int = typer.Option(
         0, "--seed", help="mechanics RNG seed (docs/18 G-3) — pin it for reproducible combat"
     ),
+    own_branch: bool = typer.Option(
+        False, "--own-branch", help="a playthrough of its own: fork --branch and play there (D-100)"
+    ),
+    from_ref: str = typer.Option(
+        None, "--from", help="with --own-branch: fork at this marker or commit, not the head"
+    ),
 ) -> None:
-    """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one)."""
+    """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one).
+    With --own-branch it gets a branch of its own, so it can later be removed alone (D-99)."""
 
     async def _run() -> None:
         if (adopt is None) == (pc is None):
@@ -1727,6 +1767,17 @@ def campaign_new(
             if b is None:
                 typer.echo(f"no such branch: {branch}", err=True)
                 raise typer.Exit(1)
+            if from_ref is not None and not own_branch:
+                typer.echo("--from goes with --own-branch", err=True)
+                raise typer.Exit(1)
+            if own_branch:
+                from uro_core.timeline.playthrough import playthrough_branch
+
+                try:
+                    b = await playthrough_branch(store, w.world_id, b, from_ref=from_ref)
+                except (ValueError, KeyError) as exc:
+                    typer.echo(f"error: {exc}", err=True)
+                    raise typer.Exit(1) from exc
             # Bind the WORLD's declared ruleset (docs/06, D-30): a PbtA world's campaign is
             # played under uro_pbta, not the hard-coded default. ('' → registry default.)
             pin = await store.world_ruleset(b.branch_id)
@@ -1739,22 +1790,29 @@ def campaign_new(
             ):
                 pc_sheet = _build_pc_sheet(rs)
             ruleset_id = rs.id
-            campaign = await store.start_campaign(
-                w.world_id,
-                b.branch_id,
-                participant_id=participant,
-                adopt_actor_id=adopt,
-                new_pc_name=pc,
-                pc_sheet=pc_sheet,
-                starting_items=await starting_gear(store, b.branch_id) if pc is not None else None,
-                ruleset_id=ruleset_id,
-                ruleset_version=pin.version,
-                seed=seed,
-            )
+            try:
+                campaign = await store.start_campaign(
+                    w.world_id,
+                    b.branch_id,
+                    participant_id=participant,
+                    adopt_actor_id=adopt,
+                    new_pc_name=pc,
+                    pc_sheet=pc_sheet,
+                    starting_items=(
+                        await starting_gear(store, b.branch_id) if pc is not None else None
+                    ),
+                    ruleset_id=ruleset_id,
+                    ruleset_version=pin.version,
+                    seed=seed,
+                )
+            except BaseException:
+                if own_branch:  # nothing half-made: the playthrough's fork goes too
+                    await store.delete_branch(b.branch_id)
+                raise
         finally:
             await store.close()
         who = f"adopted {adopt}" if adopt else f"new PC {pc!r}"
-        typer.echo(f"campaign: {campaign.campaign_id}  (branch {branch!r}, {who})")
+        typer.echo(f"campaign: {campaign.campaign_id}  (branch {b.name!r}, {who})")
         typer.echo(f"play it:  uro play {campaign.campaign_id}")
 
     _run_async(_run)

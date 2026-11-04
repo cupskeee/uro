@@ -87,3 +87,42 @@ async def test_the_servers_beat_runner_yields_the_result_last(store: PostgresEve
     assert isinstance(items[-1], BeatResult)
     assert all(isinstance(x, str) for x in items[:-1])
     assert {c.name for c in items[-1].created} >= {"Jun Abe", "The Dive Lock"}
+
+
+async def test_the_rules_answer_comes_before_the_story(store: PostgresEventStore) -> None:
+    # D-100: a check resolves before the narrator speaks; a streaming caller hears it first
+    from uro_core.pipeline.engine import BeatMechanics
+    from uro_core.pipeline.plan import BeatPlan, PlanMechanic
+    from uro_core.rulesets.base import CharSpec
+    from uro_core.rulesets.rng import Rng
+    from uro_core.rulesets.uro_basic import UroBasic
+
+    rs = UroBasic()
+    world = await store.create_world(f"rules-first-{new_id()}")
+    campaign = await store.start_campaign(
+        world.world_id,
+        world.main_branch_id,
+        participant_id="p1",
+        new_pc_name="Ada",
+        new_pc_id=f"a:ada-{new_id()}",
+        pc_sheet=rs.new_character(CharSpec(data={"abilities": {"CHA": 14}}), Rng(0)),
+        ruleset_id="uro-basic",
+        seed=7,
+    )
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Naming()), ruleset=rs)
+    plan = BeatPlan(
+        triggers=["change_disposition"], mechanics=[PlanMechanic(affordance="persuade")]
+    )
+    order: list[object] = []
+    async for chunk in engine.run_beat_stream(
+        campaign, "p1", "I talk the guard down.", plan=plan, on_mechanics=order.append
+    ):
+        order.append(chunk)
+    first = order[0]
+    assert isinstance(first, BeatMechanics) and first.mode == "freeroam"
+    assert [(c.affordance, bool(c.outcome)) for c in first.outcomes] == [("persuade", True)]
+    assert all(isinstance(x, str) for x in order[1:])  # then the narration
+    plain: list[object] = []
+    async for _ in engine.run_beat_stream(campaign, "p1", "I wait.", on_mechanics=plain.append):
+        pass
+    assert plain == []  # no check, no fight: nothing to tell first

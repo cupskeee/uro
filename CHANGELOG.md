@@ -9,6 +9,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+- **A new game in one call** (D-100): `POST /worlds/{w}/campaigns` with `own_branch: true` (and
+  `uro campaign new --own-branch`) forks the world and starts the campaign on its own branch, so it
+  can later be removed alone.
+- **The rules' answer before the story** (D-100): a `beat_checks` frame carries each check's
+  outcome and whether a fight happened as soon as they resolve, before the narration.
+
 ### Fixed
 - **CLI help keeps bracketed names**: `uro campaign pacing`, `uro world seed` and `uro ruleset
   list` showed `` where `[pacing]`, `[history.vocabulary]` and `[ruleset.config]` belonged (the help

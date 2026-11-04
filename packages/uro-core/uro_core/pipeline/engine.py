@@ -133,6 +133,14 @@ class CheckOutcome(BaseModel):
     outcome: str  # the ruleset's grade ("success", "partial", "miss", …), opaque to the engine
 
 
+class BeatMechanics(BaseModel):
+    """What the rules decided, before the narration (D-100): the checks resolve and a fight
+    resolves before the narrator speaks, so a client can show the roll first."""
+
+    mode: str = "freeroam"  # "encounter" when a fight resolved in this beat
+    outcomes: list[CheckOutcome] = Field(default_factory=list)
+
+
 class CreatedEntity(BaseModel):
     kind: str  # "actor" | "place" | "faction" | "thread"
     id: str
@@ -145,6 +153,13 @@ _CREATED_KINDS = {
     "FactionCreated": ("faction", "faction_id", "name"),
     "ThreadCreated": ("thread", "thread_id", "stakes"),
 }
+
+
+def _outcomes(ctx: _Context) -> list[CheckOutcome]:
+    return [
+        CheckOutcome(actor_id=c.actor_id, affordance=c.affordance, outcome=c.result.outcome)
+        for c in ctx.checks
+    ]
 
 
 def _created(events: list[DomainEvent]) -> list[CreatedEntity]:
@@ -427,6 +442,7 @@ class Engine:
         on_commit: Callable[[str], None] | None = None,
         mark_narrated: bool = False,
         on_result: Callable[[BeatResult], None] | None = None,
+        on_mechanics: Callable[[BeatMechanics], None] | None = None,
     ) -> AsyncIterator[str]:
         """Stream narration to the caller, then extract + commit once the stream ends.
 
@@ -442,9 +458,18 @@ class Engine:
 
         `on_result` receives the beat's `BeatResult` once it is committed (D-98): the check
         results, suggestions, mode, day and new entities a streaming client can show.
+        `on_mechanics` receives the checks' outcomes and the beat's mode as soon as they resolve,
+        before the narration (D-100) — only when there is something: a check or a fight.
         """
         ctx = await self._context(campaign, participant_id, intent_text, plan)
         messages, encounter_events = await self._prepare_narration(campaign, ctx, intent_text)
+        if on_mechanics is not None and (ctx.checks or encounter_events is not None):
+            on_mechanics(
+                BeatMechanics(
+                    mode="encounter" if encounter_events is not None else "freeroam",
+                    outcomes=_outcomes(ctx),
+                )
+            )
         role = self._narration_role(ctx, encounter_events)
         collected: list[str] = []
         async for chunk in self._router.stream(
@@ -703,10 +728,7 @@ class Engine:
             mode="encounter" if encounter_events is not None else "freeroam",
             world_day=await self._day_after(campaign.branch_id, ctx.world_day),
             created=_created(events),
-            outcomes=[
-                CheckOutcome(actor_id=c.actor_id, affordance=c.affordance, outcome=c.result.outcome)
-                for c in ctx.checks
-            ],
+            outcomes=_outcomes(ctx),
         )
 
     async def _day_after(self, branch_id: str, fallback: int) -> int:

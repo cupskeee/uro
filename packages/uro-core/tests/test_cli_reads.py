@@ -416,3 +416,13 @@ def test_world_delete_needs_yes_and_removes(world: SimpleNamespace) -> None:
     assert code == 0 and "1 worlds" in out
     code, out = _uro("world", "list")
     assert world.name not in out
+
+
+def test_campaign_new_on_its_own_branch(world: SimpleNamespace) -> None:
+    code, out = _uro("campaign", "new", world.name, "--pc", "Wren", "--own-branch")
+    assert code == 0 and "(branch 'play-" in out, out
+    cid = out.split("campaign: ")[1].split()[0]
+    code, out = _uro("campaign", "delete", cid, "--yes")  # removable alone (D-99)
+    assert code == 0 and "1 campaigns" in out
+    code, out = _uro("campaign", "new", world.name, "--pc", "Wren", "--from", "x")
+    assert code == 1 and "--own-branch" in out

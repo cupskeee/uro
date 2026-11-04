@@ -2857,3 +2857,27 @@ def test_the_token_registry_forgets_removed_campaigns() -> None:
     reg._cache[_hash("t2")] = ("cy", "camp-2")
     assert reg.forget_campaigns({"camp-1"}) == 1
     assert reg.resolve("t1") is None and reg.resolve("t2") == "cy"
+
+
+def test_beat_checks_arrive_before_the_narration() -> None:
+    from uro_core.pipeline.engine import BeatMechanics, CheckOutcome
+
+    deps = _fake_deps()
+
+    async def run_beat(campaign_id: str, participant: str, text: str) -> AsyncIterator[Any]:
+        yield BeatMechanics(
+            mode="encounter",
+            outcomes=[CheckOutcome(actor_id="a:sam", affordance="shove", outcome="partial")],
+        )
+        yield "The diver staggers."
+
+    deps.run_beat = run_beat
+    with TestClient(create_app(deps)).websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        ws.send_json({"type": "intent", "text": "I shove past", "id": "i-1"})
+        msgs = _recv_until(ws, "beat_committed")
+    types = [m["type"] for m in msgs]
+    assert types.index("beat_checks") < types.index("narration_chunk")
+    checks = next(m for m in msgs if m["type"] == "beat_checks")
+    assert checks["mode"] == "encounter" and checks["intent_id"] == "i-1"
+    assert checks["checks"] == [{"actor_id": "a:sam", "affordance": "shove", "outcome": "partial"}]
+    assert msgs[-1]["narration"] == "The diver staggers."

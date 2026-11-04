@@ -1151,3 +1151,35 @@ async def test_seeding_a_pack_with_no_vocabulary_is_a_400(store: PostgresEventSt
         assert made.status_code == 200, made.text
         r = await client.post(_q(f"/worlds/{made.json()['world_id']}/seed"), files=upload)
         assert r.status_code == 400 and "no vocabulary" in r.json()["detail"]
+
+
+async def test_a_playthrough_gets_a_branch_of_its_own(store: PostgresEventStore) -> None:
+    # D-100: one call starts a separate game — a fork of `main` (or of a marker) — removable alone
+    async with _client(store) as client:
+        wid = (await client.post(_q("/worlds"), json={"name": f"Play-{new_id()}"})).json()[
+            "world_id"
+        ]
+        world = await store.get_world(wid)
+        assert world is not None
+        main_head = (await store.get_branch(world.main_branch_id)).head_commit  # type: ignore[union-attr]
+        body = {"participant": "alice", "new_pc_name": "Ash", "own_branch": True}
+        made = await client.post(_q(f"/worlds/{wid}/campaigns"), json=body)
+        assert made.status_code == 200, made.text
+        branch = await store.get_branch(made.json()["branch_id"])
+        assert branch is not None and branch.name.startswith("play-")
+        assert branch.forked_from == main_head  # forked at main's head
+        named = await client.post(
+            _q(f"/worlds/{wid}/campaigns"), json={**body, "branch_name": "second-run"}
+        )
+        assert (await store.get_branch(named.json()["branch_id"])).name == "second-run"  # type: ignore[union-attr]
+        # a failed start leaves no orphan fork behind
+        before = len(await store.list_branches(wid))
+        bad = await client.post(
+            _q(f"/worlds/{wid}/campaigns"),
+            json={"participant": "alice", "adopt_actor_id": "a:nobody", "own_branch": True},
+        )
+        assert bad.status_code == 400 and len(await store.list_branches(wid)) == before
+        # a playthrough can be removed alone (D-99), and main is untouched
+        r = await client.delete(_q(f"/campaigns/{made.json()['campaign_id']}"))
+        assert r.status_code == 200
+        assert (await store.get_branch(world.main_branch_id)) is not None
