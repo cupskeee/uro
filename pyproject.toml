@@ -4,13 +4,13 @@ members = ["packages/uro-core", "packages/uro-server", "packages/uro-cli"]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3",
-    "pytest-asyncio>=0.24",
-    "ruff>=0.16.6",
-    "mypy>=2.3.1",
-    "import-linter>=2.14",
-    "coverage>=7.16.0",
-    "types-pyyaml>=6.0.12.20260815",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1",
+    "ruff>=0.17.3",
+    "mypy>=2.4.1",
+    "import-linter>=2.15",
+    "coverage>=7.17.0",
+    "types-pyyaml>=6.0.12.20261030",
     "httpx2>=2.16",
     "nats-py>=2.16",
 ]
