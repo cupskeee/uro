@@ -14,6 +14,12 @@ class World(BaseModel):
     world_id: str
     name: str
     main_branch_id: str
+    # What the world says about itself (D-104), from its WorldGenesis: a pitch, its tone tags and
+    # its `[content]` declaration (None when it declared none). A store that keeps none leaves
+    # the defaults.
+    description: str = ""
+    tone: list[str] = Field(default_factory=list)
+    content: dict[str, Any] | None = None
 
 
 class Branch(BaseModel):

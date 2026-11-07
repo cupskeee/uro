@@ -112,24 +112,23 @@ def test_healthz() -> None:
     assert TestClient(create_app(_fake_deps())).get("/healthz").json() == {"status": "ok"}
 
 
-def test_bad_token_is_rejected_before_accept() -> None:
+def _refusal(client: TestClient, url: str) -> int:
+    """The code a refused play socket closes with. D-107: it is accepted first, so the code reaches
+    the client (closed before accept, the ASGI server sent a bare HTTP 403 and browsers saw 1006);
+    nothing arrives before the close."""
+    with pytest.raises(WebSocketDisconnect) as excinfo, client.websocket_connect(url) as ws:
+        ws.receive_json()
+    return excinfo.value.code
+
+
+def test_bad_token_is_refused_with_its_close_code() -> None:
     client = TestClient(create_app(_fake_deps()))
-    with (
-        pytest.raises(WebSocketDisconnect) as excinfo,
-        client.websocket_connect("/campaigns/camp-1/play?token=nope"),
-    ):
-        pass
-    assert excinfo.value.code == 4401  # unauthorized, closed before accept
+    assert _refusal(client, "/campaigns/camp-1/play?token=nope") == 4401  # unauthorized
 
 
 def test_unknown_campaign_is_rejected() -> None:
     client = TestClient(create_app(_fake_deps()))
-    with (
-        pytest.raises(WebSocketDisconnect) as excinfo,
-        client.websocket_connect("/campaigns/nope/play?token=tok-a"),
-    ):
-        pass
-    assert excinfo.value.code == 4404  # no such campaign
+    assert _refusal(client, "/campaigns/nope/play?token=tok-a") == 4404  # no such campaign
 
 
 # --- Chronicler mode: the outcome-bundle endpoint (D-25) ---
@@ -510,12 +509,8 @@ def test_ws_rejects_a_token_scoped_to_another_campaign() -> None:
     client = TestClient(create_app(deps))
     with client.websocket_connect("/campaigns/camp-1/play?token=bob-tok") as ws:
         _recv_until(ws, "participant_joined")  # works on its OWN campaign
-    with (
-        pytest.raises(WebSocketDisconnect) as exc,
-        client.websocket_connect("/campaigns/camp-2/play?token=bob-tok"),
-    ):
-        pass
-    assert exc.value.code == 4403  # rejected on a DIFFERENT campaign, before accept
+    # rejected on a DIFFERENT campaign
+    assert _refusal(client, "/campaigns/camp-2/play?token=bob-tok") == 4403
 
 
 # --- BE-1 (#33): GET /worlds/{w}/branches — the branch-list read (docs/18 B3, D-44) ---
@@ -1332,7 +1327,15 @@ def test_import_operator_instantiates_a_fresh_world() -> None:
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body == {"world_id": "w:new", "name": "Emberfell", "main_branch_id": "b:new"}
+    assert body == {
+        "world_id": "w:new",
+        "name": "Emberfell",
+        "main_branch_id": "b:new",
+        # D-104: what the world says about itself (a fake store keeps none)
+        "description": "",
+        "tone": [],
+        "content": None,
+    }
     assert store.imported is not None  # the verified bundle reached the store
 
 
@@ -2678,7 +2681,7 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 61
+    assert len([op for ops in spec["paths"].values() for op in ops]) == 64  # D-105: +3
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).

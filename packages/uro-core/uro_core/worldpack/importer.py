@@ -28,20 +28,39 @@ def pack_to_events(pack: WorldPack) -> list[DomainEvent]:
     for p in pack.places:
         kind: PlaceKind = p.kind
         events.append(
-            place_created(place_id=p.id, name=p.name, kind=kind, description=p.description)
+            place_created(
+                place_id=p.id,
+                name=p.name,
+                kind=kind,
+                description=p.description,
+                provenance=p.provenance,
+            )
         )
         if p.parent:
             events.append(edge_added(src=p.id, rel_type="located_in", dst=p.parent))
     for f in pack.factions:
         events.append(
-            faction_created(faction_id=f.id, name=f.name, kind=f.kind, description=f.description)
+            faction_created(
+                faction_id=f.id,
+                name=f.name,
+                kind=f.kind,
+                description=f.description,
+                provenance=f.provenance,
+            )
         )
     for f in pack.factions:  # wars after every faction exists (dst must resolve)
         for other in f.at_war_with:
             events.append(edge_added(src=f.id, rel_type="at_war_with", dst=other))
     for a in pack.actors:
         events.append(
-            actor_created(actor_id=a.id, name=a.name, tier=a.tier, role=a.role, aliases=a.aliases)
+            actor_created(
+                actor_id=a.id,
+                name=a.name,
+                tier=a.tier,
+                role=a.role,
+                aliases=a.aliases,
+                provenance=a.provenance,
+            )
         )
         if a.faction:
             events.append(edge_added(src=a.id, rel_type="member_of", dst=a.faction))
@@ -61,7 +80,8 @@ def pack_to_events(pack: WorldPack) -> list[DomainEvent]:
                 statement=c.statement,
                 subject_refs=c.subject_refs,
                 truth=c.truth,
-                origin="worldpack",
+                # a claim records what produced it: the pack, or backfill's invention (D-108)
+                origin="ai_backfill" if c.provenance == "ai_backfill" else "worldpack",
             )
         )
     for t in pack.threads:

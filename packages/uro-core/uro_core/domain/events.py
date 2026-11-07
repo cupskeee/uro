@@ -81,6 +81,12 @@ class WorldGenesisPayload(BaseModel):
     pacing: dict[str, Any] = Field(default_factory=dict)
     # A fresh PC's starting gear in this world (D-97): item names, the game's own. [] = none.
     starting_gear: list[str] = Field(default_factory=list)
+    # What a platform lists the world by (D-104): the pack's pitch and its `[content]` declaration
+    # ({} = none declared), and the whole parsed manifest, so a later step that reads the manifest
+    # (History seeding) works from the world alone. {} for a world made without a pack.
+    description: str = ""
+    content: dict[str, Any] = Field(default_factory=dict)
+    manifest: dict[str, Any] = Field(default_factory=dict)
 
 
 class BeatResolvedPayload(BaseModel):
@@ -113,6 +119,9 @@ def world_genesis(
     clock: dict[str, Any] | None = None,
     pacing: dict[str, Any] | None = None,
     starting_gear: list[str] | None = None,
+    description: str = "",
+    content: dict[str, Any] | None = None,
+    manifest: dict[str, Any] | None = None,
 ) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
@@ -128,6 +137,9 @@ def world_genesis(
             clock=clock or {},
             pacing=pacing or {},
             starting_gear=starting_gear or [],
+            description=description,
+            content=content or {},
+            manifest=manifest or {},
         ).model_dump(),
     )
 
@@ -181,6 +193,7 @@ class ActorCreatedPayload(BaseModel):
     tier: int = Field(default=1, ge=0, le=3)  # T0 extra … T3 agent (docs/02)
     role: str = ""
     aliases: list[str] = Field(default_factory=list)
+    provenance: str = ""  # D-108: "author" or "ai_backfill" (a pack); "" = not recorded
 
 
 class ActorPromotedPayload(BaseModel):
@@ -226,13 +239,19 @@ def actor_created(
     role: str = "",
     aliases: list[str] | None = None,
     caused_by: CausedBy | None = None,
+    provenance: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="ActorCreated",
         entity_refs=[actor_id],
         caused_by=_default_cause(caused_by),
         payload=ActorCreatedPayload(
-            actor_id=actor_id, name=name, tier=tier, role=role, aliases=aliases or []
+            actor_id=actor_id,
+            name=name,
+            tier=tier,
+            role=role,
+            aliases=aliases or [],
+            provenance=provenance,
         ).model_dump(),
     )
 
@@ -343,6 +362,7 @@ class PlaceCreatedPayload(BaseModel):
     kind: PlaceKind = "site"
     status: PlaceStatus = "active"
     description: str = ""
+    provenance: str = ""  # D-108: "author" or "ai_backfill" (a pack); "" = not recorded
 
 
 class PlaceStateChangedPayload(BaseModel):
@@ -384,13 +404,19 @@ def place_created(
     status: PlaceStatus = "active",
     description: str = "",
     caused_by: CausedBy | None = None,
+    provenance: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="PlaceCreated",
         entity_refs=[place_id],
         caused_by=_default_cause(caused_by),
         payload=PlaceCreatedPayload(
-            place_id=place_id, name=name, kind=kind, status=status, description=description
+            place_id=place_id,
+            name=name,
+            kind=kind,
+            status=status,
+            description=description,
+            provenance=provenance,
         ).model_dump(),
     )
 
@@ -875,6 +901,7 @@ class FactionCreatedPayload(BaseModel):
     name: str
     kind: str = "faction"  # or "religion" (docs/02)
     description: str = ""
+    provenance: str = ""  # D-108: "author" or "ai_backfill" (a pack); "" = not recorded
 
 
 class EdgeAddedPayload(BaseModel):
@@ -940,13 +967,18 @@ def faction_created(
     kind: str = "faction",
     description: str = "",
     caused_by: CausedBy | None = None,
+    provenance: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="FactionCreated",
         entity_refs=[faction_id],
         caused_by=_default_cause(caused_by),
         payload=FactionCreatedPayload(
-            faction_id=faction_id, name=name, kind=kind, description=description
+            faction_id=faction_id,
+            name=name,
+            kind=kind,
+            description=description,
+            provenance=provenance,
         ).model_dump(),
     )
 

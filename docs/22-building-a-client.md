@@ -90,7 +90,7 @@ below and in `docs/08`.
 ## The core loop
 
 ```
-GET  /worlds                                  pick a world (GET /rulesets: each ruleset's sheet shape)
+GET  /worlds                                  pick a world: id, name, description, tone, content (GET /rulesets: each ruleset's sheet shape)
 POST /worlds/{world_id}/campaigns             {"participant": "player-1", "new_pc_name": "Wren"}
                                               → {"campaign_id", "branch_id"}
 GET  /campaigns                               resume: every campaign (?world_id= to filter)
@@ -118,7 +118,9 @@ You get, in order (every frame that settles your intent echoes your `id` as `int
 
 Also broadcast: `participant_joined`/`participant_left`, and for parties `not_your_turn`,
 `proposal_opened`, `table_talk`, votes (`docs/08`). Rejections close the socket with
-`4401` (bad token), `4403` (token not for this campaign) or `4404` (no such campaign).
+`4401` (bad token), `4403` (token not for this campaign) or `4404` (no such campaign): the socket
+opens, then closes with the code and nothing before it, so a browser's `close` event carries it
+(D-107; before it, a refusal was a bare HTTP 403 and a browser saw `1006`).
 
 **More to build on:**
 
@@ -134,6 +136,8 @@ Also broadcast: `participant_joined`/`participant_left`, and for parties `not_yo
 | plots gone quiet (a journal's "loose ends") | `GET /campaigns/{c}/pacing`: each live thread's beats since it came up; a world that opts in (`[pacing]`) also has the engine nudge the quietest back into the story (D-95, D-96) |
 | world history / timeline | `GET /worlds/{w}/branches`, `GET /worlds/{w}/log` |
 | import a world pack | `POST /worlds/create` (multipart field `pack`: a `.zip` of the pack folder); check it first with `POST /worlds/validate` |
+| show what the machine invented | places, actors, factions and threads have `provenance` (`author`, `ai_backfill`; `""` = not recorded: made in play, by History seeding, a new player character, or before D-108); a claim's `origin` is `ai_backfill` for a backfilled fact (D-108) |
+| read or edit a pack | `POST /worlds/parse` returns an uploaded pack as Uro reads it (JSON, every default filled in, nothing imported); `GET /rules/schema` is the world-rules grammar as JSON Schema, and `POST /rules/validate` checks a rule pack on its own (D-105) |
 
 ## Bring your own model: the settings screen
 

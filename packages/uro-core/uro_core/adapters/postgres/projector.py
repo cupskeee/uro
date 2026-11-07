@@ -18,8 +18,9 @@ from uro_core.domain.events import DomainEvent
 
 async def _actor_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     await conn.execute(
-        "INSERT INTO proj_actors (branch_id, actor_id, name, tier, role, aliases) "
-        "VALUES ($1, $2, $3, $4, $5, $6) "
+        # provenance (D-108) is the first-recorded one: a later re-creation doesn't relabel it
+        "INSERT INTO proj_actors (branch_id, actor_id, name, tier, role, aliases, provenance) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7) "
         "ON CONFLICT (branch_id, actor_id) DO UPDATE SET "
         "name = EXCLUDED.name, tier = EXCLUDED.tier, role = EXCLUDED.role, "
         "aliases = EXCLUDED.aliases",
@@ -29,6 +30,7 @@ async def _actor_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, 
         p["tier"],
         p.get("role", ""),
         p.get("aliases", []),
+        p.get("provenance", ""),
     )
 
 
@@ -97,8 +99,9 @@ async def _belief_changed(conn: asyncpg.Connection, branch_id: str, p: dict[str,
 
 async def _place_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     await conn.execute(
-        "INSERT INTO proj_places (branch_id, place_id, name, kind, status, description) "
-        "VALUES ($1, $2, $3, $4, $5, $6) "
+        "INSERT INTO proj_places "
+        "(branch_id, place_id, name, kind, status, description, provenance) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7) "
         "ON CONFLICT (branch_id, place_id) DO UPDATE SET "
         "name = EXCLUDED.name, kind = EXCLUDED.kind, status = EXCLUDED.status, "
         "description = EXCLUDED.description",
@@ -108,6 +111,7 @@ async def _place_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, 
         p.get("kind", "site"),
         p.get("status", "active"),
         p.get("description", ""),
+        p.get("provenance", ""),
     )
 
 
@@ -247,8 +251,8 @@ async def _item_transferred(conn: asyncpg.Connection, branch_id: str, p: dict[st
 
 async def _faction_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     await conn.execute(
-        "INSERT INTO proj_factions (branch_id, faction_id, name, kind, description) "
-        "VALUES ($1, $2, $3, $4, $5) "
+        "INSERT INTO proj_factions (branch_id, faction_id, name, kind, description, provenance) "
+        "VALUES ($1, $2, $3, $4, $5, $6) "
         "ON CONFLICT (branch_id, faction_id) DO UPDATE SET "
         "name = EXCLUDED.name, kind = EXCLUDED.kind, description = EXCLUDED.description",
         branch_id,
@@ -256,6 +260,7 @@ async def _faction_created(conn: asyncpg.Connection, branch_id: str, p: dict[str
         p["name"],
         p.get("kind", "faction"),
         p.get("description", ""),
+        p.get("provenance", ""),
     )
 
 
@@ -401,17 +406,17 @@ async def apply_event(conn: asyncpg.Connection, branch_id: str, event: DomainEve
 
 # A snapshot's version: one taken before a projection gained columns can't restore them, so it is
 # skipped (replay covers it). v2: the threads' lifecycle counts (D-102).
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3  # 3: places, actors and factions carry provenance (D-108)
 
 _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
-    "actors": ("actor_id", "name", "tier", "role", "aliases", "status"),
+    "actors": ("actor_id", "name", "tier", "role", "aliases", "status", "provenance"),
     "claims": ("claim_id", "statement", "subject_refs", "truth", "origin", "created_day"),
     "beliefs": ("actor_id", "claim_id", "confidence", "learned_from"),
-    "places": ("place_id", "name", "kind", "status", "description"),
+    "places": ("place_id", "name", "kind", "status", "description", "provenance"),
     "pcs": ("campaign_id", "actor_id", "participant_id", "active"),
     "sheets": ("actor_id", "ruleset_id", "sheet"),
     "items": ("item_id", "name", "kind", "owner_ref"),
-    "factions": ("faction_id", "name", "kind", "description"),
+    "factions": ("faction_id", "name", "kind", "description", "provenance"),
     "edges": ("src", "rel_type", "dst", "weight", "attrs"),
     "threads": ("thread_id", "stakes", "state", "provenance", "developments", "beats_live"),
     "counters": ("scope_ref", "key", "value", "created_day", "updated_day"),

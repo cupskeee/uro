@@ -16,7 +16,7 @@ from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import World
 from uro_core.worldpack.backfill import backfill_gaps
 from uro_core.worldpack.importer import pack_to_events
-from uro_core.worldpack.models import WorldPack
+from uro_core.worldpack.models import WorldManifest, WorldPack
 from uro_core.worldpack.sufficiency import check_sufficiency
 
 
@@ -51,8 +51,8 @@ async def import_pack(
     """Commit a parsed pack as a new world. Refuses (PackError) a pack whose ruleset this build
     can't play (an unknown id, or bad `[ruleset.config]` settings) — else the world commits fine
     and only fails at the first campaign — or one graded insufficient. With `backfill_router`, a
-    thin pack's gaps are AI-filled first and the fills are committed, tagged
-    `provenance=ai_backfill` (a live LLM call)."""
+    pack's gaps are AI-filled first (every dimension, D-108) and the fills are committed, tagged
+    `provenance=ai_backfill` (a live LLM call per gap); it's refused if it stays insufficient."""
     problem = ruleset_problem(pack)
     if problem is not None:
         raise PackError(f"pack declares a ruleset this build can't play: {problem}")
@@ -60,10 +60,12 @@ async def import_pack(
     makes_people = (await store.get_extraction_policy()).extract_actors
     report = check_sufficiency(pack, play_creates_actors=makes_people)
     added: list[str] = []
-    # Backfill fills only the conflict dimension, which isn't structural: an insufficient pack
-    # stays insufficient, so refuse it before paying for a backfill call (D-81 review).
-    if backfill_router is not None and report.grade == "thin":
-        pack, added = await backfill_gaps(pack, backfill_router, report=report)
+    # Backfill can fill every dimension, places and people included (D-108), so an insufficient
+    # pack gets the attempt too; it's refused below if the gaps remain.
+    if backfill_router is not None and report.grade != "runnable":
+        pack, added = await backfill_gaps(
+            pack, backfill_router, report=report, play_creates_actors=makes_people
+        )
         report = check_sufficiency(pack, play_creates_actors=makes_people)
     if report.grade == "insufficient":
         raise PackError(f"pack is INSUFFICIENT to run: {'; '.join(report.gaps)}")
@@ -78,19 +80,44 @@ async def import_pack(
         clock=pack.manifest.clock.model_dump(exclude_defaults=True),
         pacing=pack.manifest.pacing.model_dump(exclude_defaults=True),
         starting_gear=pack.manifest.starting_gear,
+        description=pack.manifest.description,
+        # only a declaration the pack made (its `[content]` table), never the defaults (D-104)
+        content=(
+            pack.manifest.content.model_dump()
+            if "content" in pack.manifest.model_fields_set
+            else {}
+        ),
+        manifest=pack.manifest.model_dump(mode="json"),
         extra_events=pack_to_events(pack),
     )
     return PackImport(world=world, grade=report.grade, backfilled=added)
 
 
-async def seed_world(store: EngineStore, world: World, pack: WorldPack, seed: int) -> SeedResult:
-    """Layer a seed-dependent past (History, emitter H) onto a world's main branch.
-    The pack must be the one the world was created from: the world doesn't persist the manifest's
-    `[history]`, so the pack is re-supplied — and a different pack would seed another world's
-    history here. Same pack + a different seed → a different history on the same geography."""
-    if pack.manifest.name != world.name:
-        raise PackError(f"this pack is {pack.manifest.name!r}, but the world is {world.name!r}")
-    events = seed_history(pack.manifest, Rng(seed))
+async def seed_world(
+    store: EngineStore, world: World, pack: WorldPack | None, seed: int
+) -> SeedResult:
+    """Layer a seed-dependent past (History, emitter H) onto a world's main branch, from the
+    manifest the world keeps (D-104). A world made before worlds kept their manifest needs `pack`:
+    the one it was created from (a different pack would seed another world's history here). Same
+    manifest + a different seed → a different history on the same geography."""
+    if pack is not None:
+        if pack.manifest.name != world.name:
+            raise PackError(f"this pack is {pack.manifest.name!r}, but the world is {world.name!r}")
+        manifest = pack.manifest
+    else:
+        kept = await store.world_manifest(world.world_id)
+        if not kept:
+            raise PackError(
+                f"world {world.name!r} keeps no manifest (made without a pack, or before worlds "
+                "kept theirs): give the pack it was created from"
+            )
+        try:
+            manifest = WorldManifest(**kept)
+        except ValueError as exc:
+            raise PackError(
+                f"the manifest world {world.name!r} keeps no longer reads: {exc}"
+            ) from exc
+    events = seed_history(manifest, Rng(seed))
     commit = await store.append_beat(world.main_branch_id, events)
     wars = [e for e in events if e.event_type == "EdgeAdded"]
     return SeedResult(

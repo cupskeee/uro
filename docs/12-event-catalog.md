@@ -34,8 +34,8 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### World & places
 | event_type | payload (beyond `v`) | emit | notes |
 |---|---|---|---|
-| `WorldGenesis` | world_name, tone[], prompt_overrides{}, ruleset_id, ruleset_version, ruleset_config{}, rule_pack{}, clock{}, pacing{} | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) + its declared ruleset (`06`, D-30 — a campaign started on the world binds it) and that ruleset's settings (`ruleset_config`, D-62 — every ruleset built for the world's campaigns gets them), its `[clock]` settings (`clock`, D-80 — `{}` = the defaults) and its `[pacing]` settings (`pacing`, D-95 — `{}` = the defaults) |
-| `PlaceCreated` | place entity, tier of detail | X H S | extractor may create Sites only |
+| `WorldGenesis` | world_name, tone[], prompt_overrides{}, ruleset_id, ruleset_version, ruleset_config{}, rule_pack{}, clock{}, pacing{} | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) + its declared ruleset (`06`, D-30 — a campaign started on the world binds it) and that ruleset's settings (`ruleset_config`, D-62 — every ruleset built for the world's campaigns gets them), its `[clock]` settings (`clock`, D-80 — `{}` = the defaults) and its `[pacing]` settings (`pacing`, D-95 — `{}` = the defaults); and (D-104) the pack's `description`, its `content{}` declaration (`{}` = none declared) and the whole parsed `manifest{}` (`{}` for a world made without a pack), so History seeding works from the world alone |
+| `PlaceCreated` | place entity, tier of detail; `provenance` (D-108: `author` or `ai_backfill` from a pack, `""` = not recorded) | X H S | extractor may create Sites only |
 | `PlaceStateChanged` | place_id, changes{} | X H A | population, government ref, economy flavor |
 | `TerrainChanged` | place_id, description, effects[] | H R S | the meteor crater; slow-layer physical change. Committed by whoever authors the cataclysm — a game or embedder (`append_and_react`), History seeding, or a ruleset effect — never the extractor or pipeline; its ripple is the world's reaction rules on it (D-88) |
 | `PlaceDestroyed` | place_id, cause | H R S | as above — authored or a ruleset effect, never extractor-proposed; a pack rule triggered on it carries the ripple (`caused_by=module`, D-88) |
@@ -43,7 +43,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Actors
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `ActorCreated` | actor entity, tier | X H A S | extractor creates at T1 max |
+| `ActorCreated` | actor entity, tier; `provenance` (D-108, as `PlaceCreated`) | X H A S | extractor creates at T1 max |
 | `ActorPromoted` | actor_id, from_tier, to_tier, reason | P S | reason `pinned` = manual (player/API) |
 | `ActorMoved` | actor_id, from_place, to_place | X A P | |
 | `ActorStateChanged` | actor_id, changes{} | X A H | status, occupation, condition flavor |
@@ -62,7 +62,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Factions & relations
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `FactionCreated` | faction entity (incl. kind=religion) | X H S | |
+| `FactionCreated` | faction entity (incl. kind=religion); `provenance` (D-108, as `PlaceCreated`) | X H S | |
 | `FactionStateChanged` | faction_id, changes{} | X H A | goals, resources, territory refs |
 | `EdgeAdded` / `EdgeUpdated` / `EdgeRemoved` | src, rel_type, dst, weight, attrs | X H A P S | ALL typed relations (`member_of`, `at_war_with`, `owns`, `knows`, …) — the graph is event-sourced too. `S` covers import: authored/cross-linked world-pack relations become `EdgeAdded` at `WorldGenesis` (`09`) |
 

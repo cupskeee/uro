@@ -38,7 +38,14 @@ from uro_core.timeline.models import (
     World,
 )
 from uro_core.worldpack.create import SeedResult
-from uro_core.worldpack.models import ThreadSeed
+from uro_core.worldpack.models import (
+    ActorSeed,
+    ClaimSeed,
+    FactionSeed,
+    PlaceSeed,
+    ThreadSeed,
+    WorldPack,
+)
 from uro_core.worldpack.sufficiency import SufficiencyDimension
 
 
@@ -244,6 +251,35 @@ class PackValidation(Out):
     gaps: list[str]
 
 
+class ParsedPack(WorldPack):
+    """A pack as Uro reads it (D-105): `WorldPack`, every default filled in."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RulesSchema(Out):
+    """The world-rules grammar (D-105): the version this engine writes, the versions it reads, and
+    the JSON Schema of a rule pack."""
+
+    rules_api_version: int
+    supported_versions: list[int]
+    rule_pack_schema: dict[str, Any]
+
+
+class RuleProblem(Out):
+    loc: list[str | int]  # where in the pack ([] for the pack as a whole)
+    message: str
+
+
+class RulesCheck(Out):
+    """A rule pack checked on its own, as a world would check it (D-105)."""
+
+    ok: bool
+    rules: int
+    agendas: int
+    problems: list[RuleProblem]
+
+
 class PackCreated(Out):
     world_id: str
     main_branch_id: str
@@ -253,11 +289,20 @@ class PackCreated(Out):
 
 
 class Backfill(Out):
+    """A backfill preview (nothing committed). Each list holds only what the machine made, tagged
+    `provenance=ai_backfill` (D-108); `filled` names the dimensions it filled."""
+
     name: str
     before_grade: str
     after_grade: str
     added: list[str]
-    seeds: list[ThreadSeed]
+    filled: list[str]
+    seeds: list[ThreadSeed]  # conflict seeds
+    places: list[PlaceSeed]
+    factions: list[FactionSeed]
+    actors: list[ActorSeed]
+    claims: list[ClaimSeed]
+    tone: list[str]
 
 
 class Probe(Out):
@@ -311,6 +356,7 @@ class ActorRow(Out):
     role: str
     aliases: list[str]
     status: str
+    provenance: str  # D-108: "author" | "ai_backfill"; "" = not recorded (see D-108's correction)
 
 
 class ClaimRow(Out):
@@ -337,6 +383,7 @@ class PlaceRow(Out):
     kind: str
     status: str
     description: str
+    provenance: str  # D-108
 
 
 class PCRow(Out):
@@ -364,6 +411,7 @@ class FactionRow(Out):
     name: str
     kind: str
     description: str
+    provenance: str  # D-108
 
 
 class EdgeRow(Out):

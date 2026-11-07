@@ -5,6 +5,7 @@
 [world]
 name = "Emberfell"
 tone = ["gritty", "frontier", "desperate"]
+description = "A boom town gone sour, where the Holloway Company means to seize the Deep Vein from the Free Diggers by frost."
 starting_gear = ["a miner's lamp"]       # what a fresh PC carries here (D-97)
 
 [content]

@@ -9,6 +9,38 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+
+- A world says what it is (D-104): `GET /worlds` returns each world's `description`, `tone` and
+  `content` declaration. A pack's `[world]` takes an optional `description`, and `POST /worlds`
+  takes `description` and `content`. The five shipped packs have a pitch each.
+- A pack read without importing it (D-105): `POST /worlds/parse` and `uro world parse <pack>`
+  return it as Uro reads it, as JSON.
+- The world-rules grammar as data (D-105): `GET /rules/schema` and `uro rules schema` serve its
+  JSON Schema, and `POST /rules/validate` and `uro rules validate` check a rule pack on its own.
+- A pack can add to a prompt template instead of replacing it (D-106):
+  `prompts/<template>.append.j2` renders after the default with the same context.
+- A world keeps the manifest it was made from (D-104), so `POST /worlds/{w}/seed` and
+  `uro world seed <world>` need no pack. A world made before this still takes its own pack.
+
+- Backfill fills every gap (D-108): places, a faction, people, a conflict, tone and a past, one
+  call per gap. Everything it invents is tagged `ai_backfill`: places, actors and factions now
+  carry `provenance` on their events and state rows, a backfilled fact's claim has
+  `origin=ai_backfill`, and the manifest's `backfilled` lists the dimensions filled. The
+  preview returns every kind it made, and `create --backfill` tries an insufficient pack too.
+  Run `uro db migrate` (028).
+
+### Fixed
+
+- A refused play socket's close code (4401, 4403, 4404) now reaches the client (D-107). Uro closed
+  before accepting, so browsers saw 1006 and `uro connect` a handshake error. `uro connect` now
+  says why it was refused.
+
+### Changed
+
+- For embedders (D-104): `create_world` takes `description`, `content` and `manifest`, and an
+  `EngineStore` implements `world_manifest`. `World` has `description`, `tone` and `content`.
+
 ## [0.18.0] - 2026-11-04
 Upgrading: run `uro db migrate` (027: two thread counters), then `uro db rebuild-projections` so
 campaigns played before it count their past (it replays each branch and drops the snapshot cache;

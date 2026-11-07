@@ -197,7 +197,9 @@ async def test_a_newer_snapshot_replaces_an_older_one_only(store: PostgresEventS
         kept = await conn.fetchval(
             "SELECT state_hash FROM snapshots WHERE commit_id = $1", m.commit_id
         )
-    assert v == 2 and kept == "kept"
+    from uro_core.adapters.postgres.projector import SNAPSHOT_VERSION
+
+    assert v == SNAPSHOT_VERSION and kept == "kept"
 
 
 async def test_a_branch_diff_ignores_the_counts(store: PostgresEventStore) -> None:

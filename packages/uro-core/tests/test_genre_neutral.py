@@ -82,8 +82,14 @@ def test_ashfalls_seeded_history_is_unchanged() -> None:
     golden = json.loads(
         (Path(__file__).parent / "fixtures" / "ashfall_seed42_pre_d97.json").read_text()
     )
+    # D-108 added an empty `provenance` to FactionCreated/ActorCreated (seeding records none):
+    # everything else must still match the recording byte for byte.
     now = [
-        {"type": e.event_type, "payload": e.payload, "cause": e.caused_by.model_dump()}
+        {
+            "type": e.event_type,
+            "payload": {k: v for k, v in e.payload.items() if not (k == "provenance" and v == "")},
+            "cause": e.caused_by.model_dump(),
+        }
         for e in seed_history(parse_pack(WORLDS / "ashfall").manifest, Rng(42))
     ]
     assert json.loads(json.dumps(now, sort_keys=True)) == golden

@@ -9,7 +9,7 @@ REST for management, WebSocket for play. All responses JSON; narration streams.
 ```
 # Worlds & timeline
 POST   /worlds                          create from world pack (multipart or path)
-POST   /worlds/{w}/seed                 run History seeding (idempotent per seed)
+POST   /worlds/{w}/seed                 run History seeding (idempotent per seed), from the manifest the world keeps (D-104)
 GET    /worlds/{w}/branches             list branches, heads, markers
 POST   /worlds/{w}/branches             fork: {from_commit | from_marker, name}
 GET    /worlds/{w}/chronicle?branch=B   the Lore Wall projection (paginated)
@@ -38,13 +38,14 @@ management surface over the `EngineStore` port (`ServerDeps.store`; `501` when a
 transport-only deps). **Built now:**
 
 ```
-POST /worlds                     {name, tone?, rule_pack?, ruleset?, ruleset_version?, ruleset_config?}   create world (JSON body; OPERATOR-only, D-46; bad settings → 400, D-62)
+POST /worlds                     {name, tone?, description?, content?, rule_pack?, ruleset?, ruleset_version?, ruleset_config?}   create world (JSON body; OPERATOR-only, D-46; bad settings → 400, D-62; `content` in a pack's `[content]` shape, D-104)
 POST /worlds/create              (multipart .zip) [?backfill=]     import a pack as a new world, its ruleset pinned (OPERATOR-only, D-44)
-POST /worlds/{w}/seed            (multipart .zip) [?seed=]         History seeding; the pack must be the world's own (OPERATOR-only, D-44)
+POST /worlds/{w}/seed            [multipart .zip] [?seed=]         History seeding from the manifest the world keeps (D-104); a world made before that takes its own pack (OPERATOR-only, D-44)
 POST /worlds/validate            (multipart .zip of the pack)      grade an uploaded pack, no import (BE-6)
-POST /worlds/backfill            (multipart .zip of the pack)      AI gap-fill preview, ai_backfill seeds (OPERATOR-only, D-44) (BE-7)
+POST /worlds/parse               (multipart .zip of the pack)      the pack as Uro reads it (`WorldPack` as JSON, every default filled in), no import, same upload guards (D-105)
+POST /worlds/backfill            (multipart .zip of the pack)      AI gap-fill preview for every gap (D-108): `filled` dimensions + the ai_backfill `places`, `factions`, `actors`, `seeds` (threads), `claims` and `tone`, nothing committed (OPERATOR-only, D-44) (BE-7)
 POST /worlds/probe               (multipart .zip) [?tries=]        model-capability report, warn-not-fail (OPERATOR-only, D-44) (BE-7)
-GET  /worlds                                                       list
+GET  /worlds                                                       list: each world's id, name, main branch, and (D-104) its `description`, `tone` and `content` declaration (null when it declared none)
 GET  /worlds/{w}/branches                                          branch tree + markers, per-branch in-fiction day (BE-1)
 GET  /worlds/{w}/log             [?branch=&limit=]                 commit lineage, git-log style (BE-3)
 GET  /worlds/{w}/events          [?branch=&type=&entity_ref=&caused_by=&limit=]  raw event log (OPERATOR-only, D-45) (BE-4)
@@ -79,6 +80,8 @@ POST /campaigns/{c}/tokens/revoke {token} | {participant}           revoke one t
 GET  /usage                      [?stage=&world=&campaign=]       LLM-call telemetry by stage (OPERATOR-only, D-44) (BE-10, D-66)
 GET  /llm-calls                  [?stage=&world=&campaign=&limit=] recent calls with each structured call's response (OPERATOR-only, D-45) (D-66)
 GET  /rulesets                                                    registry: id@version + sheet shape + settings schema, plus installed plugins that can't be used (`unusable`, with the reason) (any-authed) (BE-10, D-62, D-65)
+GET  /rules/schema                                                the world-rules grammar: `rules_api_version`, `supported_versions`, and a rule pack's JSON Schema (D-105)
+POST /rules/validate             {rules_api_version, rules, agendas}   check a rule pack on its own, as creating a world would: `{ok, rules, agendas, problems: [{loc, message}]}` (200 either way; D-105)
 GET  /version                                                     the server's uro-server/uro-core versions (any-authed; /healthz stays a bare probe)
 GET  /providers                                                   model-connection registry snapshot: connections+roles+credential-metadata (OPERATOR-only, D-47)
 POST /providers                  {name, provider, base_url?, auth_id?}   register a connection (OPERATOR-only, D-47)
@@ -150,10 +153,10 @@ CI never makes live calls — the stub provider drives the deterministic path; t
 operator's. **Pack import and seeding ship (2026-10-30):** `POST /worlds/create[?backfill=true]` imports
 an uploaded pack as a new world and `POST /worlds/{w}/seed[?seed=]` runs History seeding, both
 operator-only and pack-upload-shaped, through the same core path as `uro world create|seed`
-(`uro_core.worldpack.create`). Seeding re-takes the pack because `seed_history` needs the manifest's
-`[history]` (era, simulate_years), which the world does **not** persist (`WorldGenesis` stores only
-name/tone/overrides/ruleset/rule-pack); the pack must be the one the world was created from (its
-name must match), else another world's history would be seeded here. Still **CLI-only /
+(`uro_core.worldpack.create`). Seeding reads the manifest's `[history]` (era, simulate_years,
+vocabulary) from the manifest the world keeps on its `WorldGenesis` (D-104), so it needs no upload;
+a world made before worlds kept their manifest still takes its pack, which must be the one it was
+created from (its name must match), else another world's history would be seeded here. Still **CLI-only /
 scaffolded**: the SSE `POST …/beats` (play is WS). **Authority:** the timeline summary reads (`/branches`, `/log`) are plain any-authed reads; the
 *structural writes* — `POST …/branches` (fork) and `POST …/markers` — are **operator-only** (D-44;
 require an `--admin-token`, a plain player token → 403), via `_require_operator` on the same

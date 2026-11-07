@@ -4,6 +4,7 @@
 [world]
 name = "Thornwood"
 tone = ["pastoral", "cozy"]
+description = "A market village under an old oak in the Green Vale, known for its cider and its gossip."
 starting_gear = ["a walking stick"]       # what a fresh PC carries here (D-97)
 
 [content]

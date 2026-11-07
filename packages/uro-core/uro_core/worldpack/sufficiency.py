@@ -93,7 +93,9 @@ def check_sufficiency(pack: WorldPack, *, play_creates_actors: bool = True) -> S
         ),
         _dim(
             "tone",
-            bool(pack.manifest.tone) or "narrator.system.j2" in pack.prompts,
+            bool(pack.manifest.tone)
+            or "narrator.system.j2" in pack.prompts
+            or "narrator.system.append.j2" in pack.prompts,  # D-106: a style note added
             f"tone: {pack.manifest.tone}" if pack.manifest.tone else "narrator style template",
             "no tone tags or narrator style template — the world has no voice",
         ),

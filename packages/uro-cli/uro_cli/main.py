@@ -67,6 +67,9 @@ outbox_app = typer.Typer(
     help="The transactional outbox — publish committed beats to other processes (D-57).",
 )
 ruleset_app = typer.Typer(no_args_is_help=True, help="The built-in ruleset registry (docs/06).")
+rules_app = typer.Typer(
+    no_args_is_help=True, help="World rules (rules.yaml / agendas.yaml): their grammar (docs/17)."
+)
 policy_app = typer.Typer(
     no_args_is_help=True,
     help="Which emergent world state play may create — the instance's extraction policy (D-49).",
@@ -84,6 +87,7 @@ app.add_typer(provider_app, name="provider")
 provider_app.add_typer(credential_app, name="credential")
 app.add_typer(outbox_app, name="outbox")
 app.add_typer(ruleset_app, name="ruleset")
+app.add_typer(rules_app, name="rules")
 app.add_typer(policy_app, name="extraction-policy")
 app.add_typer(memory_app, name="memory")
 
@@ -112,6 +116,20 @@ async def _metered(router: ProviderRouter) -> AsyncIterator[ProviderRouter]:
     finally:
         if store is not None:
             await store.close()
+
+
+async def _play_creates_actors() -> bool:
+    """Whether this instance lets play create actors (its extraction policy, D-49), read best
+    effort like `_metered`: with no database, the default (on), as a pure parse assumes."""
+    try:
+        store = build_store()
+        await asyncio.wait_for(connect_store(store), timeout=5)
+    except Exception:
+        return True
+    try:
+        return (await store.get_extraction_policy()).extract_actors
+    finally:
+        await store.close()
 
 
 def _run_async(coro_factory) -> None:  # type: ignore[no-untyped-def]
@@ -244,17 +262,34 @@ def world_new(
         "", "--ruleset", help="a built-in ruleset id (`uro ruleset list`); default uro-basic"
     ),
     pc: str = typer.Option("Player", "--pc", help="the player character's name"),
+    description: str = typer.Option(
+        "", "--description", help="a short pitch for whoever lists the world (D-104)"
+    ),
+    content_rating: str = typer.Option(
+        None,
+        "--content-rating",
+        help="declare the world's content ceiling: none | mild | mature | explicit (D-104)",
+    ),
 ) -> None:
     """Create a world (+ its main branch) and a ready-to-play campaign with a default,
     sheeted PC. Prints the campaign id."""
 
     async def _run() -> None:
+        from uro_core.worldpack.models import ContentDecl
+
         rs = build_ruleset(ruleset)  # an unknown id fails here, before any write
+        content = (
+            ContentDecl.model_validate({"rating": content_rating}).model_dump()
+            if content_rating
+            else None
+        )
         sheet, ruleset_id = _build_pc_sheet(rs), rs.id
         store = build_store()
         await connect_store(store)
         try:
-            world = await store.create_world(name, ruleset_id=ruleset)
+            world = await store.create_world(
+                name, ruleset_id=ruleset, description=description, content=content
+            )
             campaign = await store.start_campaign(
                 world.world_id,
                 world.main_branch_id,
@@ -271,6 +306,21 @@ def world_new(
         typer.echo(f"\nplay it:  uro play {campaign.campaign_id}")
 
     _run_async(_run)
+
+
+@world_app.command("parse")
+def world_parse(path: str) -> None:
+    """Print the pack at <path> as Uro reads it, as JSON (D-105): the manifest with every default
+    filled in, the seeds, lore, prompt files and rule pack. Nothing is imported."""
+    from uro_core.errors import PackError
+    from uro_core.worldpack.parse import parse_pack
+
+    try:
+        pack = parse_pack(path)
+    except PackError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(pack.model_dump(mode="json"), indent=2))
 
 
 @world_app.command("validate")
@@ -326,10 +376,15 @@ def world_create(
         store = build_store()
         try:
             pack = parse_pack(path)
-            # build the provider only when a gap needs it: a runnable pack needs no key
-            needs_fill = backfill and check_sufficiency(pack).grade != "runnable"
-            router = build_router(provider, model) if needs_fill else None
             await connect_store(store)
+            # build the provider only when a gap needs it (a runnable pack needs no key), graded
+            # as the import grades it: with this instance's extraction policy (D-108 review)
+            makes_people = (await store.get_extraction_policy()).extract_actors
+            needs_fill = (
+                backfill
+                and check_sufficiency(pack, play_creates_actors=makes_people).grade != "runnable"
+            )
+            router = build_router(provider, model) if needs_fill else None
             if router is not None:  # the backfill's calls are metered like any other (D-66)
                 router.recorder = store.record_llm_call
             result = await import_pack(store, pack, backfill_router=router)
@@ -343,34 +398,44 @@ def world_create(
         for a in result.backfilled:
             typer.echo(f"  backfilled + committed: {a}")
         if pack.manifest.history.vocabulary is not None:  # D-97: seeding speaks the pack's words
-            typer.echo(f"seed history:  uro world seed {path} --seed 42")
+            typer.echo(f"seed history:  uro world seed {world.world_id} --seed 42")
 
     _run_async(_run)
 
 
 @world_app.command("seed")
 def world_seed(
-    path: str,
+    target_ref: str = typer.Argument(
+        ...,
+        metavar="WORLD_OR_PACK",
+        help="a world (id or name), or the pack directory it was made from",
+    ),
     seed: int = typer.Option(42, "--seed", help="RNG seed for History"),
     world: str = typer.Option(
-        None, "--world", help="the world to seed (id or name; default: the pack's name)"
+        None,
+        "--world",
+        help="with a pack: the world to seed (id or name; default: the pack's name)",
     ),
 ) -> None:
-    """Run History seeding on the world imported from <path>: layer a seed-dependent past
-    (power groups, their leaders and conflicts, in the pack's \\[history.vocabulary]) on top of
-    the authored geography (docs/09). Same pack + a different seed → a different history on
-    identical geography."""
+    """Run History seeding on a world: layer a seed-dependent past (power groups, their leaders
+    and conflicts, in the manifest's \\[history.vocabulary]) on top of the authored geography
+    (docs/09). A world keeps the manifest it was made from (D-104), so naming the world is enough;
+    a world made before that takes its pack directory. Same manifest + a different seed → a
+    different history on identical geography."""
 
     async def _run() -> None:
+        from pathlib import Path
+
         from uro_core.errors import PackError
         from uro_core.worldpack.create import seed_world
         from uro_core.worldpack.parse import parse_pack
 
         store = build_store()
         try:
-            pack = parse_pack(path)
+            pack = parse_pack(target_ref) if (Path(target_ref) / "world.toml").is_file() else None
             await connect_store(store)
-            target = await _world_or_exit(store, world or pack.manifest.name)
+            name = world or (pack.manifest.name if pack is not None else target_ref)
+            target = await _world_or_exit(store, name)
             result = await seed_world(store, target, pack, seed)
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
@@ -406,13 +471,18 @@ def world_backfill(
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
-        before = check_sufficiency(pack)
+        # graded as the import (and POST /worlds/backfill) grade it: this instance's extraction
+        # policy, when the database answers (D-108 review)
+        makes_people = await _play_creates_actors()
+        before = check_sufficiency(pack, play_creates_actors=makes_people)
         if before.grade == "runnable":
             typer.echo("pack is already runnable — nothing to backfill")
             return
         async with _metered(build_router(provider, model)) as router:
-            augmented, added = await backfill_gaps(pack, router, report=before)
-        after = check_sufficiency(augmented)
+            augmented, added = await backfill_gaps(
+                pack, router, report=before, play_creates_actors=makes_people
+            )
+        after = check_sufficiency(augmented, play_creates_actors=makes_people)
         typer.echo(f"backfill: {before.grade} → {after.grade}")
         for a in added:
             typer.echo(f"  + {a}")
@@ -825,6 +895,13 @@ def connect(
     async def _client() -> None:
         try:
             async with websockets.connect(uri) as ws:
+                # A refusal is a close code right after the socket opens (D-107); a seat is
+                # announced (participant_joined). Wait a moment for either before saying so.
+                first: str | bytes | None = None
+                with contextlib.suppress(TimeoutError, websockets.ConnectionClosed):
+                    first = await asyncio.wait_for(ws.recv(), timeout=1.5)
+                if ws.close_code is not None:
+                    _refused(ws.close_code, campaign_id)
                 typer.echo(f"connected to {campaign_id} as {token!r}. Type an action; /quit.\n")
                 # An intent is SETTLED by one of these, each echoing the intent's text. The prompt
                 # waits for it: shown at once, it sat above the streaming narration and was gone by
@@ -861,9 +938,17 @@ def connect(
                     if hit is not None:
                         hit[1].set()
 
+                async def frames() -> AsyncIterator[str | bytes]:
+                    if first is not None:  # the frame that told us we were seated
+                        yield first
+                    # a server that goes away ends the session: the prompt loop sees it
+                    with contextlib.suppress(websockets.ConnectionClosed):
+                        async for raw in ws:
+                            yield raw
+
                 async def receive() -> None:
                     nonlocal echoes, seen_day
-                    async for raw in ws:
+                    async for raw in frames():
                         msg = json.loads(raw)
                         kind = msg.get("type")
                         echoes = echoes or "intent_id" in msg
@@ -934,35 +1019,63 @@ def connect(
 
                 receiver = asyncio.create_task(receive())
                 loop = asyncio.get_event_loop()
-                while True:
-                    intent = (await loop.run_in_executor(None, input, "> ")).strip()
-                    if intent in ("/quit", "/exit"):
-                        break
-                    if intent.startswith("/say "):  # non-canon table-talk (D-38)
-                        await ws.send(json.dumps({"type": "table_talk", "text": intent[5:]}))
-                    elif intent.startswith("/vote "):  # non-canon consensus vote (D-38)
-                        await ws.send(json.dumps({"type": "vote", "choice": intent[6:]}))
-                    elif intent:
-                        rid = uuid.uuid4().hex
-                        settled = asyncio.Event()
-                        pending[rid] = (intent, settled)
-                        await ws.send(json.dumps({"type": "intent", "text": intent, "id": rid}))
-                        waiting = asyncio.ensure_future(settled.wait())
-                        # a slow beat (a reasoning model's extraction) still settles well inside
-                        # this; past it — or if the server goes away — the prompt comes back anyway
-                        await asyncio.wait(
-                            {waiting, receiver}, timeout=600, return_when=asyncio.FIRST_COMPLETED
-                        )
-                        waiting.cancel()
-                        pending.pop(rid, None)
-                        if receiver.done():  # the server closed the connection
+                # A server that closes the socket while the player is at the prompt (a revoked
+                # token, a removed campaign) ends the session here, then says why (D-107 review).
+                try:
+                    while True:
+                        intent = (await loop.run_in_executor(None, input, "> ")).strip()
+                        if receiver.done():  # closed while the player typed
                             break
+                        if intent in ("/quit", "/exit"):
+                            break
+                        if intent.startswith("/say "):  # non-canon table-talk (D-38)
+                            await ws.send(json.dumps({"type": "table_talk", "text": intent[5:]}))
+                        elif intent.startswith("/vote "):  # non-canon consensus vote (D-38)
+                            await ws.send(json.dumps({"type": "vote", "choice": intent[6:]}))
+                        elif intent:
+                            rid = uuid.uuid4().hex
+                            settled = asyncio.Event()
+                            pending[rid] = (intent, settled)
+                            await ws.send(json.dumps({"type": "intent", "text": intent, "id": rid}))
+                            waiting = asyncio.ensure_future(settled.wait())
+                            # a slow beat (a reasoning model's extraction) still settles well
+                            # inside this; past it, or if the server goes away, the prompt returns
+                            await asyncio.wait(
+                                {waiting, receiver},
+                                timeout=600,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            waiting.cancel()
+                            pending.pop(rid, None)
+                            if receiver.done():  # the server closed the connection
+                                break
+                except websockets.ConnectionClosed:
+                    pass
                 receiver.cancel()
+            if ws.close_code in _REFUSALS:  # refused after a while (a token revoked mid-session)
+                _refused(ws.close_code, campaign_id)
+        except websockets.InvalidStatus as exc:  # a server older than D-107 refuses the handshake
+            typer.echo(f"refused by {server}: {exc}", err=True)
+            raise typer.Exit(1) from exc
         except OSError as exc:
             typer.echo(f"could not connect to {server}: {exc} (is `uro serve` running?)", err=True)
             raise typer.Exit(1) from exc
 
     asyncio.run(_client())
+
+
+_REFUSALS = {
+    4401: "the server doesn't know this token",
+    4403: "this token is for another campaign",
+    4404: "no such campaign on this server",
+}
+
+
+def _refused(code: int, campaign_id: str) -> None:
+    """Say why the server closed the play socket (D-107), and exit 1."""
+    why = _REFUSALS.get(code, "the server closed the connection")
+    typer.echo(f"refused ({campaign_id}): {why} [{code}]", err=True)
+    raise typer.Exit(1)
 
 
 def _server_post(server: str, path: str, token: str, body: dict[str, Any] | None) -> dict[str, Any]:
@@ -1300,6 +1413,14 @@ def world_list() -> None:
             typer.echo("(no worlds — create one with `uro world new` or `uro world create`)")
         for w in worlds:
             typer.echo(f"{w.world_id}  {w.name}")
+            # what the world says about itself (D-104), when it says anything
+            about = [
+                *([w.description] if w.description else []),
+                *([f"tone: {', '.join(w.tone)}"] if w.tone else []),
+                *([f"content: {w.content.get('rating')}"] if w.content else []),
+            ]
+            if about:
+                typer.echo(f"    {' · '.join(about)}")
 
     _run_async(_run)
 
@@ -1520,6 +1641,53 @@ def calls(
                 typer.echo(f"  {r['response']}")
 
     _run_async(_run)
+
+
+@rules_app.command("schema")
+def rules_schema() -> None:
+    """Print the world-rules grammar as JSON Schema (D-105), with the version this engine writes
+    and the versions it reads."""
+    from uro_core.worldpack import rules as R
+
+    typer.echo(
+        json.dumps(
+            {
+                "rules_api_version": R.RULES_API_VERSION,
+                "supported_versions": sorted(R._SUPPORTED_VERSIONS),
+                "rule_pack_schema": R.rule_pack_schema(),
+            },
+            indent=2,
+        )
+    )
+
+
+@rules_app.command("validate")
+def rules_validate(path: str) -> None:
+    """Check world rules on their own, as creating a world would (D-105): <path> is a pack
+    directory (its rules.yaml / agendas.yaml), or a JSON file holding one rule pack
+    ({rules_api_version, rules, agendas})."""
+    from pathlib import Path
+
+    from uro_core.errors import PackError
+    from uro_core.worldpack.parse import _rule_pack
+    from uro_core.worldpack.rules import check_rule_pack
+
+    target = Path(path)
+    try:
+        if target.is_dir():
+            pack = _rule_pack(target)
+            if pack is None:
+                typer.echo(f"error: {path} has no rules.yaml or agendas.yaml", err=True)
+                raise typer.Exit(1)
+        else:
+            pack = check_rule_pack(json.loads(target.read_text()))
+    except (PackError, ValueError, OSError) as exc:  # json.JSONDecodeError is a ValueError
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"ok: {len(pack.rules)} rules, {len(pack.agendas)} agendas "
+        f"(rules_api_version {pack.rules_api_version})"
+    )
 
 
 @ruleset_app.command("list")

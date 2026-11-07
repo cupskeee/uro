@@ -219,6 +219,28 @@ _ORPHAN_EMBEDDINGS = (
 )
 
 
+# A world with what its WorldGenesis says about it (D-104): the genesis is the world's first commit.
+_WORLD_SELECT = (
+    "SELECT w.world_id, w.name, b.branch_id AS main_branch_id, g.payload AS genesis "
+    "FROM worlds w JOIN branches b ON b.world_id = w.world_id AND b.name = 'main' "
+    "LEFT JOIN LATERAL (SELECT e.payload FROM commits c JOIN events e ON e.commit_id = c.commit_id "
+    "  WHERE c.world_id = w.world_id AND c.parent_id IS NULL AND e.event_type = 'WorldGenesis' "
+    "  LIMIT 1) g ON TRUE "
+)
+
+
+def _world(row: dict[str, Any], genesis: dict[str, Any] | None) -> World:
+    payload = genesis or {}
+    return World(
+        world_id=row["world_id"],
+        name=row["name"],
+        main_branch_id=row["main_branch_id"],
+        description=payload.get("description") or "",
+        tone=list(payload.get("tone") or []),
+        content=dict(payload["content"]) if payload.get("content") else None,
+    )
+
+
 class PostgresEventStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
@@ -282,6 +304,9 @@ class PostgresEventStore:
         clock: dict[str, Any] | None = None,
         pacing: dict[str, Any] | None = None,
         starting_gear: list[str] | None = None,
+        description: str = "",
+        content: dict[str, Any] | None = None,
+        manifest: dict[str, Any] | None = None,
     ) -> World:
         """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, docs/09, 17) plus any
@@ -291,12 +316,10 @@ class PostgresEventStore:
             # Validate the Reaction-Layer pack LOUDLY at creation (gap-report Hollowloop G-6): a bad
             # pack must not persist and then die silently at the first beat (react()/agenda_tick
             # swallow load errors as a warning, disabling the whole pack). Fail here instead.
-            from uro_core.worldpack.rules import RulePack, duplicate_ids
+            from uro_core.worldpack.rules import check_rule_pack
 
-            # raises on a bad version / unknown trigger / malformed action
-            dupes = duplicate_ids(RulePack(**rule_pack))
-            if dupes:  # one would overwrite the other's consequences (D-80 review)
-                raise ValueError(f"rule and agenda ids must be unique; used twice: {dupes}")
+            # raises on a bad version / unknown trigger / malformed action / an id used twice
+            check_rule_pack(rule_pack)
         if pacing:  # a bad `[pacing]` fails here too, not at the first beat (D-95)
             from uro_core.pipeline.pacing import settings_from
 
@@ -322,6 +345,9 @@ class PostgresEventStore:
                 clock=clock,
                 pacing=pacing,
                 starting_gear=starting_gear,
+                description=description,
+                content=content,
+                manifest=manifest,
             ),
             *(extra_events or []),
         ]
@@ -352,7 +378,10 @@ class PostgresEventStore:
             for event in genesis:
                 await apply_event(conn, branch_id, event)
             await _outbox_row(conn, world_id, branch_id, commit_id)  # D-57, same transaction
-            return World(world_id=world_id, name=name, main_branch_id=branch_id)
+            return _world(
+                {"world_id": world_id, "name": name, "main_branch_id": branch_id},
+                genesis[0].payload,
+            )
 
     # --- the transactional outbox (D-57, docs/07) ---
 
@@ -608,20 +637,31 @@ class PostgresEventStore:
                     commit_map[mem.commit_id],
                 )
             main = next((b for b in bundle.branches if b.name == "main"), bundle.branches[0])
-            return World(
-                world_id=world_id, name=bundle.world_name, main_branch_id=branch_map[main.branch_id]
+            genesis = next(
+                (
+                    e.payload
+                    for c in bundle.commits
+                    for e in c.events
+                    if e.event_type == "WorldGenesis"
+                ),
+                {},
+            )
+            return _world(
+                {
+                    "world_id": world_id,
+                    "name": bundle.world_name,
+                    "main_branch_id": branch_map[main.branch_id],
+                },
+                genesis,
             )
 
     async def get_world_by_name(self, name: str) -> World | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT w.world_id, w.name, b.branch_id AS main_branch_id "
-                "FROM worlds w JOIN branches b "
-                "  ON b.world_id = w.world_id AND b.name = 'main' "
-                "WHERE w.name = $1",
+                _WORLD_SELECT + "WHERE w.name = $1",
                 name,
             )
-        return World(**dict(row)) if row else None
+        return _world(dict(row), row["genesis"]) if row else None
 
     async def create_campaign(self, world_id: str, branch_id: str, *, seed: int = 0) -> Campaign:
         _check_seed(seed)  # G-3: uniform with start_campaign — this entry point can pin a seed too
@@ -1218,23 +1258,25 @@ class PostgresEventStore:
     async def get_world(self, world_id: str) -> World | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT w.world_id, w.name, b.branch_id AS main_branch_id "
-                "FROM worlds w JOIN branches b "
-                "  ON b.world_id = w.world_id AND b.name = 'main' "
-                "WHERE w.world_id = $1",
+                _WORLD_SELECT + "WHERE w.world_id = $1",
                 world_id,
             )
-        return World(**dict(row)) if row else None
+        return _world(dict(row), row["genesis"]) if row else None
 
     async def list_worlds(self) -> list[World]:
         """All worlds (docs/18 B3 — a consumer's lobby needs discovery). Ordered by id."""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT w.world_id, w.name, b.branch_id AS main_branch_id "
-                "FROM worlds w JOIN branches b "
-                "  ON b.world_id = w.world_id AND b.name = 'main' ORDER BY w.world_id"
-            )
-        return [World(**dict(r)) for r in rows]
+            rows = await conn.fetch(_WORLD_SELECT + "ORDER BY w.world_id")
+        return [_world(dict(r), r["genesis"]) for r in rows]
+
+    async def world_manifest(self, world_id: str) -> dict[str, Any]:
+        """The manifest a world was made from, kept on its WorldGenesis (D-104); {} for a world
+        made without a pack, or before worlds kept it."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(_WORLD_SELECT + "WHERE w.world_id = $1", world_id)
+        if row is None or row["genesis"] is None:
+            return {}
+        return dict(row["genesis"].get("manifest") or {})
 
     async def list_campaigns(self, world_id: str | None = None) -> list[Campaign]:
         """All campaigns, optionally scoped to a world (docs/18 B3). Ordered by id."""

@@ -90,8 +90,15 @@ _PLAYER_SAFE_SECTIONS = frozenset({"actors", "threads", "places", "factions", "p
 # handler's operator gate or the `_safe_extract_pack` cap — so an oversized upload is rejected up
 # front by Content-Length (below). NOT `/worlds/import`: that's a JSON bundle, legitimately large.
 _PACK_UPLOAD_PATHS = frozenset(
-    {"/worlds/validate", "/worlds/backfill", "/worlds/probe", "/worlds/create"}
+    {"/worlds/validate", "/worlds/parse", "/worlds/backfill", "/worlds/probe", "/worlds/create"}
 )
+
+
+async def _refuse(ws: WebSocket, code: int) -> None:
+    """Close a play socket with one of the documented codes (D-107): accepted first, so the code
+    reaches the client instead of a bare HTTP 403 handshake rejection."""
+    await ws.accept()
+    await ws.close(code=code)
 
 
 def _is_pack_upload(path: str) -> bool:
@@ -298,7 +305,7 @@ class ServerDeps:
     probe: Callable[[WorldManifest, int], Awaitable[ProbeReport]] | None = None
     # pack import + history seeding (docs/09): one core path with `uro world create|seed`
     import_pack: Callable[[WorldPack, bool], Awaitable[PackImport]] | None = None
-    seed_world: Callable[[World, WorldPack, int], Awaitable[SeedResult]] | None = None
+    seed_world: Callable[[World, WorldPack | None, int], Awaitable[SeedResult]] | None = None
     # Model-connection registry slice 3/4 (D-47): discover a connection's models (live), probe a
     # connection (a 1-token call), and rebuild the instance router from the registry without a
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
@@ -516,7 +523,9 @@ def engine_deps(
         async def backfill(pack: WorldPack) -> tuple[WorldPack, list[str]]:
             from uro_core.worldpack.backfill import backfill_gaps
 
-            return await backfill_gaps(pack, engine.router)
+            # graded as /worlds/validate grades it (generate_population, D-81)
+            makes_people = (await store.get_extraction_policy()).extract_actors
+            return await backfill_gaps(pack, engine.router, play_creates_actors=makes_people)
 
         async def probe(manifest: WorldManifest, tries: int) -> ProbeReport:
             from uro_core.engines.probe import run_probes
@@ -531,7 +540,7 @@ def engine_deps(
         backfill_router = engine.router if with_backfill else None
         return await _import_pack(store, pack, backfill_router=backfill_router)
 
-    async def seed_world(world: World, pack: WorldPack, seed: int) -> SeedResult:
+    async def seed_world(world: World, pack: WorldPack | None, seed: int) -> SeedResult:
         from uro_core.worldpack.create import seed_world as _seed_world
 
         return await _seed_world(store, world, pack, seed)
@@ -1349,6 +1358,19 @@ def create_app(
         ruleset_config = body.get("ruleset_config") or {}
         if not isinstance(ruleset_config, dict):
             raise HTTPException(status_code=400, detail="ruleset_config must be an object")
+        # What a platform lists the world by (D-104): a pitch, and a `[content]` declaration in a
+        # pack's shape (checked like a pack's).
+        description = body.get("description") or ""
+        if not isinstance(description, str):
+            raise HTTPException(status_code=400, detail="description is a string")
+        content = body.get("content") or None  # {} declares nothing (D-104 review)
+        if content is not None:
+            from uro_core.worldpack.models import ContentDecl
+
+            try:
+                content = ContentDecl(**content).model_dump()
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"invalid content: {exc}") from exc
         try:
             # create_world validates a Reaction-Layer rule_pack LOUDLY (the "silent pack death" fix,
             # docs/18): a malformed pack from a REST client is bad INPUT → 400, not a 500.
@@ -1360,10 +1382,12 @@ def create_app(
                 ruleset_id=ruleset_id,
                 ruleset_version=ruleset_version,
                 ruleset_config=ruleset_config,
+                description=description,
+                content=content,
             )
         except ValueError as exc:  # pydantic ValidationError (bad rule_pack) subclasses ValueError
             raise HTTPException(status_code=400, detail=f"invalid world: {exc}") from exc
-        return {"world_id": w.world_id, "main_branch_id": w.main_branch_id, "name": w.name}
+        return w.model_dump()
 
     @app.get("/worlds", **_out(list[S.WorldOut]))
     async def list_worlds(request: Request) -> list[dict[str, Any]]:
@@ -1415,6 +1439,77 @@ def create_app(
                 "gaps": report.gaps,
             }
 
+    @app.post("/worlds/parse", **_out(S.ParsedPack))
+    async def parse_world_pack(
+        request: Request,
+        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+    ) -> dict[str, Any]:
+        """An uploaded pack (a `.zip` of the pack directory) as Uro reads it (D-105): the manifest
+        with every default filled in, the seeds, lore, prompt files and rule pack, as `WorldPack`
+        holds them, so a tool that edits, diffs or converts packs needn't re-read TOML and YAML.
+        Writes nothing, with `/worlds/validate`'s upload guards and authority (any-authed: it
+        returns only what the caller sent)."""
+        _auth(request)
+        from uro_core.errors import PackError
+        from uro_core.worldpack.parse import parse_pack
+
+        data = await pack.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _safe_extract_pack(data, Path(tmp))
+            try:
+                parsed = parse_pack(root)
+            except PackError as exc:  # a malformed pack is bad INPUT → 400, not a 500
+                raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
+        return parsed.model_dump(mode="json")
+
+    @app.get("/rules/schema", **_out(S.RulesSchema))
+    async def rules_schema(request: Request) -> dict[str, Any]:
+        """The world-rules grammar as JSON Schema (D-105), as `GET /rulesets` serves a ruleset's
+        settings schema: any-authed, no world state."""
+        _auth(request)
+        from uro_core.worldpack import rules as R
+
+        return {
+            "rules_api_version": R.RULES_API_VERSION,
+            "supported_versions": sorted(R._SUPPORTED_VERSIONS),
+            "rule_pack_schema": R.rule_pack_schema(),
+        }
+
+    @app.post("/rules/validate", **_out(S.RulesCheck))
+    async def rules_validate(request: Request, body: Any = Body(...)) -> dict[str, Any]:  # noqa: B008
+        """Check a rule pack on its own (D-105), exactly as creating a world would: the body is the
+        pack as `POST /worlds` takes its `rule_pack` ({rules_api_version, rules, agendas}). A bad
+        pack is a 200 with `ok: false` and each problem located, so an editor can mark it.
+        Any-authed; writes nothing."""
+        _auth(request)
+        from pydantic import ValidationError
+        from uro_core.worldpack.rules import check_rule_pack
+
+        def count(key: str) -> int:
+            items = body.get(key) if isinstance(body, dict) else None
+            return len(items) if isinstance(items, list) else 0
+
+        try:
+            check_rule_pack(body)
+        except ValidationError as exc:
+            problems = [
+                {"loc": list(e["loc"]), "message": e["msg"]} for e in exc.errors(include_url=False)
+            ]
+            return {
+                "ok": False,
+                "rules": count("rules"),
+                "agendas": count("agendas"),
+                "problems": problems,
+            }
+        except ValueError as exc:
+            return {
+                "ok": False,
+                "rules": count("rules"),
+                "agendas": count("agendas"),
+                "problems": [{"loc": [], "message": str(exc)}],
+            }
+        return {"ok": True, "rules": count("rules"), "agendas": count("agendas"), "problems": []}
+
     @app.post("/worlds/create", **_out(S.PackCreated))
     async def create_world_from_pack(
         request: Request,
@@ -1458,13 +1553,13 @@ def create_app(
     async def seed_world_from_pack(
         world_id: str,
         request: Request,
-        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+        pack: UploadFile | None = File(None),  # noqa: B008 (FastAPI DI-style default)
     ) -> dict[str, Any]:
         """Run History seeding (`?seed=`, default 42) on a world: a seed-dependent past (power
-        groups, leaders, conflicts, in the pack's `[history.vocabulary]`, D-97) on its authored
-        geography — `uro world seed` over the API. The world doesn't persist
-        its manifest's `[history]`, so the pack is re-supplied, and it must be the pack the world
-        was created from. OPERATOR-only (D-44): a structural write on the main branch."""
+        groups, leaders, conflicts, in the manifest's `[history.vocabulary]`, D-97) on its authored
+        geography — `uro world seed` over the API. It reads the manifest the world keeps (D-104),
+        so no upload is needed; a world made before worlds kept theirs takes the pack it was
+        created from. OPERATOR-only (D-44): a structural write on the main branch."""
         _require_operator(request)
         if deps.seed_world is None:
             raise HTTPException(status_code=501, detail="management surface not enabled")
@@ -1478,6 +1573,12 @@ def create_app(
         from uro_core.errors import PackError
         from uro_core.worldpack.parse import parse_pack
 
+        if pack is None:
+            try:
+                result = await deps.seed_world(world, None, seed)
+            except PackError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return result.model_dump()
         data = await pack.read()
         with tempfile.TemporaryDirectory() as tmp:
             root = _safe_extract_pack(data, Path(tmp))
@@ -1498,8 +1599,8 @@ def create_app(
         cost, never caps it — docs/00), so a plain player token can't burn model budget. Like
         `/worlds/validate` this is pack-UPLOAD-shaped, not `/worlds/{w}/`: backfill needs the pack's
         manifest/lore (sufficiency gaps), which a stored world doesn't persist. Committing the
-        seeds is `POST /worlds/create?backfill=true` (or `uro world create --backfill`). The
-        PoC backfill fills only the `conflict` dimension."""
+        seeds is `POST /worlds/create?backfill=true` (or `uro world create --backfill`). Every gap
+        has a filler (D-108): one live call per gap."""
         _require_operator(request)
         if deps.backfill is None:
             raise HTTPException(status_code=501, detail="backfill not enabled (no provider wired)")
@@ -1524,13 +1625,22 @@ def create_app(
             except ProviderError as exc:  # a live-model failure is upstream, not bad input → 502
                 raise HTTPException(status_code=502, detail=f"provider error: {exc}") from exc
             after = check_sufficiency(augmented, play_creates_actors=makes_people)
-            seeds = [t.model_dump() for t in augmented.threads if t.provenance == "ai_backfill"]
-            return {
+
+            def made(items: list[Any]) -> list[dict[str, Any]]:
+                return [i.model_dump() for i in items if i.provenance == "ai_backfill"]
+
+            return {  # a preview: nothing is committed (POST /worlds/create?backfill=true does)
                 "name": parsed.manifest.name,
                 "before_grade": before.grade,
                 "after_grade": after.grade,
                 "added": added,
-                "seeds": seeds,  # the ai_backfill ThreadSeeds (preview — nothing committed)
+                "filled": augmented.manifest.backfilled,  # the dimensions filled (D-108)
+                "seeds": made(augmented.threads),  # conflict seeds (the pre-D-108 field)
+                "places": made(augmented.places),
+                "factions": made(augmented.factions),
+                "actors": made(augmented.actors),
+                "claims": made(augmented.claims),
+                "tone": augmented.manifest.tone if "tone" in augmented.manifest.backfilled else [],
             }
 
     @app.post("/worlds/probe", **_out(S.Probe))
@@ -2385,14 +2495,17 @@ def create_app(
 
     @app.websocket("/campaigns/{campaign_id}/play")
     async def play(ws: WebSocket, campaign_id: str) -> None:
-        # Auth (docs/08 token mode): ?token=… → participant_id. Reject before accept.
+        # Auth (docs/08 token mode): ?token=… → participant_id. A refusal is a close code AFTER
+        # accept (D-107): closed before it, the ASGI server answers the handshake with a bare HTTP
+        # 403, so a browser saw 1006 and no client ever got 4401/4403/4404. Nothing is sent or
+        # read on a refused socket before it closes.
         token = ws.query_params.get("token", "")
         participant = deps.resolve_participant(token)
         if participant is None:
-            await ws.close(code=4401)  # unauthorized
+            await _refuse(ws, 4401)  # unauthorized
             return
         if not await deps.campaign_exists(campaign_id):
-            await ws.close(code=4404)  # no such campaign
+            await _refuse(ws, 4404)  # no such campaign
             return
         # A MINTED token is scoped to the campaign it was minted for (D-39 review): reject it on a
         # DIFFERENT campaign's play channel — else a token authenticates its participant server-wide
@@ -2400,7 +2513,7 @@ def create_app(
         # --token creds are intentionally server-wide (token_campaign → None) and unaffected.
         tok_campaign = deps.token_campaign(token) if deps.token_campaign is not None else None
         if tok_campaign is not None and tok_campaign != campaign_id:
-            await ws.close(code=4403)  # token not valid for this campaign
+            await _refuse(ws, 4403)  # token not valid for this campaign
             return
         await ws.accept()
         live_sockets.add((token, ws, campaign_id))
