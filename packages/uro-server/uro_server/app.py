@@ -1363,7 +1363,7 @@ def create_app(
         description = body.get("description") or ""
         if not isinstance(description, str):
             raise HTTPException(status_code=400, detail="description is a string")
-        content = body.get("content")
+        content = body.get("content") or None  # {} declares nothing (D-104 review)
         if content is not None:
             from uro_core.worldpack.models import ContentDecl
 

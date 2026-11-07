@@ -136,7 +136,7 @@ opens, then closes with the code and nothing before it, so a browser's `close` e
 | plots gone quiet (a journal's "loose ends") | `GET /campaigns/{c}/pacing`: each live thread's beats since it came up; a world that opts in (`[pacing]`) also has the engine nudge the quietest back into the story (D-95, D-96) |
 | world history / timeline | `GET /worlds/{w}/branches`, `GET /worlds/{w}/log` |
 | import a world pack | `POST /worlds/create` (multipart field `pack`: a `.zip` of the pack folder); check it first with `POST /worlds/validate` |
-| show what the machine invented | places, actors, factions and threads have `provenance` (`author`, `ai_backfill`; `""` = not recorded, as for things made in play); a claim's `origin` is `ai_backfill` for a backfilled fact (D-108) |
+| show what the machine invented | places, actors, factions and threads have `provenance` (`author`, `ai_backfill`; `""` = not recorded: made in play, by History seeding, a new player character, or before D-108); a claim's `origin` is `ai_backfill` for a backfilled fact (D-108) |
 | read or edit a pack | `POST /worlds/parse` returns an uploaded pack as Uro reads it (JSON, every default filled in, nothing imported); `GET /rules/schema` is the world-rules grammar as JSON Schema, and `POST /rules/validate` checks a rule pack on its own (D-105) |
 
 ## Bring your own model: the settings screen

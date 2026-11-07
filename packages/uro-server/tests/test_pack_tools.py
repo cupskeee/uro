@@ -97,3 +97,43 @@ def test_a_rule_pack_is_checked_on_its_own_as_a_world_would_check_it() -> None:
     old = client.post("/rules/validate?token=tok", json={"rules_api_version": 99}).json()
     assert old["ok"] is False
     assert client.post("/rules/validate?token=tok", json=[1, 2]).json()["ok"] is False
+
+
+def _with_for_each(tmp_path: Path) -> Path:
+    import shutil
+
+    pack = tmp_path / "thornwood"
+    shutil.copytree(_WORLDS / "thornwood", pack)
+    (pack / "rules.yaml").write_text(
+        "rules_api_version: 8\n"
+        "rules:\n"
+        "  - id: allies-join\n"
+        "    trigger: {event: EdgeAdded}\n"
+        "    scope: {world: true}\n"
+        "    then:\n"
+        "      - do: for_each\n"
+        "        traverse: allied_with\n"
+        "        from: $trigger.src\n"
+        "        as: $ally\n"
+        "        apply:\n"
+        "          - {do: adjust_counter, scope_ref: $ally, key: war, delta: 1}\n"
+    )
+    return pack
+
+
+def test_a_for_each_rule_reads_back_as_written_and_checks_again(tmp_path: Path) -> None:
+    # D-105 review: `from`/`as` were dumped as `source`/`bind`, so the parsed pack failed the check
+    # it had passed (and `world create`, which re-checks the dump).
+    from uro_core.worldpack.rules import check_rule_pack
+
+    pack = _with_for_each(tmp_path)
+    parsed = parse_pack(pack).rule_pack
+    assert parsed is not None
+    step = parsed.model_dump()["rules"][0]["then"][0]
+    assert step["from"] == "$trigger.src" and step["as"] == "$ally"
+    check_rule_pack(parsed.model_dump())  # the dump is a pack Uro accepts
+    upload = {"pack": ("t.zip", _zip(pack), "application/zip")}
+    client = _client()
+    read = client.post("/worlds/parse?token=tok", files=upload).json()
+    again = client.post("/rules/validate?token=tok", json=read["rule_pack"]).json()
+    assert again["ok"] is True, again

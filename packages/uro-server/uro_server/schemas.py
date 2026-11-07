@@ -356,7 +356,7 @@ class ActorRow(Out):
     role: str
     aliases: list[str]
     status: str
-    provenance: str  # D-108: "author" | "ai_backfill"; "" = not recorded (play, or older)
+    provenance: str  # D-108: "author" | "ai_backfill"; "" = not recorded (see D-108's correction)
 
 
 class ClaimRow(Out):

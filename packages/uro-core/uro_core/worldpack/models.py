@@ -90,7 +90,8 @@ class HistoryDecl(BaseModel):
 class WorldManifest(BaseModel):
     name: str
     tone: list[str] = Field(default_factory=list)
-    # A short pitch for whoever lists the world (D-104): description only, never sent to a model.
+    # A short pitch for whoever lists the world (D-104). Play's prompts never see it; AI backfill
+    # (an authoring step, D-108) reads it to ground what it invents.
     description: str = ""
     generate_population: bool = False  # the "generate freely" flag (docs/09 sufficiency)
     # `[world] starting_gear` (D-97): items a fresh PC carries in this world; none by default

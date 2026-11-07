@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ValidationError
@@ -112,14 +113,19 @@ def _manifest(path: Path) -> WorldManifest:
     world = data.get("world", {})
     if "name" not in world:
         raise PackError("world.toml is missing [world].name")
+    # `[content]` only when the pack has the table: a world that declared none must not read as
+    # declaring the defaults (D-104 review), and `model_fields_set` keeps the difference.
     try:
+        declared: dict[str, Any] = (
+            {"content": ContentDecl(**data["content"])} if "content" in data else {}
+        )
         return WorldManifest(
+            **declared,
             name=world["name"],
             tone=world.get("tone", []),
             description=world.get("description", ""),
             generate_population=world.get("generate_population", False),
             starting_gear=world.get("starting_gear", []),
-            content=ContentDecl(**data.get("content", {})),
             calendar=CalendarDecl(**data.get("calendar", {})),
             clock=ClockDecl(**data.get("clock", {})),
             pacing=PacingSettings(**data.get("pacing", {})),

@@ -229,3 +229,34 @@ async def test_a_pack_relying_on_play_for_its_people_needs_play_to_make_them(
         assert (await import_pack(store, parsed)).grade != "insufficient"
     finally:
         await store.set_extraction_policy(before)
+
+
+async def test_a_pack_without_content_declares_none_and_a_for_each_pack_imports(
+    store: PostgresEventStore, tmp_path: Path
+) -> None:
+    # The phase-end review: a pack with no [content] read as declaring rating 'mild' (D-104), and a
+    # pack with a for_each rule failed at import, re-checking a dump that renamed `from`/`as`.
+    import shutil
+
+    from uro_core.domain.ids import new_id
+    from uro_core.worldpack.create import import_pack
+
+    pack = tmp_path / "thornwood"
+    shutil.copytree(WORLDS / "thornwood", pack)
+    toml = pack / "world.toml"
+    text = toml.read_text()
+    head, _, rest = text.partition("[content]")
+    tail = rest[rest.find("\n[") :] if "\n[" in rest else ""
+    toml.write_text((head + tail).replace('name = "Thornwood"', f'name = "Thornwood-{new_id()}"'))
+    (pack / "rules.yaml").write_text(
+        "rules_api_version: 8\nrules:\n  - id: allies-join\n    trigger: {event: EdgeAdded}\n"
+        "    scope: {world: true}\n    then:\n      - do: for_each\n        traverse: allied_with\n"
+        "        from: $trigger.src\n        as: $ally\n        apply:\n"
+        "          - {do: adjust_counter, scope_ref: $ally, key: war, delta: 1}\n"
+    )
+    parsed = parse_pack(pack)
+    assert "content" not in parsed.manifest.model_fields_set
+    world = (await import_pack(store, parsed)).world
+    assert world.content is None
+    listed = {w.world_id: w for w in await store.list_worlds()}
+    assert listed[world.world_id].content is None

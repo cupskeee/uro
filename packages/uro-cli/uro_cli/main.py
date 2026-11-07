@@ -118,6 +118,20 @@ async def _metered(router: ProviderRouter) -> AsyncIterator[ProviderRouter]:
             await store.close()
 
 
+async def _play_creates_actors() -> bool:
+    """Whether this instance lets play create actors (its extraction policy, D-49), read best
+    effort like `_metered`: with no database, the default (on), as a pure parse assumes."""
+    try:
+        store = build_store()
+        await asyncio.wait_for(connect_store(store), timeout=5)
+    except Exception:
+        return True
+    try:
+        return (await store.get_extraction_policy()).extract_actors
+    finally:
+        await store.close()
+
+
 def _run_async(coro_factory) -> None:  # type: ignore[no-untyped-def]
     """Run an async command, turning config/credential/lookup errors into a clean message."""
     try:
@@ -248,17 +262,34 @@ def world_new(
         "", "--ruleset", help="a built-in ruleset id (`uro ruleset list`); default uro-basic"
     ),
     pc: str = typer.Option("Player", "--pc", help="the player character's name"),
+    description: str = typer.Option(
+        "", "--description", help="a short pitch for whoever lists the world (D-104)"
+    ),
+    content_rating: str = typer.Option(
+        None,
+        "--content-rating",
+        help="declare the world's content ceiling: none | mild | mature | explicit (D-104)",
+    ),
 ) -> None:
     """Create a world (+ its main branch) and a ready-to-play campaign with a default,
     sheeted PC. Prints the campaign id."""
 
     async def _run() -> None:
+        from uro_core.worldpack.models import ContentDecl
+
         rs = build_ruleset(ruleset)  # an unknown id fails here, before any write
+        content = (
+            ContentDecl.model_validate({"rating": content_rating}).model_dump()
+            if content_rating
+            else None
+        )
         sheet, ruleset_id = _build_pc_sheet(rs), rs.id
         store = build_store()
         await connect_store(store)
         try:
-            world = await store.create_world(name, ruleset_id=ruleset)
+            world = await store.create_world(
+                name, ruleset_id=ruleset, description=description, content=content
+            )
             campaign = await store.start_campaign(
                 world.world_id,
                 world.main_branch_id,
@@ -345,10 +376,15 @@ def world_create(
         store = build_store()
         try:
             pack = parse_pack(path)
-            # build the provider only when a gap needs it: a runnable pack needs no key
-            needs_fill = backfill and check_sufficiency(pack).grade != "runnable"
-            router = build_router(provider, model) if needs_fill else None
             await connect_store(store)
+            # build the provider only when a gap needs it (a runnable pack needs no key), graded
+            # as the import grades it: with this instance's extraction policy (D-108 review)
+            makes_people = (await store.get_extraction_policy()).extract_actors
+            needs_fill = (
+                backfill
+                and check_sufficiency(pack, play_creates_actors=makes_people).grade != "runnable"
+            )
+            router = build_router(provider, model) if needs_fill else None
             if router is not None:  # the backfill's calls are metered like any other (D-66)
                 router.recorder = store.record_llm_call
             result = await import_pack(store, pack, backfill_router=router)
@@ -362,7 +398,7 @@ def world_create(
         for a in result.backfilled:
             typer.echo(f"  backfilled + committed: {a}")
         if pack.manifest.history.vocabulary is not None:  # D-97: seeding speaks the pack's words
-            typer.echo(f"seed history:  uro world seed {path} --seed 42")
+            typer.echo(f"seed history:  uro world seed {world.world_id} --seed 42")
 
     _run_async(_run)
 
@@ -435,13 +471,18 @@ def world_backfill(
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(1) from exc
-        before = check_sufficiency(pack)
+        # graded as the import (and POST /worlds/backfill) grade it: this instance's extraction
+        # policy, when the database answers (D-108 review)
+        makes_people = await _play_creates_actors()
+        before = check_sufficiency(pack, play_creates_actors=makes_people)
         if before.grade == "runnable":
             typer.echo("pack is already runnable — nothing to backfill")
             return
         async with _metered(build_router(provider, model)) as router:
-            augmented, added = await backfill_gaps(pack, router, report=before)
-        after = check_sufficiency(augmented)
+            augmented, added = await backfill_gaps(
+                pack, router, report=before, play_creates_actors=makes_people
+            )
+        after = check_sufficiency(augmented, play_creates_actors=makes_people)
         typer.echo(f"backfill: {before.grade} → {after.grade}")
         for a in added:
             typer.echo(f"  + {a}")
@@ -978,29 +1019,38 @@ def connect(
 
                 receiver = asyncio.create_task(receive())
                 loop = asyncio.get_event_loop()
-                while True:
-                    intent = (await loop.run_in_executor(None, input, "> ")).strip()
-                    if intent in ("/quit", "/exit"):
-                        break
-                    if intent.startswith("/say "):  # non-canon table-talk (D-38)
-                        await ws.send(json.dumps({"type": "table_talk", "text": intent[5:]}))
-                    elif intent.startswith("/vote "):  # non-canon consensus vote (D-38)
-                        await ws.send(json.dumps({"type": "vote", "choice": intent[6:]}))
-                    elif intent:
-                        rid = uuid.uuid4().hex
-                        settled = asyncio.Event()
-                        pending[rid] = (intent, settled)
-                        await ws.send(json.dumps({"type": "intent", "text": intent, "id": rid}))
-                        waiting = asyncio.ensure_future(settled.wait())
-                        # a slow beat (a reasoning model's extraction) still settles well inside
-                        # this; past it — or if the server goes away — the prompt comes back anyway
-                        await asyncio.wait(
-                            {waiting, receiver}, timeout=600, return_when=asyncio.FIRST_COMPLETED
-                        )
-                        waiting.cancel()
-                        pending.pop(rid, None)
-                        if receiver.done():  # the server closed the connection
+                # A server that closes the socket while the player is at the prompt (a revoked
+                # token, a removed campaign) ends the session here, then says why (D-107 review).
+                try:
+                    while True:
+                        intent = (await loop.run_in_executor(None, input, "> ")).strip()
+                        if receiver.done():  # closed while the player typed
                             break
+                        if intent in ("/quit", "/exit"):
+                            break
+                        if intent.startswith("/say "):  # non-canon table-talk (D-38)
+                            await ws.send(json.dumps({"type": "table_talk", "text": intent[5:]}))
+                        elif intent.startswith("/vote "):  # non-canon consensus vote (D-38)
+                            await ws.send(json.dumps({"type": "vote", "choice": intent[6:]}))
+                        elif intent:
+                            rid = uuid.uuid4().hex
+                            settled = asyncio.Event()
+                            pending[rid] = (intent, settled)
+                            await ws.send(json.dumps({"type": "intent", "text": intent, "id": rid}))
+                            waiting = asyncio.ensure_future(settled.wait())
+                            # a slow beat (a reasoning model's extraction) still settles well
+                            # inside this; past it, or if the server goes away, the prompt returns
+                            await asyncio.wait(
+                                {waiting, receiver},
+                                timeout=600,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            waiting.cancel()
+                            pending.pop(rid, None)
+                            if receiver.done():  # the server closed the connection
+                                break
+                except websockets.ConnectionClosed:
+                    pass
                 receiver.cancel()
             if ws.close_code in _REFUSALS:  # refused after a while (a token revoked mid-session)
                 _refused(ws.close_code, campaign_id)
@@ -1363,6 +1413,14 @@ def world_list() -> None:
             typer.echo("(no worlds — create one with `uro world new` or `uro world create`)")
         for w in worlds:
             typer.echo(f"{w.world_id}  {w.name}")
+            # what the world says about itself (D-104), when it says anything
+            about = [
+                *([w.description] if w.description else []),
+                *([f"tone: {', '.join(w.tone)}"] if w.tone else []),
+                *([f"content: {w.content.get('rating')}"] if w.content else []),
+            ]
+            if about:
+                typer.echo(f"    {' · '.join(about)}")
 
     _run_async(_run)
 

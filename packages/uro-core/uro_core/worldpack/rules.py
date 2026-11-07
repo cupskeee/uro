@@ -503,7 +503,11 @@ class ActForEach(BaseModel):
     each neighbor scope-fenced, fan-out + node-budget capped. (The wished `do:[...]` inner key is
     `apply` here: `do` is the action discriminator.)"""
 
-    model_config = _STRICT
+    # Written `from` / `as` (Python keywords, hence the aliases), and DUMPED that way too, so a
+    # parsed pack round-trips: dumped as `source`/`bind`, a pack with a for_each passed `uro rules
+    # validate` and failed at `world create`, which re-checks the dump (D-105 review). Both
+    # spellings load, so a pack stored either way still does.
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
     do: Literal["for_each"]
     traverse: ModuleRel
     source: str = Field(alias="from")  # a literal ref, or `$trigger.<field>`

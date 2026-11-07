@@ -81,7 +81,12 @@ async def import_pack(
         pacing=pack.manifest.pacing.model_dump(exclude_defaults=True),
         starting_gear=pack.manifest.starting_gear,
         description=pack.manifest.description,
-        content=pack.manifest.content.model_dump(),
+        # only a declaration the pack made (its `[content]` table), never the defaults (D-104)
+        content=(
+            pack.manifest.content.model_dump()
+            if "content" in pack.manifest.model_fields_set
+            else {}
+        ),
         manifest=pack.manifest.model_dump(mode="json"),
         extra_events=pack_to_events(pack),
     )

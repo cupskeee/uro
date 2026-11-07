@@ -29,7 +29,7 @@ ashfall/
 [world]
 name = "Ashfall"
 tone = ["grim", "low-magic", "political"]
-description = "A coast of salt and old debts, where the dukes still owe the dead."   # D-104: the pitch a platform lists (never sent to a model)
+description = "A coast of salt and old debts, where the dukes still owe the dead."   # D-104: the pitch a platform lists (play's prompts never see it; backfill reads it)
 starting_gear = ["a traveler's knife"]   # D-97: what a fresh PC carries here; none if omitted
 
 [content]                    # per-world, NOT per-user (owner decision)

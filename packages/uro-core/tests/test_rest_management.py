@@ -725,6 +725,8 @@ async def test_a_world_says_what_it_is_and_keeps_its_manifest(store: PostgresEve
             json={"name": f"Declared-{new_id()}", "content": {"rating": "mature"}},
         )
         assert declared.json()["content"]["rating"] == "mature"
+        empty = await client.post(_q("/worlds"), json={"name": f"E-{new_id()}", "content": {}})
+        assert empty.json()["content"] is None  # {} declares nothing (the phase-end review)
         bad = await client.post(_q("/worlds"), json={"name": "X", "content": {"rating": "huge"}})
         assert bad.status_code == 400
         no_text = await client.post(_q("/worlds"), json={"name": "X", "description": 3})
