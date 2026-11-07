@@ -105,6 +105,9 @@ class WorldManifest(BaseModel):
     ruleset: RulesetDecl = Field(default_factory=RulesetDecl)
     history: HistoryDecl = Field(default_factory=HistoryDecl)
     llm_roles: dict[str, str] = Field(default_factory=dict)  # [llm.roles] — suggestions
+    # The rubric dimensions AI backfill filled (D-108), e.g. ["tone", "conflict"]: the record of
+    # what the machine invented, for what has no entity to tag (tone). Set by backfill, not authors.
+    backfilled: list[str] = Field(default_factory=list)
 
 
 # --- seed entities (entities/*.yaml) ---
@@ -116,6 +119,7 @@ class PlaceSeed(BaseModel):
     kind: PlaceKind = "site"
     description: str = ""
     parent: str | None = None  # located_in ref (region ⊃ settlement ⊃ site)
+    provenance: str = "author"  # "ai_backfill" for machine-generated seeds (D-108)
 
 
 class FactionSeed(BaseModel):
@@ -124,6 +128,7 @@ class FactionSeed(BaseModel):
     kind: str = "faction"  # "religion" for a religion (docs/02)
     description: str = ""
     at_war_with: list[str] = Field(default_factory=list)  # faction ids → at_war_with edges
+    provenance: str = "author"  # "ai_backfill" for machine-generated seeds (D-108)
 
 
 class ActorSeed(BaseModel):
@@ -137,6 +142,7 @@ class ActorSeed(BaseModel):
     # Actor ids this actor knows (D-76): acquaintance is mutual, so each becomes a `knows` edge
     # both ways, which is the only relation rumors spread along (engines/actor.propagate_belief).
     knows: list[str] = Field(default_factory=list)
+    provenance: str = "author"  # "ai_backfill" for machine-generated seeds (D-108)
 
 
 class ThreadSeed(BaseModel):
@@ -153,6 +159,7 @@ class ClaimSeed(BaseModel):
     statement: str
     truth: Literal["true", "false", "unknown"] = "true"
     subject_refs: list[str] = Field(default_factory=list)
+    provenance: str = "author"  # "ai_backfill" → the claim's origin (D-108)
 
 
 class WorldPack(BaseModel):

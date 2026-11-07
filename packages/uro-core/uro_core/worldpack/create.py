@@ -51,8 +51,8 @@ async def import_pack(
     """Commit a parsed pack as a new world. Refuses (PackError) a pack whose ruleset this build
     can't play (an unknown id, or bad `[ruleset.config]` settings) — else the world commits fine
     and only fails at the first campaign — or one graded insufficient. With `backfill_router`, a
-    thin pack's gaps are AI-filled first and the fills are committed, tagged
-    `provenance=ai_backfill` (a live LLM call)."""
+    pack's gaps are AI-filled first (every dimension, D-108) and the fills are committed, tagged
+    `provenance=ai_backfill` (a live LLM call per gap); it's refused if it stays insufficient."""
     problem = ruleset_problem(pack)
     if problem is not None:
         raise PackError(f"pack declares a ruleset this build can't play: {problem}")
@@ -60,10 +60,12 @@ async def import_pack(
     makes_people = (await store.get_extraction_policy()).extract_actors
     report = check_sufficiency(pack, play_creates_actors=makes_people)
     added: list[str] = []
-    # Backfill fills only the conflict dimension, which isn't structural: an insufficient pack
-    # stays insufficient, so refuse it before paying for a backfill call (D-81 review).
-    if backfill_router is not None and report.grade == "thin":
-        pack, added = await backfill_gaps(pack, backfill_router, report=report)
+    # Backfill can fill every dimension, places and people included (D-108), so an insufficient
+    # pack gets the attempt too; it's refused below if the gaps remain.
+    if backfill_router is not None and report.grade != "runnable":
+        pack, added = await backfill_gaps(
+            pack, backfill_router, report=report, play_creates_actors=makes_people
+        )
         report = check_sufficiency(pack, play_creates_actors=makes_people)
     if report.grade == "insufficient":
         raise PackError(f"pack is INSUFFICIENT to run: {'; '.join(report.gaps)}")

@@ -23,6 +23,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - A world keeps the manifest it was made from (D-104), so `POST /worlds/{w}/seed` and
   `uro world seed <world>` need no pack. A world made before this still takes its own pack.
 
+- Backfill fills every gap (D-108): places, a faction, people, a conflict, tone and a past, one
+  call per gap. Everything it invents is tagged `ai_backfill`: places, actors and factions now
+  carry `provenance` on their events and state rows, a backfilled fact's claim has
+  `origin=ai_backfill`, and the manifest's `backfilled` lists the dimensions filled. The
+  preview returns every kind it made, and `create --backfill` tries an insufficient pack too.
+  Run `uro db migrate` (028).
+
 ### Fixed
 
 - A refused play socket's close code (4401, 4403, 4404) now reaches the client (D-107). Uro closed

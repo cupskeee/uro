@@ -523,7 +523,9 @@ def engine_deps(
         async def backfill(pack: WorldPack) -> tuple[WorldPack, list[str]]:
             from uro_core.worldpack.backfill import backfill_gaps
 
-            return await backfill_gaps(pack, engine.router)
+            # graded as /worlds/validate grades it (generate_population, D-81)
+            makes_people = (await store.get_extraction_policy()).extract_actors
+            return await backfill_gaps(pack, engine.router, play_creates_actors=makes_people)
 
         async def probe(manifest: WorldManifest, tries: int) -> ProbeReport:
             from uro_core.engines.probe import run_probes
@@ -1597,8 +1599,8 @@ def create_app(
         cost, never caps it — docs/00), so a plain player token can't burn model budget. Like
         `/worlds/validate` this is pack-UPLOAD-shaped, not `/worlds/{w}/`: backfill needs the pack's
         manifest/lore (sufficiency gaps), which a stored world doesn't persist. Committing the
-        seeds is `POST /worlds/create?backfill=true` (or `uro world create --backfill`). The
-        PoC backfill fills only the `conflict` dimension."""
+        seeds is `POST /worlds/create?backfill=true` (or `uro world create --backfill`). Every gap
+        has a filler (D-108): one live call per gap."""
         _require_operator(request)
         if deps.backfill is None:
             raise HTTPException(status_code=501, detail="backfill not enabled (no provider wired)")
@@ -1623,13 +1625,22 @@ def create_app(
             except ProviderError as exc:  # a live-model failure is upstream, not bad input → 502
                 raise HTTPException(status_code=502, detail=f"provider error: {exc}") from exc
             after = check_sufficiency(augmented, play_creates_actors=makes_people)
-            seeds = [t.model_dump() for t in augmented.threads if t.provenance == "ai_backfill"]
-            return {
+
+            def made(items: list[Any]) -> list[dict[str, Any]]:
+                return [i.model_dump() for i in items if i.provenance == "ai_backfill"]
+
+            return {  # a preview: nothing is committed (POST /worlds/create?backfill=true does)
                 "name": parsed.manifest.name,
                 "before_grade": before.grade,
                 "after_grade": after.grade,
                 "added": added,
-                "seeds": seeds,  # the ai_backfill ThreadSeeds (preview — nothing committed)
+                "filled": augmented.manifest.backfilled,  # the dimensions filled (D-108)
+                "seeds": made(augmented.threads),  # conflict seeds (the pre-D-108 field)
+                "places": made(augmented.places),
+                "factions": made(augmented.factions),
+                "actors": made(augmented.actors),
+                "claims": made(augmented.claims),
+                "tone": augmented.manifest.tone if "tone" in augmented.manifest.backfilled else [],
             }
 
     @app.post("/worlds/probe", **_out(S.Probe))

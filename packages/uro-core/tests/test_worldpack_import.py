@@ -211,7 +211,8 @@ async def test_a_pack_relying_on_play_for_its_people_needs_play_to_make_them(
         await store.set_extraction_policy(before.model_copy(update={"extract_actors": False}))
         with pytest.raises(PackError, match="keeps play from creating actors"):
             await import_pack(store, parsed)
-        # ...and refused before paying for a backfill, which fills only the conflict dimension
+        # ...and with backfill (which can fill people since D-108) it's tried, and refused only
+        # because the replies here make nobody: people first, then the conflict, two calls
         calls: list[str] = []
 
         class Bills:
@@ -223,7 +224,7 @@ async def test_a_pack_relying_on_play_for_its_people_needs_play_to_make_them(
             await import_pack(
                 store, parsed, backfill_router=ProviderRouter(bindings={}, default=Bills())
             )
-        assert calls == []
+        assert calls == ["worldsmith", "worldsmith"]
         await store.set_extraction_policy(before.model_copy(update={"extract_actors": True}))
         assert (await import_pack(store, parsed)).grade != "insufficient"
     finally:

@@ -43,7 +43,7 @@ POST /worlds/create              (multipart .zip) [?backfill=]     import a pack
 POST /worlds/{w}/seed            [multipart .zip] [?seed=]         History seeding from the manifest the world keeps (D-104); a world made before that takes its own pack (OPERATOR-only, D-44)
 POST /worlds/validate            (multipart .zip of the pack)      grade an uploaded pack, no import (BE-6)
 POST /worlds/parse               (multipart .zip of the pack)      the pack as Uro reads it (`WorldPack` as JSON, every default filled in), no import, same upload guards (D-105)
-POST /worlds/backfill            (multipart .zip of the pack)      AI gap-fill preview, ai_backfill seeds (OPERATOR-only, D-44) (BE-7)
+POST /worlds/backfill            (multipart .zip of the pack)      AI gap-fill preview for every gap (D-108): `filled` dimensions + the ai_backfill `places`, `factions`, `actors`, `seeds` (threads), `claims` and `tone`, nothing committed (OPERATOR-only, D-44) (BE-7)
 POST /worlds/probe               (multipart .zip) [?tries=]        model-capability report, warn-not-fail (OPERATOR-only, D-44) (BE-7)
 GET  /worlds                                                       list: each world's id, name, main branch, and (D-104) its `description`, `tone` and `content` declaration (null when it declared none)
 GET  /worlds/{w}/branches                                          branch tree + markers, per-branch in-fiction day (BE-1)
