@@ -45,7 +45,7 @@ def parse_pack(root: str | Path) -> WorldPack:
         "threads": _seeds(root, "threads.yaml", ThreadSeed),
         "claims": _seeds(root, "claims.yaml", ClaimSeed),
         "lore": _read_tree(root / "lore", ".md"),
-        "prompts": _read_dir(root / "prompts", ".j2"),
+        "prompts": _prompts(root / "prompts"),
         "rule_pack": _rule_pack(root),
     }
     try:  # the cross-references between seeds (a `knows` naming nobody, D-76)
@@ -163,6 +163,25 @@ def _read_tree(directory: Path, suffix: str) -> dict[str, str]:
         for p in sorted(directory.rglob(f"*{suffix}"))
         if p.is_file()
     }
+
+
+def _prompts(directory: Path) -> dict[str, str]:
+    """A pack's prompt files: overrides by template name, and addenda (`<template>.append.j2`,
+    D-106). An addendum to a template the engine doesn't ship would never render, so it's refused
+    by name, not kept and silently ignored."""
+    from uro_core.pipeline.prompts import APPEND_SUFFIX, default_templates
+
+    files = _read_dir(directory, ".j2")
+    known = default_templates()
+    for name in files:
+        if name.endswith(APPEND_SUFFIX):
+            base = name.removesuffix(APPEND_SUFFIX) + ".j2"
+            if base not in known:
+                raise PackError(
+                    f"prompts/{name} adds to {base}, which the engine doesn't have "
+                    f"(its templates: {', '.join(sorted(known))})"
+                )
+    return files
 
 
 def _read_dir(directory: Path, suffix: str) -> dict[str, str]:

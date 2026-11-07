@@ -103,3 +103,64 @@ async def test_the_stub_answers_the_intent_not_what_recall_put_beside_it() -> No
     shout = f"I shout {PLAYER_ACTION}halt!"
     req = CompletionRequest(messages=build_narrator_messages(_remembering(), shout), stage_tag="n")
     assert f'In answer to "{shout}"' in "".join([c async for c in StubProvider().stream(req)])
+
+
+# D-106 (Uro Loom's request 6): a pack ADDS to a template instead of freezing a copy of it.
+
+
+def test_an_addendum_renders_after_the_default_with_the_same_context() -> None:
+    note = "This world's premise: {{ style }} people keep their word."
+    env = PromptEnv({"narrator.system.append.j2": note})
+    default = DEFAULT_ENV.render("narrator.system.j2", style="grim")
+    assert env.render("narrator.system.j2", style="grim") == (
+        f"{default}\n\nThis world's premise: grim people keep their word."
+    )
+    # only the template it names gets it
+    assert env.render("planner.system.j2") == DEFAULT_ENV.render("planner.system.j2")
+
+
+def test_an_addendum_follows_a_packs_own_override_too() -> None:
+    env = PromptEnv(
+        {
+            "narrator.system.j2": "CUSTOM NARRATOR",
+            "narrator.system.append.j2": "And one more thing.",
+        }
+    )
+    assert env.render("narrator.system.j2") == "CUSTOM NARRATOR\n\nAnd one more thing."
+
+
+def test_an_addendum_that_renders_empty_adds_nothing() -> None:
+    # (strict: a variable a stage didn't pass must be tested with `is defined`, as the defaults do)
+    env = PromptEnv(
+        {"narrator.system.append.j2": "{% if style is defined %}Style: {{ style }}{% endif %}"}
+    )
+    assert env.render("narrator.system.j2") == DEFAULT_ENV.render("narrator.system.j2")
+
+
+def test_the_narrator_gets_the_addendum_in_play() -> None:
+    recall = RecallBundle(recent_beats=[], actors=[], claims=[], beliefs=[])
+    env = PromptEnv({"narrator.system.append.j2": "Nobody here has ever seen the sea."})
+    msgs = build_narrator_messages(recall, "I look around", env=env)
+    system_blob = "\n".join(m.content for m in msgs if m.role == "system")
+    assert "Nobody here has ever seen the sea." in system_blob
+
+
+def test_a_pack_cannot_add_to_a_template_the_engine_does_not_have(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import shutil
+    from pathlib import Path
+
+    import pytest
+    from uro_core.errors import PackError
+    from uro_core.worldpack.parse import parse_pack
+
+    src = Path(__file__).resolve().parents[3] / "worlds" / "thornwood"
+    pack = tmp_path / "thornwood"
+    shutil.copytree(src, pack)
+    (pack / "prompts").mkdir()
+    (pack / "prompts" / "narator.system.append.j2").write_text("typo")  # a misspelt template
+    with pytest.raises(PackError, match=r"narator\.system\.j2"):
+        parse_pack(pack)
+    (pack / "prompts" / "narator.system.append.j2").unlink()
+    (pack / "prompts" / "narrator.system.append.j2").write_text("Cider is sacred here.")
+    parsed = parse_pack(pack)
+    assert parsed.prompts == {"narrator.system.append.j2": "Cider is sacred here."}

@@ -18,6 +18,8 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   return it as Uro reads it, as JSON.
 - The world-rules grammar as data (D-105): `GET /rules/schema` and `uro rules schema` serve its
   JSON Schema, and `POST /rules/validate` and `uro rules validate` check a rule pack on its own.
+- A pack can add to a prompt template instead of replacing it (D-106):
+  `prompts/<template>.append.j2` renders after the default with the same context.
 - A world keeps the manifest it was made from (D-104), so `POST /worlds/{w}/seed` and
   `uro world seed <world>` need no pack. A world made before this still takes its own pack.
 
