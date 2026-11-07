@@ -9,6 +9,13 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-08
+
+Upgrading: run `uro db migrate` (028: who made a place, a person or a faction). Existing rows read
+`provenance` `""`, not recorded; no rebuild is needed. `uro serve` now refuses to start until it
+has run. For embedders, an `EngineStore` implements `world_manifest`, and `create_world` takes
+`description`, `content` and `manifest`.
+
 ### Added
 
 - A world says what it is (D-104): `GET /worlds` returns each world's `description`, `tone` and
@@ -22,7 +29,6 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   `prompts/<template>.append.j2` renders after the default with the same context.
 - A world keeps the manifest it was made from (D-104), so `POST /worlds/{w}/seed` and
   `uro world seed <world>` need no pack. A world made before this still takes its own pack.
-
 - Backfill fills every gap (D-108): places, a faction, people, a conflict, tone and a past, one
   call per gap. Everything it invents is tagged `ai_backfill`: places, actors and factions now
   carry `provenance` on their events and state rows, a backfilled fact's claim has
