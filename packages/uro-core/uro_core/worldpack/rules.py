@@ -18,7 +18,7 @@ and the gauntlet (`engines/rules_gauntlet.py`) come in INC-3.
 from __future__ import annotations
 
 import types
-from typing import Annotated, Literal, Union, get_args, get_origin
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -730,3 +730,23 @@ def duplicate_ids(pack: RulePack) -> list[str]:
             dupes.append(item_id)
         seen.add(item_id)
     return dupes
+
+
+def rule_pack_schema() -> dict[str, Any]:
+    """The world-rules grammar as JSON Schema (D-105): what an editor, linter or generator of
+    rules builds on, so it stays right when `RULES_API_VERSION` moves. It describes the shape;
+    `check_rule_pack` also refuses what a schema can't say (an id used twice)."""
+    return RulePack.model_json_schema()
+
+
+def check_rule_pack(data: Any) -> RulePack:
+    """A rule pack on its own, checked exactly as a world's (D-105): the closed grammar and its
+    version pin (the model), then ids used twice. ValueError (a pydantic ValidationError is one)
+    on anything a world would refuse."""
+    if not isinstance(data, dict):
+        raise ValueError("a rule pack is an object: {rules_api_version, rules, agendas}")
+    pack = RulePack(**data)
+    dupes = duplicate_ids(pack)
+    if dupes:  # one would overwrite the other's consequences (D-80 review)
+        raise ValueError(f"rule and agenda ids must be unique; used twice: {dupes}")
+    return pack

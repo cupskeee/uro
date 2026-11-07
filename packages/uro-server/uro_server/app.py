@@ -90,7 +90,7 @@ _PLAYER_SAFE_SECTIONS = frozenset({"actors", "threads", "places", "factions", "p
 # handler's operator gate or the `_safe_extract_pack` cap — so an oversized upload is rejected up
 # front by Content-Length (below). NOT `/worlds/import`: that's a JSON bundle, legitimately large.
 _PACK_UPLOAD_PATHS = frozenset(
-    {"/worlds/validate", "/worlds/backfill", "/worlds/probe", "/worlds/create"}
+    {"/worlds/validate", "/worlds/parse", "/worlds/backfill", "/worlds/probe", "/worlds/create"}
 )
 
 
@@ -1429,6 +1429,77 @@ def create_app(
                 "ruleset_problem": problem,
                 "gaps": report.gaps,
             }
+
+    @app.post("/worlds/parse", **_out(S.ParsedPack))
+    async def parse_world_pack(
+        request: Request,
+        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+    ) -> dict[str, Any]:
+        """An uploaded pack (a `.zip` of the pack directory) as Uro reads it (D-105): the manifest
+        with every default filled in, the seeds, lore, prompt files and rule pack, as `WorldPack`
+        holds them, so a tool that edits, diffs or converts packs needn't re-read TOML and YAML.
+        Writes nothing, with `/worlds/validate`'s upload guards and authority (any-authed: it
+        returns only what the caller sent)."""
+        _auth(request)
+        from uro_core.errors import PackError
+        from uro_core.worldpack.parse import parse_pack
+
+        data = await pack.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _safe_extract_pack(data, Path(tmp))
+            try:
+                parsed = parse_pack(root)
+            except PackError as exc:  # a malformed pack is bad INPUT → 400, not a 500
+                raise HTTPException(status_code=400, detail=f"invalid pack: {exc}") from exc
+        return parsed.model_dump(mode="json")
+
+    @app.get("/rules/schema", **_out(S.RulesSchema))
+    async def rules_schema(request: Request) -> dict[str, Any]:
+        """The world-rules grammar as JSON Schema (D-105), as `GET /rulesets` serves a ruleset's
+        settings schema: any-authed, no world state."""
+        _auth(request)
+        from uro_core.worldpack import rules as R
+
+        return {
+            "rules_api_version": R.RULES_API_VERSION,
+            "supported_versions": sorted(R._SUPPORTED_VERSIONS),
+            "rule_pack_schema": R.rule_pack_schema(),
+        }
+
+    @app.post("/rules/validate", **_out(S.RulesCheck))
+    async def rules_validate(request: Request, body: Any = Body(...)) -> dict[str, Any]:  # noqa: B008
+        """Check a rule pack on its own (D-105), exactly as creating a world would: the body is the
+        pack as `POST /worlds` takes its `rule_pack` ({rules_api_version, rules, agendas}). A bad
+        pack is a 200 with `ok: false` and each problem located, so an editor can mark it.
+        Any-authed; writes nothing."""
+        _auth(request)
+        from pydantic import ValidationError
+        from uro_core.worldpack.rules import check_rule_pack
+
+        def count(key: str) -> int:
+            items = body.get(key) if isinstance(body, dict) else None
+            return len(items) if isinstance(items, list) else 0
+
+        try:
+            check_rule_pack(body)
+        except ValidationError as exc:
+            problems = [
+                {"loc": list(e["loc"]), "message": e["msg"]} for e in exc.errors(include_url=False)
+            ]
+            return {
+                "ok": False,
+                "rules": count("rules"),
+                "agendas": count("agendas"),
+                "problems": problems,
+            }
+        except ValueError as exc:
+            return {
+                "ok": False,
+                "rules": count("rules"),
+                "agendas": count("agendas"),
+                "problems": [{"loc": [], "message": str(exc)}],
+            }
+        return {"ok": True, "rules": count("rules"), "agendas": count("agendas"), "problems": []}
 
     @app.post("/worlds/create", **_out(S.PackCreated))
     async def create_world_from_pack(

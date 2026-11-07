@@ -38,7 +38,7 @@ from uro_core.timeline.models import (
     World,
 )
 from uro_core.worldpack.create import SeedResult
-from uro_core.worldpack.models import ThreadSeed
+from uro_core.worldpack.models import ThreadSeed, WorldPack
 from uro_core.worldpack.sufficiency import SufficiencyDimension
 
 
@@ -242,6 +242,35 @@ class PackValidation(Out):
     ruleset_ok: bool
     ruleset_problem: str | None
     gaps: list[str]
+
+
+class ParsedPack(WorldPack):
+    """A pack as Uro reads it (D-105): `WorldPack`, every default filled in."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RulesSchema(Out):
+    """The world-rules grammar (D-105): the version this engine writes, the versions it reads, and
+    the JSON Schema of a rule pack."""
+
+    rules_api_version: int
+    supported_versions: list[int]
+    rule_pack_schema: dict[str, Any]
+
+
+class RuleProblem(Out):
+    loc: list[str | int]  # where in the pack ([] for the pack as a whole)
+    message: str
+
+
+class RulesCheck(Out):
+    """A rule pack checked on its own, as a world would check it (D-105)."""
+
+    ok: bool
+    rules: int
+    agendas: int
+    problems: list[RuleProblem]
 
 
 class PackCreated(Out):

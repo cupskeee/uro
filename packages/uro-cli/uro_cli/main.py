@@ -67,6 +67,9 @@ outbox_app = typer.Typer(
     help="The transactional outbox — publish committed beats to other processes (D-57).",
 )
 ruleset_app = typer.Typer(no_args_is_help=True, help="The built-in ruleset registry (docs/06).")
+rules_app = typer.Typer(
+    no_args_is_help=True, help="World rules (rules.yaml / agendas.yaml): their grammar (docs/17)."
+)
 policy_app = typer.Typer(
     no_args_is_help=True,
     help="Which emergent world state play may create — the instance's extraction policy (D-49).",
@@ -84,6 +87,7 @@ app.add_typer(provider_app, name="provider")
 provider_app.add_typer(credential_app, name="credential")
 app.add_typer(outbox_app, name="outbox")
 app.add_typer(ruleset_app, name="ruleset")
+app.add_typer(rules_app, name="rules")
 app.add_typer(policy_app, name="extraction-policy")
 app.add_typer(memory_app, name="memory")
 
@@ -271,6 +275,21 @@ def world_new(
         typer.echo(f"\nplay it:  uro play {campaign.campaign_id}")
 
     _run_async(_run)
+
+
+@world_app.command("parse")
+def world_parse(path: str) -> None:
+    """Print the pack at <path> as Uro reads it, as JSON (D-105): the manifest with every default
+    filled in, the seeds, lore, prompt files and rule pack. Nothing is imported."""
+    from uro_core.errors import PackError
+    from uro_core.worldpack.parse import parse_pack
+
+    try:
+        pack = parse_pack(path)
+    except PackError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(pack.model_dump(mode="json"), indent=2))
 
 
 @world_app.command("validate")
@@ -1530,6 +1549,53 @@ def calls(
                 typer.echo(f"  {r['response']}")
 
     _run_async(_run)
+
+
+@rules_app.command("schema")
+def rules_schema() -> None:
+    """Print the world-rules grammar as JSON Schema (D-105), with the version this engine writes
+    and the versions it reads."""
+    from uro_core.worldpack import rules as R
+
+    typer.echo(
+        json.dumps(
+            {
+                "rules_api_version": R.RULES_API_VERSION,
+                "supported_versions": sorted(R._SUPPORTED_VERSIONS),
+                "rule_pack_schema": R.rule_pack_schema(),
+            },
+            indent=2,
+        )
+    )
+
+
+@rules_app.command("validate")
+def rules_validate(path: str) -> None:
+    """Check world rules on their own, as creating a world would (D-105): <path> is a pack
+    directory (its rules.yaml / agendas.yaml), or a JSON file holding one rule pack
+    ({rules_api_version, rules, agendas})."""
+    from pathlib import Path
+
+    from uro_core.errors import PackError
+    from uro_core.worldpack.parse import _rule_pack
+    from uro_core.worldpack.rules import check_rule_pack
+
+    target = Path(path)
+    try:
+        if target.is_dir():
+            pack = _rule_pack(target)
+            if pack is None:
+                typer.echo(f"error: {path} has no rules.yaml or agendas.yaml", err=True)
+                raise typer.Exit(1)
+        else:
+            pack = check_rule_pack(json.loads(target.read_text()))
+    except (PackError, ValueError, OSError) as exc:  # json.JSONDecodeError is a ValueError
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"ok: {len(pack.rules)} rules, {len(pack.agendas)} agendas "
+        f"(rules_api_version {pack.rules_api_version})"
+    )
 
 
 @ruleset_app.command("list")

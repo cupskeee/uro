@@ -14,6 +14,10 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - A world says what it is (D-104): `GET /worlds` returns each world's `description`, `tone` and
   `content` declaration. A pack's `[world]` takes an optional `description`, and `POST /worlds`
   takes `description` and `content`. The five shipped packs have a pitch each.
+- A pack read without importing it (D-105): `POST /worlds/parse` and `uro world parse <pack>`
+  return it as Uro reads it, as JSON.
+- The world-rules grammar as data (D-105): `GET /rules/schema` and `uro rules schema` serve its
+  JSON Schema, and `POST /rules/validate` and `uro rules validate` check a rule pack on its own.
 - A world keeps the manifest it was made from (D-104), so `POST /worlds/{w}/seed` and
   `uro world seed <world>` need no pack. A world made before this still takes its own pack.
 
