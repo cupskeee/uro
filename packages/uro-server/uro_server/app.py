@@ -94,6 +94,13 @@ _PACK_UPLOAD_PATHS = frozenset(
 )
 
 
+async def _refuse(ws: WebSocket, code: int) -> None:
+    """Close a play socket with one of the documented codes (D-107): accepted first, so the code
+    reaches the client instead of a bare HTTP 403 handshake rejection."""
+    await ws.accept()
+    await ws.close(code=code)
+
+
 def _is_pack_upload(path: str) -> bool:
     """A pack-upload route, including `/worlds/{w}/seed` (the world id is in the path)."""
     parts = path.split("/")
@@ -2477,14 +2484,17 @@ def create_app(
 
     @app.websocket("/campaigns/{campaign_id}/play")
     async def play(ws: WebSocket, campaign_id: str) -> None:
-        # Auth (docs/08 token mode): ?token=… → participant_id. Reject before accept.
+        # Auth (docs/08 token mode): ?token=… → participant_id. A refusal is a close code AFTER
+        # accept (D-107): closed before it, the ASGI server answers the handshake with a bare HTTP
+        # 403, so a browser saw 1006 and no client ever got 4401/4403/4404. Nothing is sent or
+        # read on a refused socket before it closes.
         token = ws.query_params.get("token", "")
         participant = deps.resolve_participant(token)
         if participant is None:
-            await ws.close(code=4401)  # unauthorized
+            await _refuse(ws, 4401)  # unauthorized
             return
         if not await deps.campaign_exists(campaign_id):
-            await ws.close(code=4404)  # no such campaign
+            await _refuse(ws, 4404)  # no such campaign
             return
         # A MINTED token is scoped to the campaign it was minted for (D-39 review): reject it on a
         # DIFFERENT campaign's play channel — else a token authenticates its participant server-wide
@@ -2492,7 +2502,7 @@ def create_app(
         # --token creds are intentionally server-wide (token_campaign → None) and unaffected.
         tok_campaign = deps.token_campaign(token) if deps.token_campaign is not None else None
         if tok_campaign is not None and tok_campaign != campaign_id:
-            await ws.close(code=4403)  # token not valid for this campaign
+            await _refuse(ws, 4403)  # token not valid for this campaign
             return
         await ws.accept()
         live_sockets.add((token, ws, campaign_id))

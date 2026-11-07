@@ -854,6 +854,13 @@ def connect(
     async def _client() -> None:
         try:
             async with websockets.connect(uri) as ws:
+                # A refusal is a close code right after the socket opens (D-107); a seat is
+                # announced (participant_joined). Wait a moment for either before saying so.
+                first: str | bytes | None = None
+                with contextlib.suppress(TimeoutError, websockets.ConnectionClosed):
+                    first = await asyncio.wait_for(ws.recv(), timeout=1.5)
+                if ws.close_code is not None:
+                    _refused(ws.close_code, campaign_id)
                 typer.echo(f"connected to {campaign_id} as {token!r}. Type an action; /quit.\n")
                 # An intent is SETTLED by one of these, each echoing the intent's text. The prompt
                 # waits for it: shown at once, it sat above the streaming narration and was gone by
@@ -890,9 +897,17 @@ def connect(
                     if hit is not None:
                         hit[1].set()
 
+                async def frames() -> AsyncIterator[str | bytes]:
+                    if first is not None:  # the frame that told us we were seated
+                        yield first
+                    # a server that goes away ends the session: the prompt loop sees it
+                    with contextlib.suppress(websockets.ConnectionClosed):
+                        async for raw in ws:
+                            yield raw
+
                 async def receive() -> None:
                     nonlocal echoes, seen_day
-                    async for raw in ws:
+                    async for raw in frames():
                         msg = json.loads(raw)
                         kind = msg.get("type")
                         echoes = echoes or "intent_id" in msg
@@ -987,11 +1002,30 @@ def connect(
                         if receiver.done():  # the server closed the connection
                             break
                 receiver.cancel()
+            if ws.close_code in _REFUSALS:  # refused after a while (a token revoked mid-session)
+                _refused(ws.close_code, campaign_id)
+        except websockets.InvalidStatus as exc:  # a server older than D-107 refuses the handshake
+            typer.echo(f"refused by {server}: {exc}", err=True)
+            raise typer.Exit(1) from exc
         except OSError as exc:
             typer.echo(f"could not connect to {server}: {exc} (is `uro serve` running?)", err=True)
             raise typer.Exit(1) from exc
 
     asyncio.run(_client())
+
+
+_REFUSALS = {
+    4401: "the server doesn't know this token",
+    4403: "this token is for another campaign",
+    4404: "no such campaign on this server",
+}
+
+
+def _refused(code: int, campaign_id: str) -> None:
+    """Say why the server closed the play socket (D-107), and exit 1."""
+    why = _REFUSALS.get(code, "the server closed the connection")
+    typer.echo(f"refused ({campaign_id}): {why} [{code}]", err=True)
+    raise typer.Exit(1)
 
 
 def _server_post(server: str, path: str, token: str, body: dict[str, Any] | None) -> dict[str, Any]:

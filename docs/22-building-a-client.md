@@ -118,7 +118,9 @@ You get, in order (every frame that settles your intent echoes your `id` as `int
 
 Also broadcast: `participant_joined`/`participant_left`, and for parties `not_your_turn`,
 `proposal_opened`, `table_talk`, votes (`docs/08`). Rejections close the socket with
-`4401` (bad token), `4403` (token not for this campaign) or `4404` (no such campaign).
+`4401` (bad token), `4403` (token not for this campaign) or `4404` (no such campaign): the socket
+opens, then closes with the code and nothing before it, so a browser's `close` event carries it
+(D-107; before it, a refusal was a bare HTTP 403 and a browser saw `1006`).
 
 **More to build on:**
 

@@ -23,6 +23,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 - A world keeps the manifest it was made from (D-104), so `POST /worlds/{w}/seed` and
   `uro world seed <world>` need no pack. A world made before this still takes its own pack.
 
+### Fixed
+
+- A refused play socket's close code (4401, 4403, 4404) now reaches the client (D-107). Uro closed
+  before accepting, so browsers saw 1006 and `uro connect` a handshake error. `uro connect` now
+  says why it was refused.
+
 ### Changed
 
 - For embedders (D-104): `create_world` takes `description`, `content` and `manifest`, and an
