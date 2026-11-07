@@ -132,6 +132,27 @@ async def _play_creates_actors() -> bool:
         await store.close()
 
 
+def _require_migrated(store: PostgresEventStore) -> None:
+    """Refuse to serve a database this code's migrations haven't all reached: it would fail at
+    the first write that needs a new column, mid-play. Names what's pending and the fix."""
+
+    async def _pending() -> list[str]:
+        await connect_store(store)
+        try:
+            return await store.pending_migrations()
+        finally:
+            await store.close()
+
+    pending = asyncio.run(_pending())
+    if pending:
+        typer.echo(
+            f"error: the database is missing {len(pending)} migration(s) this code needs: "
+            f"{', '.join(pending)}. Run `uro db migrate` first.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+
 def _run_async(coro_factory) -> None:  # type: ignore[no-untyped-def]
     """Run an async command, turning config/credential/lookup errors into a clean message."""
     try:
@@ -812,6 +833,7 @@ def serve(
     except (RuntimeError, ValueError) as exc:  # incl. DatabaseUnavailable (a RuntimeError subclass)
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
+    _require_migrated(store)
     engine = Engine(store, router, ruleset=build_ruleset(ruleset))
     # Pick the turn shape (OQ-7, D-31/D-38/D-39). UNSET (--arbiter not given) is AUTO: solo for one
     # token (the dev loop → SoloArbiter), party for >1. Set EXPLICITLY, the shape binds regardless

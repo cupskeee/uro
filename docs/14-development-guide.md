@@ -43,7 +43,7 @@ Reset the test DB any time with `dropdb -h localhost -p 5433 -U uro uro_test`.
 ## Database access & migrations
 
 - **asyncpg + hand-written SQL, no ORM** (D-18). The queries are simple (append events, load snapshots+replay, projection upserts, recursive CTEs) and the DDL in `07` is the real interface.
-- Migrations: numbered SQL files in `packages/uro-core/uro_core/adapters/postgres/migrations/NNN_name.sql`, applied in order by `uro db migrate`, tracked in a `schema_migrations` table. Forward-only; a bad migration gets a new correcting migration, never an edit.
+- Migrations: numbered SQL files in `packages/uro-core/uro_core/adapters/postgres/migrations/NNN_name.sql`, applied in order by `uro db migrate`, tracked in a `schema_migrations` table. Forward-only; a bad migration gets a new correcting migration, never an edit. `uro serve` refuses to start while any shipped migration is unapplied (D-109).
 - Projections are **not** migrated when their shape changes — they're rebuilt from the log (versioned by projector code hash, `07`).
 
 ## Conventions
