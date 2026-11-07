@@ -38,6 +38,8 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ### Changed
 
+- `uro serve` refuses to start while the database is missing a migration this code ships
+  (D-109), naming each one, instead of failing at the first write that needs it.
 - For embedders (D-104): `create_world` takes `description`, `content` and `manifest`, and an
   `EngineStore` implements `world_manifest`. `World` has `description`, `tone` and `content`.
 

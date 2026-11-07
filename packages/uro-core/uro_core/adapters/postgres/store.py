@@ -267,6 +267,20 @@ class PostgresEventStore:
             raise RuntimeError("store not connected; call connect() first")
         return self._pool
 
+    async def pending_migrations(self) -> list[str]:
+        """The numbered migrations this code ships that the database hasn't applied, in order
+        (all of them on a database never migrated). `uro serve` refuses to start while any are
+        pending: code that writes a column a migration adds otherwise fails at the first write
+        (found 2026-11-08: `column "provenance" does not exist` from a branch's 028)."""
+        async with self.pool.acquire() as conn:
+            exists = await conn.fetchval("SELECT to_regclass('schema_migrations') IS NOT NULL")
+            done = (
+                {r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")}
+                if exists
+                else set()
+            )
+        return [p.stem for p in sorted(_MIGRATIONS_DIR.glob("*.sql")) if p.stem not in done]
+
     async def migrate(self) -> list[str]:
         """Apply pending numbered SQL migrations in order. Returns the ones applied."""
         applied: list[str] = []
