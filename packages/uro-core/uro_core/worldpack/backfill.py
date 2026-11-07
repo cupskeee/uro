@@ -72,10 +72,10 @@ _PROMPTS = {
     ),
     "population": (
         "The world needs {n} more people to meet. Invent them: each with a name, a role (what "
-        "they do, in the setting's own words), the place they're found (one of the PLACES, by "
-        "name), and the group they belong to (one of the GROUPS, by name, or null). At most one "
-        "may be a "
-        "person of standing (tier 2); the rest are tier 1. "
+        "others call them, ONE TO THREE WORDS in the setting's own words, like 'harbour-warden' "
+        "or 'eel-catcher': a label, not a sentence), the place they're found (one of the PLACES, "
+        "by name), and the group they belong to (one of the GROUPS, by name, or null). At most "
+        "one may be a person of standing (tier 2); the rest are tier 1. "
         'JSON: {"people": [{"name": "…", "role": "…", "tier": 1, "place": "…", '
         '"group": "… or null"}]}'
     ),

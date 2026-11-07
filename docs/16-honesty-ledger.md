@@ -676,3 +676,17 @@ the judge is the narrator's own model.
 | The game sets a plot's state | **proven (deterministic)** | `set_thread_state` commits and the world's rules react (an authored plot too); REST operator-only, CLI (`test_a_game_moves_a_plot_and_the_world_reacts`). |
 | World rules on a plot's counts; a beat's plot changes | **proven (deterministic)** | a `thread_life` rule wakes a finale once a plot is developed twice, and the beat that did it reports the change (`test_a_world_rule_closes_in_on_a_long_plot`); an extractor resolution is reported, a narration-created plot isn't double-listed (`test_a_beat_reports_the_plots_it_moved`). D-103. |
 | A "bring it to its end" nudge | **measured, not shipped** | live A/B, 9 fork points: 22/90 against 6/90 (+18 points, gate +30), 0 overrides, 0 forced; it helps when the player's action engages the plot (20/45 vs 6/45), not on a neutral one (2/45). D-102. |
+
+## Post-PoC — backfill for every gap, live (2026-11-08, D-108, run by Claude)
+
+Two packs grown live through the registry (`gpt-5.6-luna`), imported into the scratch test
+database. **Glassmere** (a name, three tone tags, a pitch: an original lake town that bottles
+light) and **Kessler Ring** (a name and a pitch only: salvage stations round a dead moon) both went
+`insufficient` → `runnable`: three nested places, a faction, three people placed by name (one of
+standing), a conflict, tone tags where none were given, and four facts about the past that name
+the people and places (2-3 linked refs each). Every place, person, faction, thread and claim
+committed with `ai_backfill`. Found and fixed: roles came back as whole sentences ("She trims the
+wick-cages at dusk…"); the ask now wants a one-to-three-word label, and the re-run gave
+"first lamplighter", "bottle-sealer", "lake scavenger". One model, two packs: **live-validated
+once**, not a measure of quality across models.
+
