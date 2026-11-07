@@ -90,7 +90,7 @@ below and in `docs/08`.
 ## The core loop
 
 ```
-GET  /worlds                                  pick a world (GET /rulesets: each ruleset's sheet shape)
+GET  /worlds                                  pick a world: id, name, description, tone, content (GET /rulesets: each ruleset's sheet shape)
 POST /worlds/{world_id}/campaigns             {"participant": "player-1", "new_pc_name": "Wren"}
                                               → {"campaign_id", "branch_id"}
 GET  /campaigns                               resume: every campaign (?world_id= to filter)

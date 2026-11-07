@@ -42,6 +42,9 @@ class EventStore(Protocol):
         clock: dict[str, Any] | None = None,
         pacing: dict[str, Any] | None = None,
         starting_gear: list[str] | None = None,
+        description: str = "",
+        content: dict[str, Any] | None = None,
+        manifest: dict[str, Any] | None = None,
     ) -> World:
         """Create a world: its `main` branch and a `WorldGenesis` genesis commit (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, plus any `extra_events` —
@@ -54,6 +57,11 @@ class EventStore(Protocol):
 
     async def list_worlds(self) -> list[World]:
         """All worlds, ordered by id — the read behind `GET /worlds` (docs/18 B3)."""
+        ...
+
+    async def world_manifest(self, world_id: str) -> dict[str, Any]:
+        """The manifest the world was made from (D-104), as its WorldGenesis keeps it; {} when
+        it keeps none (made without a pack, or before worlds kept it)."""
         ...
 
     async def create_campaign(

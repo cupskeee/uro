@@ -3,6 +3,7 @@
 [world]
 name = "Ashfall"
 tone = ["grim", "low-magic", "political"]
+description = "The Vael Coast after the Sundering: a starving duchy, grey tides, and a drowned-god cult taking people from the docks."
 starting_gear = ["a traveler's knife"]       # what a fresh PC carries here (D-97)
 
 [content]

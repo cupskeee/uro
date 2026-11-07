@@ -81,6 +81,12 @@ class WorldGenesisPayload(BaseModel):
     pacing: dict[str, Any] = Field(default_factory=dict)
     # A fresh PC's starting gear in this world (D-97): item names, the game's own. [] = none.
     starting_gear: list[str] = Field(default_factory=list)
+    # What a platform lists the world by (D-104): the pack's pitch and its `[content]` declaration
+    # ({} = none declared), and the whole parsed manifest, so a later step that reads the manifest
+    # (History seeding) works from the world alone. {} for a world made without a pack.
+    description: str = ""
+    content: dict[str, Any] = Field(default_factory=dict)
+    manifest: dict[str, Any] = Field(default_factory=dict)
 
 
 class BeatResolvedPayload(BaseModel):
@@ -113,6 +119,9 @@ def world_genesis(
     clock: dict[str, Any] | None = None,
     pacing: dict[str, Any] | None = None,
     starting_gear: list[str] | None = None,
+    description: str = "",
+    content: dict[str, Any] | None = None,
+    manifest: dict[str, Any] | None = None,
 ) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
@@ -128,6 +137,9 @@ def world_genesis(
             clock=clock or {},
             pacing=pacing or {},
             starting_gear=starting_gear or [],
+            description=description,
+            content=content or {},
+            manifest=manifest or {},
         ).model_dump(),
     )
 

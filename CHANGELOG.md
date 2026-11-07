@@ -9,6 +9,19 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Added
+
+- A world says what it is (D-104): `GET /worlds` returns each world's `description`, `tone` and
+  `content` declaration. A pack's `[world]` takes an optional `description`, and `POST /worlds`
+  takes `description` and `content`. The five shipped packs have a pitch each.
+- A world keeps the manifest it was made from (D-104), so `POST /worlds/{w}/seed` and
+  `uro world seed <world>` need no pack. A world made before this still takes its own pack.
+
+### Changed
+
+- For embedders (D-104): `create_world` takes `description`, `content` and `manifest`, and an
+  `EngineStore` implements `world_manifest`. `World` has `description`, `tone` and `content`.
+
 ## [0.18.0] - 2026-11-04
 Upgrading: run `uro db migrate` (027: two thread counters), then `uro db rebuild-projections` so
 campaigns played before it count their past (it replays each branch and drops the snapshot cache;

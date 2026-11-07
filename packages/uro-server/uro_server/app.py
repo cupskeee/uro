@@ -298,7 +298,7 @@ class ServerDeps:
     probe: Callable[[WorldManifest, int], Awaitable[ProbeReport]] | None = None
     # pack import + history seeding (docs/09): one core path with `uro world create|seed`
     import_pack: Callable[[WorldPack, bool], Awaitable[PackImport]] | None = None
-    seed_world: Callable[[World, WorldPack, int], Awaitable[SeedResult]] | None = None
+    seed_world: Callable[[World, WorldPack | None, int], Awaitable[SeedResult]] | None = None
     # Model-connection registry slice 3/4 (D-47): discover a connection's models (live), probe a
     # connection (a 1-token call), and rebuild the instance router from the registry without a
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
@@ -531,7 +531,7 @@ def engine_deps(
         backfill_router = engine.router if with_backfill else None
         return await _import_pack(store, pack, backfill_router=backfill_router)
 
-    async def seed_world(world: World, pack: WorldPack, seed: int) -> SeedResult:
+    async def seed_world(world: World, pack: WorldPack | None, seed: int) -> SeedResult:
         from uro_core.worldpack.create import seed_world as _seed_world
 
         return await _seed_world(store, world, pack, seed)
@@ -1349,6 +1349,19 @@ def create_app(
         ruleset_config = body.get("ruleset_config") or {}
         if not isinstance(ruleset_config, dict):
             raise HTTPException(status_code=400, detail="ruleset_config must be an object")
+        # What a platform lists the world by (D-104): a pitch, and a `[content]` declaration in a
+        # pack's shape (checked like a pack's).
+        description = body.get("description") or ""
+        if not isinstance(description, str):
+            raise HTTPException(status_code=400, detail="description is a string")
+        content = body.get("content")
+        if content is not None:
+            from uro_core.worldpack.models import ContentDecl
+
+            try:
+                content = ContentDecl(**content).model_dump()
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"invalid content: {exc}") from exc
         try:
             # create_world validates a Reaction-Layer rule_pack LOUDLY (the "silent pack death" fix,
             # docs/18): a malformed pack from a REST client is bad INPUT → 400, not a 500.
@@ -1360,10 +1373,12 @@ def create_app(
                 ruleset_id=ruleset_id,
                 ruleset_version=ruleset_version,
                 ruleset_config=ruleset_config,
+                description=description,
+                content=content,
             )
         except ValueError as exc:  # pydantic ValidationError (bad rule_pack) subclasses ValueError
             raise HTTPException(status_code=400, detail=f"invalid world: {exc}") from exc
-        return {"world_id": w.world_id, "main_branch_id": w.main_branch_id, "name": w.name}
+        return w.model_dump()
 
     @app.get("/worlds", **_out(list[S.WorldOut]))
     async def list_worlds(request: Request) -> list[dict[str, Any]]:
@@ -1458,13 +1473,13 @@ def create_app(
     async def seed_world_from_pack(
         world_id: str,
         request: Request,
-        pack: UploadFile = File(...),  # noqa: B008 (FastAPI DI-style default)
+        pack: UploadFile | None = File(None),  # noqa: B008 (FastAPI DI-style default)
     ) -> dict[str, Any]:
         """Run History seeding (`?seed=`, default 42) on a world: a seed-dependent past (power
-        groups, leaders, conflicts, in the pack's `[history.vocabulary]`, D-97) on its authored
-        geography — `uro world seed` over the API. The world doesn't persist
-        its manifest's `[history]`, so the pack is re-supplied, and it must be the pack the world
-        was created from. OPERATOR-only (D-44): a structural write on the main branch."""
+        groups, leaders, conflicts, in the manifest's `[history.vocabulary]`, D-97) on its authored
+        geography — `uro world seed` over the API. It reads the manifest the world keeps (D-104),
+        so no upload is needed; a world made before worlds kept theirs takes the pack it was
+        created from. OPERATOR-only (D-44): a structural write on the main branch."""
         _require_operator(request)
         if deps.seed_world is None:
             raise HTTPException(status_code=501, detail="management surface not enabled")
@@ -1478,6 +1493,12 @@ def create_app(
         from uro_core.errors import PackError
         from uro_core.worldpack.parse import parse_pack
 
+        if pack is None:
+            try:
+                result = await deps.seed_world(world, None, seed)
+            except PackError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return result.model_dump()
         data = await pack.read()
         with tempfile.TemporaryDirectory() as tmp:
             root = _safe_extract_pack(data, Path(tmp))

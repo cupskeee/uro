@@ -1332,7 +1332,15 @@ def test_import_operator_instantiates_a_fresh_world() -> None:
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body == {"world_id": "w:new", "name": "Emberfell", "main_branch_id": "b:new"}
+    assert body == {
+        "world_id": "w:new",
+        "name": "Emberfell",
+        "main_branch_id": "b:new",
+        # D-104: what the world says about itself (a fake store keeps none)
+        "description": "",
+        "tone": [],
+        "content": None,
+    }
     assert store.imported is not None  # the verified bundle reached the store
 
 

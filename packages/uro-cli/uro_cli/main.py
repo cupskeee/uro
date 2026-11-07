@@ -350,27 +350,37 @@ def world_create(
 
 @world_app.command("seed")
 def world_seed(
-    path: str,
+    target_ref: str = typer.Argument(
+        ...,
+        metavar="WORLD_OR_PACK",
+        help="a world (id or name), or the pack directory it was made from",
+    ),
     seed: int = typer.Option(42, "--seed", help="RNG seed for History"),
     world: str = typer.Option(
-        None, "--world", help="the world to seed (id or name; default: the pack's name)"
+        None,
+        "--world",
+        help="with a pack: the world to seed (id or name; default: the pack's name)",
     ),
 ) -> None:
-    """Run History seeding on the world imported from <path>: layer a seed-dependent past
-    (power groups, their leaders and conflicts, in the pack's \\[history.vocabulary]) on top of
-    the authored geography (docs/09). Same pack + a different seed → a different history on
-    identical geography."""
+    """Run History seeding on a world: layer a seed-dependent past (power groups, their leaders
+    and conflicts, in the manifest's \\[history.vocabulary]) on top of the authored geography
+    (docs/09). A world keeps the manifest it was made from (D-104), so naming the world is enough;
+    a world made before that takes its pack directory. Same manifest + a different seed → a
+    different history on identical geography."""
 
     async def _run() -> None:
+        from pathlib import Path
+
         from uro_core.errors import PackError
         from uro_core.worldpack.create import seed_world
         from uro_core.worldpack.parse import parse_pack
 
         store = build_store()
         try:
-            pack = parse_pack(path)
+            pack = parse_pack(target_ref) if (Path(target_ref) / "world.toml").is_file() else None
             await connect_store(store)
-            target = await _world_or_exit(store, world or pack.manifest.name)
+            name = world or (pack.manifest.name if pack is not None else target_ref)
+            target = await _world_or_exit(store, name)
             result = await seed_world(store, target, pack, seed)
         except PackError as exc:
             typer.echo(f"error: {exc}", err=True)

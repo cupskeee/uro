@@ -116,6 +116,7 @@ def _manifest(path: Path) -> WorldManifest:
         return WorldManifest(
             name=world["name"],
             tone=world.get("tone", []),
+            description=world.get("description", ""),
             generate_population=world.get("generate_population", False),
             starting_gear=world.get("starting_gear", []),
             content=ContentDecl(**data.get("content", {})),

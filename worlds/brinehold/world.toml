@@ -5,6 +5,7 @@
 [world]
 name = "Brinehold"
 tone = ["salt-stained", "tense", "close-knit"]
+description = "A walled harbour town behind a failing seawall, where the Wardens and the Wreck Crews both want the storm's cargo."
 starting_gear = ["a gutting knife"]       # what a fresh PC carries here (D-97)
 
 [content]

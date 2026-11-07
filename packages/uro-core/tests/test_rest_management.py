@@ -678,6 +678,59 @@ async def test_a_pack_is_imported_and_seeded_over_the_api(store: PostgresEventSt
         assert (await client.post(_q("/worlds/nope/seed"), files=upload)).status_code == 404
 
 
+async def test_a_world_says_what_it_is_and_keeps_its_manifest(store: PostgresEventStore) -> None:
+    # D-104 (Uro Loom's requests 4 and 5): a platform listing worlds reads each one's pitch, tone
+    # and content declaration, and seeding needs no upload, because the world keeps its manifest.
+    from uro_core.worldpack.create import import_pack
+    from uro_core.worldpack.parse import parse_pack
+
+    pack = parse_pack(Path(__file__).resolve().parents[3] / "worlds" / "emberfell")
+    pack.manifest.name = f"Emberfell-{new_id()}"
+    pack.manifest.description = "A valley where the old fires never quite went out."
+    made = (await import_pack(store, pack)).world
+    assert made.description == pack.manifest.description
+    kept = await store.world_manifest(made.world_id)
+    assert kept["name"] == pack.manifest.name and kept["history"]["vocabulary"]
+    engine = Engine(store, ProviderRouter(bindings={}, default=_Stub()))
+    app = create_app(
+        engine_deps(store, engine, {_TOK: "alice", "tok-player": "bob"}, admin_tokens={_TOK})
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        listed = {w["world_id"]: w for w in (await client.get(_q("/worlds"))).json()}
+        row = listed[made.world_id]
+        assert row["description"] == pack.manifest.description
+        assert row["tone"] == pack.manifest.tone and row["tone"]
+        assert row["content"] == pack.manifest.content.model_dump()
+        # seeding from the world alone (no upload), and still from the pack
+        seeded = await client.post(_q(f"/worlds/{made.world_id}/seed?seed=7"))
+        assert seeded.status_code == 200, seeded.text
+        assert seeded.json()["groups"] > 0
+
+        # a world made without a pack: what it was given, no content declared, nothing to seed from
+        bare = await client.post(
+            _q("/worlds"),
+            json={"name": f"Bare-{new_id()}", "tone": "quiet", "description": "A room."},
+        )
+        assert bare.status_code == 200, bare.text
+        assert (bare.json()["description"], bare.json()["tone"], bare.json()["content"]) == (
+            "A room.",
+            ["quiet"],
+            None,
+        )
+        nothing = await client.post(_q(f"/worlds/{bare.json()['world_id']}/seed"))
+        assert nothing.status_code == 400 and "keeps no manifest" in nothing.text
+        declared = await client.post(
+            _q("/worlds"),
+            json={"name": f"Declared-{new_id()}", "content": {"rating": "mature"}},
+        )
+        assert declared.json()["content"]["rating"] == "mature"
+        bad = await client.post(_q("/worlds"), json={"name": "X", "content": {"rating": "huge"}})
+        assert bad.status_code == 400
+        no_text = await client.post(_q("/worlds"), json={"name": "X", "description": 3})
+        assert no_text.status_code == 400
+
+
 async def test_the_pack_import_refuses_an_unknown_ruleset(store: PostgresEventStore) -> None:
     from uro_core.errors import PackError
     from uro_core.worldpack.create import import_pack
