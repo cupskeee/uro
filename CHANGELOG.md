@@ -9,6 +9,22 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Current Anthropic models work (D-110): the adapter no longer sends `temperature` or a JSON
+  prefill to models that refuse them (Opus 4.7 and later, Sonnet 5 and 5.5, Haiku 5.5, Fable;
+  the prefill also on the 4.6 models). Older models still get both.
+- A connection test with no model probes a model the connection is used with (the one bound to
+  `default`, else another bound chat model, else one it lists) and says which in `model`
+  (D-110).
+- A failed provider call says why (D-110): the test's `detail`, and a failed call's recorded
+  error, carry the HTTP status and the provider's own error type and message, never the key.
+
+### Added
+
+- An Anthropic role binding takes a reasoning effort (`low`…`max`), sent as
+  `output_config.effort` (D-110).
+
 ## [0.19.0] - 2026-11-08
 
 Upgrading: run `uro db migrate` (028: who made a place, a person or a faction). Existing rows read

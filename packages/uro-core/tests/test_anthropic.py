@@ -58,12 +58,111 @@ async def test_complete_joins_text_blocks() -> None:
     assert await provider.complete(_req()) == "It is quiet."
 
 
-async def test_complete_json_mode_prefills_open_brace() -> None:
-    # json_mode prefills an assistant '{' so Claude returns a JSON object.
-    data = {"content": [{"type": "text", "text": '"actors":[],"claims":[]}'}]}
-    provider = _provider(lambda request: httpx.Response(200, json=data))
+async def test_complete_json_mode_prefills_open_brace_on_an_older_model() -> None:
+    # json_mode prefills an assistant '{' so Claude returns a JSON object — on a model that
+    # still takes a prefill (D-110).
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200, json={"content": [{"type": "text", "text": '"actors":[],"claims":[]}'}]}
+        )
+
+    provider = AnthropicProvider(
+        model="claude-haiku-4-5", api_key="k" * 12, transport=httpx.MockTransport(handler)
+    )
     result = await provider.complete(_req(json_mode=True))
     assert result == '{"actors":[],"claims":[]}'
+    assert seen["messages"][-1] == {"role": "assistant", "content": "{"}
+
+
+def _body_for(model: str, *, json_mode: bool = False, effort: str | None = None) -> dict:
+    return AnthropicProvider(model=model, api_key="k", reasoning_effort=effort)._body(
+        _req(json_mode=json_mode), stream=False
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "sampling", "prefill"),
+    [
+        ("claude-3-5-sonnet-20241022", True, True),
+        ("claude-sonnet-4-20250514", True, True),
+        ("claude-opus-4-1", True, True),
+        ("claude-haiku-4-5-20251001", True, True),
+        ("claude-sonnet-4-6", True, False),
+        ("claude-opus-4-6", True, False),
+        ("claude-opus-4-7", False, False),
+        ("claude-opus-4-8", False, False),
+        ("claude-sonnet-5", False, False),
+        ("claude-sonnet-5-5", False, False),
+        ("claude-haiku-5-5", False, False),
+        ("claude-opus-5-5", False, False),
+        ("claude-fable-5-1", False, False),
+        ("some-proxy-alias", False, False),  # unknown → neither, which every model accepts
+    ],
+)
+def test_sampling_and_prefill_only_where_the_model_takes_them(
+    model: str, sampling: bool, prefill: bool
+) -> None:
+    # D-110 (Uro Loom request 7): current models 400 on `temperature` and on a prefill.
+    from uro_core.providers.adapters.anthropic import _takes_prefill
+
+    assert ("temperature" in _body_for(model)) is sampling
+    assert _takes_prefill(model) is prefill
+
+
+async def test_json_mode_on_a_current_model_sends_no_prefill() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"content": [{"type": "text", "text": '{"a": 1}'}]})
+
+    provider = AnthropicProvider(
+        model="claude-sonnet-5-5", api_key="k", transport=httpx.MockTransport(handler)
+    )
+    assert await provider.complete(_req(json_mode=True)) == '{"a": 1}'
+    assert [m["role"] for m in seen["messages"]] == ["user"]
+    assert "temperature" not in seen
+
+
+def test_reasoning_effort_goes_out_as_output_config() -> None:
+    assert _body_for("claude-opus-5-5", effort="low")["output_config"] == {"effort": "low"}
+    assert "output_config" not in _body_for("claude-opus-5-5")
+
+
+async def test_a_refused_call_says_why_without_the_key() -> None:
+    # D-110 (request 9): the status and Anthropic's own error, never the exception text.
+    key = "sk-ant-secret-0123456789"
+    body = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": f"temperature is not supported on this model (key {key})",
+        },
+    }
+    provider = AnthropicProvider(
+        model="claude-opus-5-5",
+        api_key=key,
+        transport=httpx.MockTransport(lambda request: httpx.Response(400, json=body)),
+    )
+    for call in (provider.complete(_req()), _drain(provider.stream(_req()))):
+        with pytest.raises(ProviderError) as info:
+            await call
+        detail = info.value.detail
+        assert detail is not None and detail.startswith("HTTP 400 invalid_request_error:")
+        assert "temperature is not supported" in detail
+        assert key not in detail and key not in str(info.value)
+
+
+async def _drain(it) -> None:
+    async for _ in it:
+        pass
 
 
 async def test_non_200_raises_provider_error() -> None:

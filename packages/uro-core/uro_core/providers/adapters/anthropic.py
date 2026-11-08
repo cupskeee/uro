@@ -4,20 +4,51 @@ Different shape from OpenAI: the system prompt is a top-level field (not a messa
 `max_tokens` is required, and streaming uses Anthropic's own SSE event types. No
 embeddings endpoint — embed() raises, and the router binds an embedding-capable
 provider to the `embedder` role instead.
+
+Current models refuse two things older ones took (D-110): sampling parameters (`temperature`;
+a 400 on Opus 4.7+, Sonnet 5+, Fable, and non-default values on Sonnet/Haiku 5.5) and an
+assistant prefill (a 400 from the 4.6 generation on). Both are sent only to the models known to
+accept them (`_takes_sampling`, `_takes_prefill`); any other id — a new model, an alias, a proxy's
+name — gets neither, which every model accepts. JSON mode without a prefill relies on the prompt
+plus the callers' own `{…}` slicing. A binding's reasoning effort goes out as
+`output_config.effort`.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 
 import httpx
 
 from uro_core.errors import ProviderError
 from uro_core.providers.base import CompletionRequest, Message, report_usage
+from uro_core.providers.http_errors import http_failure_detail
 
 _VERSION = "2023-06-01"
+
+# Ids of the models that still take `temperature` (D-110): Claude 2/3, and the 4.x line up to 4.6
+# (`claude-sonnet-4-20250514`, `claude-opus-4-1`, `claude-haiku-4-5`, `claude-sonnet-4-6`, …).
+# Opus 4.7/4.8 and every 5.x refuse it. Pinned to the old generations on purpose: a model this list
+# doesn't know is newer, and omitting the parameter is valid on every model.
+_SAMPLING_MODELS = re.compile(
+    r"^claude-(instant|2|3)|^claude-(opus|sonnet|haiku)-4(-[0-6])?(-\d{8})?$"
+)
+# Ids that still take an assistant prefill: the same line minus 4.6 (Opus/Sonnet 4.6 refuse it).
+_PREFILL_MODELS = re.compile(
+    r"^claude-(instant|2|3)|^claude-(opus|sonnet|haiku)-4(-[0-5])?(-\d{8})?$"
+)
+
+
+def _takes_sampling(model: str) -> bool:
+    return bool(_SAMPLING_MODELS.search(model))
+
+
+def _takes_prefill(model: str) -> bool:
+    return bool(_PREFILL_MODELS.search(model))
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +70,10 @@ class AnthropicProvider:
         max_tokens: int = 2048,
         timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._model = model
+        self._reasoning_effort = reasoning_effort  # D-110: output_config.effort; None = default
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._max_tokens = max_tokens
@@ -67,12 +100,21 @@ class AnthropicProvider:
             "model": self._model,
             "max_tokens": req.max_tokens or self._max_tokens,
             "messages": convo if convo is not None else split_convo,
-            "temperature": req.temperature,
             "stream": stream,
         }
+        if _takes_sampling(self._model):
+            body["temperature"] = req.temperature
+        if self._reasoning_effort:
+            body["output_config"] = {"effort": self._reasoning_effort}
         if system is not None:
             body["system"] = system
         return body
+
+    def _failed(self, exc: httpx.HTTPError) -> ProviderError:
+        detail = http_failure_detail(exc, secrets=(self._api_key,))
+        # The message names only the exception type and the safe detail — never `exc`'s own text.
+        msg = f"anthropic request failed ({type(exc).__name__})"
+        return ProviderError(f"{msg}: {detail}" if detail else msg, detail=detail)
 
     async def stream(self, req: CompletionRequest) -> AsyncIterator[str]:
         try:
@@ -85,6 +127,8 @@ class AnthropicProvider:
                     json=self._body(req, stream=True),
                 ) as resp,
             ):
+                if resp.is_error:
+                    await resp.aread()  # so the error body can say why (D-110)
                 resp.raise_for_status()
                 tokens_in: int | None = None
                 tokens_out: int | None = None
@@ -119,13 +163,14 @@ class AnthropicProvider:
                         raise ProviderError(f"anthropic stream error: {err.get('message', err)}")
                 report_usage(tokens_in=tokens_in, tokens_out=tokens_out)
         except httpx.HTTPError as exc:
-            raise ProviderError(f"anthropic request failed: {exc}") from exc
+            raise self._failed(exc) from exc
 
     async def complete(self, req: CompletionRequest) -> str:
         prefill = ""
         convo: list[dict[str, str]] | None = None
-        if req.json_mode:
-            # Anthropic has no response_format; prefill an assistant "{" to force JSON.
+        if req.json_mode and _takes_prefill(self._model):
+            # Anthropic has no response_format; prefill an assistant "{" to force JSON. Newer
+            # models refuse a prefill (D-110) and rely on the prompt + the caller's `{…}` slicing.
             _, base = _split(req.messages)
             convo = [*base, {"role": "assistant", "content": "{"}]
             prefill = "{"
@@ -140,7 +185,7 @@ class AnthropicProvider:
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPError as exc:
-            raise ProviderError(f"anthropic request failed: {exc}") from exc
+            raise self._failed(exc) from exc
         except (ValueError, TypeError) as exc:  # a 200 with a non-JSON body
             raise ProviderError(f"anthropic returned an unparseable body: {exc}") from exc
         usage = data.get("usage") if isinstance(data, dict) else None
