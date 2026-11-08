@@ -19,6 +19,7 @@ from uro_core.pipeline.pacing import PacingSettings
 from uro_core.worldpack.models import (
     ActorSeed,
     CalendarDecl,
+    CharacterSeed,
     ClaimSeed,
     ClockDecl,
     ContentDecl,
@@ -45,6 +46,7 @@ def parse_pack(root: str | Path) -> WorldPack:
         "actors": _seeds(root, "actors.yaml", ActorSeed),
         "threads": _seeds(root, "threads.yaml", ThreadSeed),
         "claims": _seeds(root, "claims.yaml", ClaimSeed),
+        "characters": _seeds(root, "characters.yaml", CharacterSeed),
         "lore": _read_tree(root / "lore", ".md"),
         "prompts": _prompts(root / "prompts"),
         "rule_pack": _rule_pack(root),

@@ -341,6 +341,11 @@ class ServerDeps:
     # connection (a 1-token call), and rebuild the instance router from the registry without a
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
     refresh_models: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None
+    # D-113: answer a choice left on a participant's own character → their CharacterView dump;
+    # raises CharSpecError (refused), ValueError (changed meanwhile) or KeyError (no character)
+    answer_choice: Callable[[str, str, str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = (
+        None
+    )
     # D-112: the fight on a campaign waiting on a player's choice, or None
     fight_status: Callable[[str, str | None], Awaitable[dict[str, Any] | None]] | None = None
     # D-112: propose a character build from a description through the bound model:
@@ -586,6 +591,17 @@ def engine_deps(
 
         return await _seed_world(store, world, pack, seed)
 
+    async def answer_choice(
+        campaign_id: str, participant: str, choice_id: str, answer: dict[str, Any]
+    ) -> dict[str, Any]:
+        from uro_core.characters import answer_character_choice
+
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise KeyError("no such campaign")
+        view = await answer_character_choice(store, campaign, participant, choice_id, answer)
+        return view.model_dump()
+
     async def fight_status(campaign_id: str, participant: str | None) -> dict[str, Any] | None:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
@@ -738,6 +754,7 @@ def engine_deps(
         refresh_models=refresh_models,
         propose_character=propose_character,
         fight_status=fight_status,
+        answer_choice=answer_choice,
         test_connection=test_connection,
         reload_router=reload_router,
         codex_start=codex_start,
@@ -1446,6 +1463,12 @@ def create_app(
             # create_world validates a Reaction-Layer rule_pack LOUDLY (the "silent pack death" fix,
             # docs/18): a malformed pack from a REST client is bad INPUT → 400, not a 500.
             pack = body.get("rule_pack") or None
+            from uro_core.worldpack.models import CharacterSeed
+
+            raw_characters = body.get("characters") or []
+            if not isinstance(raw_characters, list):
+                raise HTTPException(status_code=400, detail="characters must be a list")
+            characters = [CharacterSeed.model_validate(c).model_dump() for c in raw_characters]
             w = await _mgmt().create_world(
                 _require(body, "name"),
                 tone=tone,
@@ -1455,10 +1478,22 @@ def create_app(
                 ruleset_config=ruleset_config,
                 description=description,
                 content=content,
+                characters=characters,
             )
         except ValueError as exc:  # pydantic ValidationError (bad rule_pack) subclasses ValueError
             raise HTTPException(status_code=400, detail=f"invalid world: {exc}") from exc
         return w.model_dump()
+
+    @app.get("/worlds/{world_id}/characters", **_out(S.SuggestedCharacters))
+    async def world_suggested_characters(world_id: str, request: Request) -> dict[str, Any]:
+        """The player characters the world's author suggests (D-113): offers, not actors. Start
+        or join a campaign as one with `character: <id>`. Any-authed."""
+        _auth(request)
+        store = _mgmt()
+        world = await store.get_world(world_id)
+        if world is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        return {"characters": await store.world_characters(world.main_branch_id)}
 
     @app.get("/worlds", **_out(list[S.WorldOut]))
     async def list_worlds(request: Request) -> list[dict[str, Any]]:
@@ -2119,6 +2154,8 @@ def create_app(
                 ruleset_config=config_choice,
                 seed=seed,
                 encounters=str(body.get("encounters") or "auto"),
+                holdings=body.get("holdings"),
+                character=body.get("character"),
             )
         except CharSpecError as exc:
             if own:
@@ -2189,6 +2226,8 @@ def create_app(
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
                 spec=spec,
+                holdings=body.get("holdings"),
+                character=body.get("character"),
             )
         except CharSpecError as exc:
             raise _spec_refused(exc) from exc
@@ -2409,6 +2448,34 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such campaign")
         return await _propose(request, campaign.branch_id, campaign_id, body)
 
+    @app.post("/campaigns/{campaign_id}/character/choices/{choice_id}", **_out(S.CharacterOut))
+    async def answer_campaign_choice(
+        campaign_id: str,
+        choice_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Answer a choice the ruleset left on your character (D-113): `{answer, participant?}`.
+        The ruleset checks it (a 400 with `problems` if refused) and the new sheet commits; a sheet
+        that changed since it was read is a 409. Not a beat. Self-or-operator, like the read."""
+        target = _whose(request, body.get("participant"))
+        _reject_foreign_scope(request, campaign_id)
+        if deps.answer_choice is None:
+            raise HTTPException(status_code=501, detail="choices not enabled")
+        answer = body.get("answer", {})
+        if not isinstance(answer, dict):
+            raise HTTPException(status_code=400, detail="answer must be an object")
+        from uro_core.characters import ChoiceError
+
+        try:
+            return await deps.answer_choice(campaign_id, target, choice_id, answer)
+        except CharSpecError as exc:
+            raise _spec_refused(exc) from exc
+        except ChoiceError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+
     @app.get("/campaigns/{campaign_id}/encounter", **_out(S.EncounterStatus))
     async def campaign_encounter(campaign_id: str, request: Request) -> dict[str, Any]:
         """The fight waiting on a player's choice, in a campaign that plays fights turn by turn
@@ -2470,7 +2537,12 @@ def create_app(
 
         try:
             view = await rebuild_character(
-                store, campaign, target, spec=_spec_field(body), name=name
+                store,
+                campaign,
+                target,
+                spec=_spec_field(body),
+                name=name,
+                holdings=body.get("holdings"),
             )
         except CharSpecError as exc:
             raise _spec_refused(exc) from exc
@@ -2793,6 +2865,8 @@ def create_app(
                         msg.get("id"),
                         action if isinstance(action, dict) else None,
                     )
+                elif mtype == "choose":  # D-113: answer a choice left on your own character
+                    await _answer_choice(deps, hub, campaign_id, participant, msg)
                 elif mtype == "table_talk":
                     # The NON-CANON coordination lane (D-38): out-of-world debate/proposals. It only
                     # calls hub.publish and returns — it NEVER reaches _run_and_broadcast → run_beat
@@ -2883,6 +2957,61 @@ async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> No
         await ws.send_json(message)
 
 
+async def _answer_choice(
+    deps: ServerDeps, hub: SessionHub, campaign_id: str, participant: str, msg: dict[str, Any]
+) -> None:
+    """A `choose` frame (D-113): answer one of the choices left on the sender's own character.
+    Not a beat: no turn is taken or passed. Settled by `choice_answered` or `choice_refused`."""
+    rid = msg.get("id")
+    echo = {"intent_id": rid[:64]} if isinstance(rid, str) and rid else {}
+    if deps.answer_choice is None:
+        await hub.publish(
+            campaign_id,
+            {"type": "choice_refused", "participant_id": participant, "reason": "not enabled"}
+            | echo,
+        )
+        return
+    choice_id, answer = msg.get("choice_id"), msg.get("answer")
+    try:
+        view = await deps.answer_choice(
+            campaign_id, participant, str(choice_id or ""), answer if answer is not None else {}
+        )
+    except CharSpecError as exc:
+        await hub.publish(
+            campaign_id,
+            {
+                "type": "choice_refused",
+                "participant_id": participant,
+                "reason": str(exc),
+                "problems": [p.model_dump() for p in exc.problems],
+            }
+            | echo,
+        )
+        return
+    except (ValueError, KeyError) as exc:  # the sheet changed meanwhile, or no character
+        await hub.publish(
+            campaign_id,
+            {
+                "type": "choice_refused",
+                "participant_id": participant,
+                "reason": str(exc.args[0] if exc.args else exc),
+                "problems": [],
+            }
+            | echo,
+        )
+        return
+    await hub.publish(
+        campaign_id,
+        {
+            "type": "choice_answered",
+            "participant_id": participant,
+            "choice_id": choice_id,
+            "choices": view["choices"],
+        }
+        | echo,
+    )
+
+
 def _redact_for_player(events: list[dict[str, Any]], own_pc: str | None) -> list[dict[str, Any]]:
     """A dry-run's would-be events as a player may see them (D-46, D-112 review): another actor's
     sheet, a check's player-safe numbers for anyone but the player's own character, and a fight's
@@ -2933,6 +3062,8 @@ def _beat_details(result: BeatResult) -> dict[str, object]:
         "threads_changed": [t.model_dump() for t in result.threads_changed],  # D-103
         # D-112: the fight this beat left waiting on a player's choice, or null
         "encounter": result.encounter.model_dump() if result.encounter is not None else None,
+        # D-113: choices the ruleset left on the acting player's character (for `participant_id`)
+        "choices": [c.model_dump() for c in result.choices],
     }
 
 

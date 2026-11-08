@@ -158,6 +158,63 @@ def spec_schema_of(ruleset: Any) -> dict[str, Any]:
     return dict(fn()) if callable(fn) else {}
 
 
+def check_holdings(ruleset: Any, holdings: list[Holding]) -> None:
+    """A ruleset's say on the things a new character starts holding (D-113): its optional
+    `check_holdings(holdings)` hook may raise `CharSpecError` (or a `ValidationError`/`ValueError`,
+    turned into problems). A ruleset without the hook accepts any holdings."""
+    fn = getattr(ruleset, "check_holdings", None)
+    if not callable(fn):
+        return
+    try:
+        fn(holdings)
+    except CharSpecError:
+        raise
+    except (ValidationError, ValueError, TypeError, KeyError) as exc:
+        raise CharSpecError(spec_problems(exc)) from exc
+
+
+class Choice(BaseModel):
+    """A choice a ruleset leaves for a player about their character (D-113): how it grows, what a
+    setback costs. Ruleset-shaped and opaque to the engine: an id, the words to show, the options
+    (each whatever the ruleset needs; it reads the answer). It lives in the SHEET, so it is
+    event-sourced, forks with the character, and play never waits on it."""
+
+    id: str
+    prompt: str
+    options: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def pending_choices(ruleset: Any, sheet: Sheet | None) -> list[Choice]:
+    """The choices waiting on a character (D-113): the ruleset's optional `pending_choices(sheet)`,
+    or none for a ruleset without the hook (or no sheet)."""
+    fn = getattr(ruleset, "pending_choices", None)
+    if sheet is None or not callable(fn):
+        return []
+    return [c if isinstance(c, Choice) else Choice.model_validate(c) for c in fn(sheet)]
+
+
+def answer_choice(ruleset: Any, sheet: Sheet, choice_id: str, answer: dict[str, Any]) -> Sheet:
+    """The sheet after a player answers one of its pending choices (D-113), through the ruleset's
+    optional `answer_choice(sheet, choice_id, answer)`. An answer it refuses raises
+    `CharSpecError` (located under `answer`); a choice that isn't pending, too."""
+    if choice_id not in {c.id for c in pending_choices(ruleset, sheet)}:
+        raise CharSpecError([SpecProblem(loc=["choice_id"], message="no such pending choice")])
+    fn = getattr(ruleset, "answer_choice", None)
+    if not callable(fn):  # a choice it raised but can't take: the ruleset's own fault
+        raise CharSpecError([SpecProblem(message="this ruleset can't take an answer")])
+    try:
+        new: Sheet = fn(sheet, choice_id, answer)
+    except CharSpecError as exc:
+        raise CharSpecError(
+            [SpecProblem(loc=["answer", *p.loc], message=p.message) for p in exc.problems]
+        ) from exc
+    except (ValidationError, ValueError, TypeError, KeyError) as exc:
+        raise CharSpecError(
+            [SpecProblem(loc=["answer", *p.loc], message=p.message) for p in spec_problems(exc)]
+        ) from exc
+    return new
+
+
 class Holding(BaseModel):
     """Something an actor holds (D-112), as checks and encounters see it: the item's id and name,
     and whatever opaque data a pack or a ruleset attached. Holding stays world state

@@ -10,10 +10,23 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 ## [Unreleased]
 
 Upgrading: migrations 029 and 030 (`uro db migrate`). For embedders: an `EventStore`/`EngineStore`
-of your own gains `inherited_ruleset_pin`, `character_frozen`, `amend_character`, `holdings`,
-`actor_spec` and `open_encounter`, and `start_campaign` takes `ruleset_config` and `encounters`.
+of your own gains `inherited_ruleset_pin`, `character_frozen`, `amend_character`, `amend_sheet`,
+`append_fight_beat`, `holdings`, `actor_spec`, `open_encounters` and `world_characters`;
+`start_campaign` takes `ruleset_config` and `encounters`, and `create_world` takes `characters`.
 Breaking: the built-in rulesets now refuse a character spec past a cap or with an unknown key
 (they used to clamp or ignore it).
+
+### Added (D-113, Uro Loom requests 20–22)
+
+- Things a character holds from the start: `holdings` on campaign start and join (and a rebuild
+  before the first beat), beside the world's starting gear; a ruleset may check them.
+- Choices a ruleset leaves for a player (optional `pending_choices`/`answer_choice` port hooks):
+  on the character view and `beat_committed.choices`; answered by
+  `POST /campaigns/{c}/character/choices/{id}`, the socket's `choose` frame, `uro character choose`
+  or `/choose`. Uro Basic's opt-in `ability_choice_on_level` setting uses it.
+- Suggested characters in a world pack (`entities/characters.yaml`, `POST /worlds` `characters`),
+  checked by the pack's ruleset, listed by `GET /worlds/{w}/characters` and `uro world characters`;
+  start or join as one with `character: <id>`; backfill suggests three when a pack has none.
 
 ### Added (D-112, Uro Loom requests 11–19)
 

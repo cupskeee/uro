@@ -89,11 +89,13 @@ from uro_core.rulesets.base import (
     ActionSpec,
     CharSpec,
     CharSpecError,
+    Choice,
     Combatant,
     EncounterOutcome,
     Holding,
     Ruleset,
     build_character,
+    pending_choices,
     ruleset_contract_problem,
 )
 from uro_core.rulesets.rng import Rng
@@ -149,6 +151,9 @@ class BeatResult(BaseModel):
     # D-112: the fight this beat left waiting on a player's choice (a campaign playing fights turn
     # by turn), or None
     encounter: EncounterWait | None = None
+    # D-113: the choices the ruleset leaves on the acting player's character after this beat (a
+    # level-up to spend, a setback to pick); they wait, play doesn't
+    choices: list[Choice] = Field(default_factory=list)
 
 
 class EncounterWait(BaseModel):
@@ -933,7 +938,18 @@ class Engine:
             outcomes=_outcomes(ctx),
             threads_changed=await self._threads_changed(campaign.branch_id, threads_before, events),
             encounter=ctx.waiting,
+            choices=await self._choices(campaign.branch_id, ctx.pc_actor_id),
         )
+
+    async def _choices(self, branch_id: str, actor_id: str) -> list[Choice]:
+        """The acting character's pending choices after a beat (D-113); none without a ruleset."""
+        if self._ruleset is None or not actor_id:
+            return []
+        try:
+            return pending_choices(self._ruleset, await self._store.get_sheet(branch_id, actor_id))
+        except Exception as exc:  # a ruleset's own fault must not fail an already-durable beat
+            logger.warning("couldn't read %r's pending choices: %s", actor_id, exc)
+            return []
 
     async def _thread_states(self, branch_id: str) -> dict[str, str] | None:
         """Every thread's state, for the beat's `threads_changed` (D-103); None if the read fails

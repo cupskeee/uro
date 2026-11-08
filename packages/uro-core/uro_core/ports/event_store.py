@@ -45,6 +45,7 @@ class EventStore(Protocol):
         description: str = "",
         content: dict[str, Any] | None = None,
         manifest: dict[str, Any] | None = None,
+        characters: list[dict[str, Any]] | None = None,
     ) -> World:
         """Create a world: its `main` branch and a `WorldGenesis` genesis commit (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, plus any `extra_events` —
@@ -148,6 +149,12 @@ class EventStore(Protocol):
 
     async def append_beat(self, branch_id: str, events: list[DomainEvent]) -> Commit:
         """Append one beat commit to the branch head and advance it — one transaction."""
+        ...
+
+    async def amend_sheet(
+        self, branch_id: str, actor_id: str, expected: dict[str, Any], events: list[DomainEvent]
+    ) -> Commit:
+        """Commit a change if the actor's sheet is still `expected` (D-113); else `ValueError`."""
         ...
 
     async def append_fight_beat(

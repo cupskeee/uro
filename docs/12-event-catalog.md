@@ -34,7 +34,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### World & places
 | event_type | payload (beyond `v`) | emit | notes |
 |---|---|---|---|
-| `WorldGenesis` | world_name, tone[], prompt_overrides{}, ruleset_id, ruleset_version, ruleset_config{}, rule_pack{}, clock{}, pacing{} | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) + its declared ruleset (`06`, D-30 — a campaign started on the world binds it) and that ruleset's settings (`ruleset_config`, D-62 — every ruleset built for the world's campaigns gets them), its `[clock]` settings (`clock`, D-80 — `{}` = the defaults) and its `[pacing]` settings (`pacing`, D-95 — `{}` = the defaults); and (D-104) the pack's `description`, its `content{}` declaration (`{}` = none declared) and the whole parsed `manifest{}` (`{}` for a world made without a pack), so History seeding works from the world alone |
+| `WorldGenesis` | world_name, tone[], prompt_overrides{}, ruleset_id, ruleset_version, ruleset_config{}, rule_pack{}, clock{}, pacing{}, characters[] (D-113: suggested player characters) | S | first commit of every world; carries the pack's narrator tone + prompt-template overrides (`09`) + its declared ruleset (`06`, D-30 — a campaign started on the world binds it) and that ruleset's settings (`ruleset_config`, D-62 — every ruleset built for the world's campaigns gets them), its `[clock]` settings (`clock`, D-80 — `{}` = the defaults) and its `[pacing]` settings (`pacing`, D-95 — `{}` = the defaults); and (D-104) the pack's `description`, its `content{}` declaration (`{}` = none declared) and the whole parsed `manifest{}` (`{}` for a world made without a pack), so History seeding works from the world alone |
 | `PlaceCreated` | place entity, tier of detail; `provenance` (D-108: `author` or `ai_backfill` from a pack; D-111: `emergent` when the extractor made it in play; `""` = not recorded) | X H S | extractor may create Sites only |
 | `PlaceStateChanged` | place_id, changes{} | X H A | population, government ref, economy flavor |
 | `TerrainChanged` | place_id, description, effects[] | H R S | the meteor crater; slow-layer physical change. Committed by whoever authors the cataclysm — a game or embedder (`append_and_react`), History seeding, or a ruleset effect — never the extractor or pipeline; its ripple is the world's reaction rules on it (D-88) |
@@ -77,7 +77,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Items
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `ItemCreated` | item entity; `data` (D-112: opaque, a pack's or a ruleset's; checks and fights see it) | X H R S | |
+| `ItemCreated` | item entity; `data` (D-112: opaque, a pack's or a ruleset's; checks and fights see it); `kind: "chosen"` for a holding a player chose at start (D-113) | X H R S | |
 | `ItemTransferred` | item_id, from_ref, to_ref, means | X R P E | |
 | `ItemStateChanged` | item_id, changes{} (incl. destroyed) | X R | |
 

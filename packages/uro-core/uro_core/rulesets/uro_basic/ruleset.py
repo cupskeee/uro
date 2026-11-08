@@ -27,6 +27,7 @@ from uro_core.rulesets.base import (
     CharSpecError,
     CheckRequest,
     CheckResult,
+    Choice,
     Effect,
     EncounterCtx,
     EncounterOutcome,
@@ -59,6 +60,10 @@ class BasicConfig(BaseModel):
     max_level: int = Field(5, ge=1, le=20, description="the level ceiling")
     levels_per_win: int = Field(1, ge=0, le=20, description="levels a PC gains for winning a fight")
     heal_on_level: bool = Field(True, description="a level-up restores full hit points")
+    ability_choice_on_level: bool = Field(
+        False,
+        description="each level gained leaves the player a choice: an ability score to raise by 1",
+    )
 
 
 # What a threat hint (D-112) means here: a level and the abilities it changes, and a weapon tier.
@@ -114,6 +119,8 @@ class Sheet(BaseModel):
     level: int = 1
     proficiency: int = 2
     weapon_tier: int = 1  # damage-die tier: 1→d6, 2→d8, 3→d10
+    # abilities the player may still raise (`ability_choice_on_level`, D-113): a pending choice
+    ability_points: int = 0
 
     def modifier(self, ability: str) -> int:
         return (self.abilities.get(ability, 10) - 10) // 2
@@ -206,7 +213,46 @@ class UroBasic:
         # must not heal (just re-clamp current HP under the possibly-changed max).
         levelled = new_level > s.level and self.config.heal_on_level
         hp = max_hp if levelled else min(s.hp, max_hp)
-        return s.model_copy(update={"level": new_level, "max_hp": max_hp, "hp": hp}).model_dump()
+        points = s.ability_points + (
+            new_level - s.level if self.config.ability_choice_on_level else 0
+        )
+        return s.model_copy(
+            update={"level": new_level, "max_hp": max_hp, "hp": hp, "ability_points": points}
+        ).model_dump()
+
+    # --- choices left for the player (D-113, optional on the port) ---
+
+    def pending_choices(self, sheet: SheetDict) -> list[Choice]:
+        s = Sheet.model_validate(sheet)
+        if s.ability_points <= 0:
+            return []
+        raisable = [a for a in ABILITIES if s.abilities.get(a, 10) < 20]
+        return (
+            [
+                Choice(
+                    id="raise-ability",
+                    prompt=f"Raise one ability score by 1 ({s.ability_points} to spend)",
+                    options=[{"ability": a, "score": s.abilities.get(a, 10)} for a in raisable],
+                )
+            ]
+            if raisable
+            else []
+        )
+
+    def answer_choice(self, sheet: SheetDict, choice_id: str, answer: dict[str, Any]) -> SheetDict:
+        s = Sheet.model_validate(sheet)
+        ability = answer.get("ability")
+        if ability not in ABILITIES or s.abilities.get(ability, 10) >= 20:
+            raise CharSpecError(
+                [SpecProblem(loc=["ability"], message="an ability below 20, by its short name")]
+            )
+        abilities = {**s.abilities, ability: s.abilities.get(ability, 10) + 1}
+        raised = s.model_copy(
+            update={"abilities": abilities, "ability_points": s.ability_points - 1}
+        )
+        max_hp = _hp_for_level(raised.modifier("CON"), raised.level)
+        hp = min(raised.hp + max(0, max_hp - s.max_hp), max_hp)  # a tougher body heals the gain
+        return raised.model_copy(update={"max_hp": max_hp, "hp": hp}).model_dump()
 
     # --- free-roam checks ---
 

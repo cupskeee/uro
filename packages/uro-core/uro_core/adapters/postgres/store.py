@@ -280,8 +280,37 @@ async def _character_frozen(
         for r in rows
     )
     if renames and not created_here:
-        return "an adopted character keeps its name"
+        return "an adopted character keeps its name and what it holds"
     return None
+
+
+def check_suggested_characters(
+    characters: list[dict[str, Any]],
+    ruleset_id: str = "",
+    ruleset_version: str = "",
+    ruleset_config: dict[str, Any] | None = None,
+) -> None:
+    """Every suggested character (D-113) has a unique id and a name, and its spec builds under
+    the world's ruleset with the world's settings; else a ValueError naming it."""
+    from uro_core.rulesets import registry
+    from uro_core.rulesets.base import CharSpec, CharSpecError, build_character
+    from uro_core.rulesets.rng import Rng
+
+    ruleset = registry.resolve(ruleset_id, ruleset_version, ruleset_config)
+    seen: set[str] = set()
+    for c in characters:
+        cid, name = c.get("id"), c.get("name")
+        if not isinstance(cid, str) or not cid or cid in seen:
+            raise ValueError(f"suggested character {cid!r}: a unique, non-empty id")
+        seen.add(cid)
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"suggested character {cid!r}: a name")
+        try:
+            build_character(ruleset, CharSpec(data=c.get("spec") or {}), Rng(0))
+        except CharSpecError as exc:
+            raise ValueError(
+                f"suggested character {cid!r}: its spec doesn't build under {ruleset.id}: {exc}"
+            ) from exc
 
 
 async def _open_encounters(
@@ -398,6 +427,7 @@ class PostgresEventStore:
         description: str = "",
         content: dict[str, Any] | None = None,
         manifest: dict[str, Any] | None = None,
+        characters: list[dict[str, Any]] | None = None,
     ) -> World:
         """Create a world + its `main` branch. The genesis commit is `WorldGenesis` (carrying the
         pack's tone + prompt overrides + Reaction-Layer rule pack, docs/09, 17) plus any
@@ -424,6 +454,8 @@ class PostgresEventStore:
                 registry.resolve(ruleset_id, ruleset_version, ruleset_config)
             except KeyError as exc:
                 raise ValueError(str(exc.args[0])) from exc
+        if characters:  # D-113: every suggested character builds under the world's ruleset
+            check_suggested_characters(characters, ruleset_id, ruleset_version, ruleset_config)
         genesis = [
             world_genesis(
                 name,
@@ -439,6 +471,7 @@ class PostgresEventStore:
                 description=description,
                 content=content,
                 manifest=manifest,
+                characters=characters,
             ),
             *(extra_events or []),
         ]
@@ -836,9 +869,11 @@ class PostgresEventStore:
             )
         # Starting equipment (docs/02) — so items exist in play and a lost fight can loot them.
         for entry in starting_items or []:
-            name, data = gear_item(entry)
+            name, data, kind = gear_item(entry)
             events.append(
-                item_created(item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id, data=data)
+                item_created(
+                    item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id, data=data, kind=kind
+                )
             )
         async with self.pool.acquire() as conn, conn.transaction():
             branch = await conn.fetchrow(
@@ -1167,9 +1202,11 @@ class PostgresEventStore:
                 )
             )
         for entry in starting_items or []:
-            name, data = gear_item(entry)
+            name, data, kind = gear_item(entry)
             events.append(
-                item_created(item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id, data=data)
+                item_created(
+                    item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id, data=data, kind=kind
+                )
             )
         async with self.pool.acquire() as conn, conn.transaction():
             if adopt_actor_id is not None:
@@ -2356,6 +2393,18 @@ class PostgresEventStore:
             )
         return (row["payload"].get("clock") or {}) if row is not None else {}
 
+    async def world_characters(self, branch_id: str) -> list[dict[str, Any]]:
+        """The player characters a branch's world suggests (D-113), from its WorldGenesis."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT e.payload FROM events e "
+                "JOIN commits c ON c.commit_id = e.commit_id "
+                "JOIN branches b ON b.world_id = c.world_id "
+                "WHERE b.branch_id = $1 AND e.event_type = 'WorldGenesis' LIMIT 1",
+                branch_id,
+            )
+        return list(row["payload"].get("characters") or []) if row is not None else []
+
     async def world_starting_gear(self, branch_id: str) -> list[str | dict[str, Any]]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -2494,11 +2543,29 @@ class PostgresEventStore:
                 raise ValueError("the fight moved on while the turn was played; choose again")
             return await self._append(conn, branch_id, events)
 
+    async def amend_sheet(
+        self, branch_id: str, actor_id: str, expected: dict[str, Any], events: list[DomainEvent]
+    ) -> Commit:
+        """Commit a change computed from a sheet only if the sheet is still `expected` (D-113: a
+        player's answer to a pending choice): the branch is locked, the sheet compared and the
+        events appended in one transaction, so two answers can't both spend one choice. A
+        `ValueError` says the sheet changed; read it again."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            await conn.execute("SELECT 1 FROM branches WHERE branch_id = $1 FOR UPDATE", branch_id)
+            current = await conn.fetchval(
+                "SELECT sheet FROM proj_sheets WHERE branch_id = $1 AND actor_id = $2",
+                branch_id,
+                actor_id,
+            )
+            if current != expected:
+                raise ValueError("the character changed meanwhile; read it again")
+            return await self._append(conn, branch_id, events)
+
     async def holdings(self, branch_id: str, owner_ref: str) -> list[dict[str, Any]]:
         """What an actor holds (D-112): each item's id, name and opaque data, by id."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT item_id, name, data FROM proj_items "
+                "SELECT item_id, name, data, kind FROM proj_items "
                 "WHERE branch_id = $1 AND owner_ref = $2 ORDER BY item_id",
                 branch_id,
                 owner_ref,

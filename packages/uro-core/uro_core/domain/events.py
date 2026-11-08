@@ -81,6 +81,9 @@ class WorldGenesisPayload(BaseModel):
     pacing: dict[str, Any] = Field(default_factory=dict)
     # A fresh PC's starting gear in this world (D-97): item names, the game's own, or
     # `{name, data}` with opaque data a ruleset may read (D-112). [] = none.
+    # D-113: the player characters the world's author suggests — offers, not actors: each
+    # {id, name, line, portrait, spec, provenance}; nothing exists until a campaign begins as one
+    characters: list[dict[str, Any]] = Field(default_factory=list)
     starting_gear: list[str | dict[str, Any]] = Field(default_factory=list)
     # What a platform lists the world by (D-104): the pack's pitch and its `[content]` declaration
     # ({} = none declared), and the whole parsed manifest, so a later step that reads the manifest
@@ -123,6 +126,7 @@ def world_genesis(
     description: str = "",
     content: dict[str, Any] | None = None,
     manifest: dict[str, Any] | None = None,
+    characters: list[dict[str, Any]] | None = None,
 ) -> DomainEvent:
     return DomainEvent(
         event_type="WorldGenesis",
@@ -141,6 +145,7 @@ def world_genesis(
             description=description,
             content=content or {},
             manifest=manifest or {},
+            characters=characters or [],
         ).model_dump(),
     )
 
@@ -697,11 +702,12 @@ class CheckResolvedPayload(BaseModel):
     player_view: dict[str, Any] | None = None
 
 
-def gear_item(entry: str | dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """A starting-gear entry (D-97, D-112) as (name, data): a bare name, or `{name, data}`."""
+def gear_item(entry: str | dict[str, Any]) -> tuple[str, dict[str, Any], str]:
+    """A starting-gear entry (D-97, D-112) as (name, data, kind): a bare name, or
+    `{name, data, kind?}` (D-113: `kind: "chosen"` marks a holding a player chose at start)."""
     if isinstance(entry, str):
-        return entry, {}
-    return str(entry.get("name", "")), dict(entry.get("data") or {})
+        return entry, {}, ""
+    return str(entry.get("name", "")), dict(entry.get("data") or {}), str(entry.get("kind", ""))
 
 
 def check_resolved(
