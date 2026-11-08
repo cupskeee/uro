@@ -13,7 +13,8 @@ ashfall/
 ├── entities/               # structured seeds (YAML): places, actors, factions
 │   ├── places.yaml         #   (religions = factions with kind=religion, see 02),
 │   ├── factions.yaml       #   claims — as much or little as the author
-│   └── actors.yaml         #   wants to pin down explicitly
+│   ├── actors.yaml         #   wants to pin down explicitly
+│   └── characters.yaml     #   player characters the author suggests (D-113): offers, not actors
 ├── prompts/                # prompt template pack (optional, overrides defaults BY FILENAME —
 │   ├── narrator.system.j2  #   the file's name must match the engine's default template name
 │   ├── planner.system.j2   #   exactly (uro_core/prompts/*.j2), else it is not applied)
@@ -115,6 +116,13 @@ into `rules.yaml` used to be accepted and never run). One file may leave the ver
 two that both declare one must agree.
 
 ## Authoring entities — colloquial aliases (best practice)
+
+**Suggested characters (D-113).** `entities/characters.yaml` lists player characters the author
+offers: each `{id, name, line?, portrait?, spec?}`, the spec for the pack's ruleset (checked by it at
+validate and import, like an actor's). They are offers, not actors: nothing exists in the world until
+a campaign begins as one (`character: <id>`). Kept on the world's WorldGenesis (so export/import
+carry them), listed by `GET /worlds/{w}/characters`. A pack with none gets three from AI backfill,
+tagged `ai_backfill`; a suggested build the ruleset refuses is kept as no build.
 
 `entities/actors.yaml` items carry an optional `aliases: [...]`. **Give every named NPC the short
 names players (and the narrator) will actually use** — an authored `name: "Cass Holloway"` should

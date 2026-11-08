@@ -558,6 +558,28 @@ class HoldingOut(Out):
     item_id: str
     name: str
     data: dict[str, Any]
+    kind: str  # "chosen" for one the player chose at start (D-113)
+
+
+class SuggestedCharacterOut(Out):
+    id: str
+    name: str
+    line: str
+    portrait: str
+    spec: dict[str, Any]
+    provenance: str
+
+
+class SuggestedCharacters(Out):
+    """The player characters a world's author suggests (D-113)."""
+
+    characters: list[SuggestedCharacterOut]
+
+
+class ChoiceOut(Out):
+    id: str
+    prompt: str
+    options: list[dict[str, Any]]
 
 
 class CharacterOut(Out):
@@ -572,6 +594,7 @@ class CharacterOut(Out):
     holdings: list[HoldingOut]
     build_open: bool
     frozen_reason: str
+    choices: list[ChoiceOut]  # D-113: what the ruleset left for this player to decide
 
 
 class CampaignCreated(Out):

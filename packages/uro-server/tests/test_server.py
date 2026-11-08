@@ -2704,9 +2704,7 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert (
-        len([op for ops in spec["paths"].values() for op in ops]) == 71
-    )  # D-112: +7 (encounter, character, previews, proposals)
+    assert len([op for ops in spec["paths"].values() for op in ops]) == 73  # D-113: +2
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).
@@ -2964,6 +2962,39 @@ def test_a_fight_turn_action_rides_an_intent_and_a_refusal_says_what_to_do() -> 
         committed = _recv_until(ws, "beat_committed")[-1]
     assert committed["intent"] == "strike a:brute"  # words stand in for a text-less action
     assert seen[-1] == ("strike a:brute", {"kind": "strike", "target_id": "a:brute"})
+
+
+def test_a_choose_frame_answers_a_choice_without_taking_a_turn() -> None:
+    # D-113: `choose` answers a choice left on the sender's own character; refused answers say
+    # why with problems; neither is a beat (no beat_started, no arbiter turn)
+    from uro_core.rulesets.base import CharSpecError, SpecProblem
+
+    deps = _fake_deps()
+    answered: list[Any] = []
+
+    async def answer_choice(campaign_id: str, participant: str, choice_id: str, answer: Any) -> Any:
+        answered.append((participant, choice_id, answer))
+        if answer.get("ability") != "CON":
+            raise CharSpecError([SpecProblem(loc=["answer", "ability"], message="bad")])
+        return {"choices": []}
+
+    deps.answer_choice = answer_choice
+    with TestClient(create_app(deps)).websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        ws.send_json(
+            {"type": "choose", "choice_id": "raise", "answer": {"ability": "X"}, "id": "c1"}
+        )
+        refused = _recv_until(ws, "choice_refused")[-1]
+        assert refused["intent_id"] == "c1" and refused["problems"][0]["loc"] == [
+            "answer",
+            "ability",
+        ]
+        ws.send_json(
+            {"type": "choose", "choice_id": "raise", "answer": {"ability": "CON"}, "id": "c2"}
+        )
+        msgs = _recv_until(ws, "choice_answered")
+    assert msgs[-1]["choices"] == [] and msgs[-1]["intent_id"] == "c2"
+    assert not any(m["type"] == "beat_started" for m in msgs)
+    assert answered[-1] == ("player-1", "raise", {"ability": "CON"})
 
 
 def _handler_inputs() -> dict[tuple[str, str], tuple[set[str], set[str], bool]]:

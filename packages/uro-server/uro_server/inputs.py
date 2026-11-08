@@ -106,6 +106,10 @@ class WorldIn(In):
     ruleset_version: str = ""
     ruleset_config: dict[str, Any] = Field(default_factory=dict)
     rule_pack: RulePack | None = None
+    characters: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Suggested player characters (D-113): {id, name, line?, portrait?, spec?}.",
+    )
 
 
 class ForkIn(In):
@@ -121,6 +125,17 @@ class MarkerIn(In):
 
 # --- campaigns ---
 
+
+class HoldingIn(BaseModel):
+    name: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+_HOLDINGS = Field(
+    default=None,
+    description="Things the new character starts holding (D-113), beside the world's starting "
+    "gear; checked by the ruleset when it declares a check.",
+)
 
 _SPEC = Field(
     default=None,
@@ -152,6 +167,11 @@ class CampaignIn(In):
         default=None, alias="from", description="With `own_branch`: a marker or commit to fork at."
     )
     branch_name: str | None = Field(default=None, description="With `own_branch`: its name.")
+    holdings: list[HoldingIn] | None = _HOLDINGS
+    character: str | None = Field(
+        default=None,
+        description="Begin as a character the world suggests (`GET /worlds/{w}/characters`).",
+    )
 
 
 class JoinIn(In):
@@ -159,6 +179,11 @@ class JoinIn(In):
     new_pc_name: str | None = None
     adopt_actor_id: str | None = None
     spec: dict[str, Any] | None = _SPEC
+    holdings: list[HoldingIn] | None = _HOLDINGS
+    character: str | None = Field(
+        default=None,
+        description="Begin as a character the world suggests (`GET /worlds/{w}/characters`).",
+    )
 
 
 class WorldCharacterPreviewIn(In):
@@ -183,10 +208,18 @@ class CampaignCharacterProposalIn(In):
     description: str = Field(description="The player's words for their character.")
 
 
+class ChoiceAnswerIn(In):
+    answer: dict[str, Any] = Field(
+        default_factory=dict, description="Ruleset-shaped: what the choice's options ask for."
+    )
+    participant: str | None = Field(default=None, description="Absent = the caller.")
+
+
 class CharacterPatch(In):
     spec: dict[str, Any] | None = _SPEC
     name: str | None = None
     participant: str | None = Field(default=None, description="Absent = the caller.")
+    holdings: list[HoldingIn] | None = _HOLDINGS
 
 
 class MintIn(In):
@@ -252,6 +285,7 @@ BODIES: dict[tuple[str, str], type[BaseModel]] = {
     ("POST", "/worlds/{world_id}/character-preview"): WorldCharacterPreviewIn,
     ("POST", "/campaigns/{campaign_id}/character/preview"): CampaignCharacterPreviewIn,
     ("PATCH", "/campaigns/{campaign_id}/character"): CharacterPatch,
+    ("POST", "/campaigns/{campaign_id}/character/choices/{choice_id}"): ChoiceAnswerIn,
     ("POST", "/worlds/{world_id}/character-proposal"): WorldCharacterProposalIn,
     ("POST", "/campaigns/{campaign_id}/character/proposal"): CampaignCharacterProposalIn,
 }

@@ -715,3 +715,11 @@ once**, not a measure of quality across models.
 | A check's player-safe part is the acting character's own | **proven** | the acting PC's outcome carries `player_view`, an NPC's doesn't; the log keeps both; frames omit it when absent. The frames go to every seat (the numbers are shown at the table, not to one player); a player's dry-run drops NPC views, other sheets and a fight's combatants (review). |
 | Fights turn by turn | **proven (deterministic)** | `test_turn_encounters.py`: opens and waits on the PC, refuses free text, illegal actions and targets (committing nothing), plays out to the end with ModeChanged in and out once each, a fork taken mid-fight carries it and the same choice rolls the same dice on both branches; the socket test covers the action and the refusal frame. One PC per fight. After the review: several fights may be open on a branch, one per set of combatants, and a turn commits only from the turns it saw (`append_fight_beat`). `flee`/`defend`/`keep_cool` are offered but have no effect; a Chronicler outcome mid-fight doesn't reach the fight. |
 | A ruleset with no checks | **proven** | three beats of pure narration; a supplied plan can't invoke a check. |
+
+## Post-PoC — starting holdings, a ruleset's choices, suggested characters (2026-11-09, D-113)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| A new character starts holding what its player chose | **proven** | `test_loom_requests_20_22.py`: beside the world's gear, marked `chosen`, replaced by a rebuild before the first beat and frozen after; malformed entries located; a ruleset's own check; an adopted actor chooses none. |
+| A choice a ruleset leaves waits in the sheet, answered once | **proven** | Uro Basic's opt-in level-up choice: read on the character view and the beat result, a refused answer located, answered once (a second is "no such pending choice"), an answer from a stale sheet refused under the branch lock; REST and the socket frame tested. |
+| A pack suggests characters a campaign can begin as | **proven** | parsed from `entities/characters.yaml`, checked by the ruleset, kept through export/import, nothing in the world until a campaign begins as one, a given spec wins; `POST /worlds` refuses one that won't build. Backfill's suggestions: **stub-only** (a scripted reply; never run live). |

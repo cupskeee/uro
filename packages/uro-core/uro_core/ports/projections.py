@@ -91,6 +91,10 @@ class ProjectionQueries(Protocol):
         defaults, for a world with none (or created before D-80)."""
         ...
 
+    async def world_characters(self, branch_id: str) -> list[dict[str, Any]]:
+        """The player characters a branch's world suggests (D-113)."""
+        ...
+
     async def world_starting_gear(self, branch_id: str) -> list[str | dict[str, Any]]:
         """The items a fresh PC carries in the branch's world (D-97), from its WorldGenesis. []
         for a world that names none (or was created before D-97)."""

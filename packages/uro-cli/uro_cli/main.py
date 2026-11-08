@@ -228,6 +228,21 @@ def _json_option(raw: str | None, flag: str) -> dict[str, Any] | None:
     return value
 
 
+def _json_list_option(raw: str | None, flag: str) -> list[Any] | None:
+    """A JSON-array option (`--holdings`): inline JSON, or `@path` to a file."""
+    if raw is None:
+        return None
+    try:
+        value = json.loads(Path(raw[1:]).read_text() if raw.startswith("@") else raw)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"{flag}: not a JSON list ({exc})", err=True)
+        raise typer.Exit(2) from exc
+    if not isinstance(value, list):
+        typer.echo(f"{flag}: not a JSON list", err=True)
+        raise typer.Exit(2)
+    return value
+
+
 def _echo_refused(exc: Exception) -> None:
     """A refused start, join or build, with each spec problem on its own line (D-112)."""
     if isinstance(exc, CharSpecError):
@@ -524,7 +539,7 @@ def world_backfill(
         # policy, when the database answers (D-108 review)
         makes_people = await _play_creates_actors()
         before = check_sufficiency(pack, play_creates_actors=makes_people)
-        if before.grade == "runnable":
+        if before.grade == "runnable" and pack.characters:
             typer.echo("pack is already runnable — nothing to backfill")
             return
         async with _metered(build_router(provider, model)) as router:
@@ -687,6 +702,19 @@ def play(
                     break
                 if not intent:
                     continue
+                if intent.startswith("/choose "):  # D-113: /choose <id> <json answer>
+                    from uro_core.characters import ChoiceError, answer_character_choice
+
+                    cid, _, raw = intent[8:].strip().partition(" ")
+                    try:
+                        view = await answer_character_choice(
+                            store, campaign, PARTICIPANT, cid, json.loads(raw) if raw else {}
+                        )
+                        left = ", ".join(c.id for c in view.choices) or "none"
+                        typer.echo(f"  · answered {cid}; choices left: {left}")
+                    except (ValueError, CharSpecError, ChoiceError, KeyError) as exc:
+                        _echo_refused(exc)
+                    continue
                 choice = parse_act(intent)  # D-112: `/act <kind> [target]` on a fight turn
                 if intent.startswith("/act") and choice is None:
                     typer.echo("usage: /act <action> [target]", err=True)
@@ -741,6 +769,7 @@ def _details(result: BeatResult) -> dict[str, Any]:
         "created": [c.model_dump() for c in result.created],
         "threads_changed": [t.model_dump() for t in result.threads_changed],
         "encounter": result.encounter.model_dump() if result.encounter is not None else None,
+        "choices": [c.model_dump() for c in result.choices],
     }
 
 
@@ -787,6 +816,9 @@ def beat_detail_lines(
     for t in details.get("threads_changed") or []:  # D-103: any plot whose state moved
         moved = f"{t['from_state']} → {t['to_state']}" if t["from_state"] else t["to_state"]
         lines.append(f"  ~ plot {moved}: {t['stakes']}")
+    if mine:  # D-113: choices the ruleset left on the player's own character
+        for c in details.get("choices") or []:
+            lines.append(f"  ? {c['id']}: {c['prompt']} — `uro character choose` or /choose")
     wait = details.get("encounter")  # D-112: the fight waits on a player's choice
     if wait:
         lines.append(f"  · the fight waits on {wait['actor_id']}:")
@@ -1015,6 +1047,7 @@ def connect(
                 # that has never echoed one (an older one) is matched by text; once one has, a frame
                 # without an id is another client's.
                 pending: dict[str, tuple[str, asyncio.Event]] = {}
+                asked: set[str] = set()  # the ids of this client's `choose` frames (D-113)
                 echoes = False
                 seen_day: int | None = None  # the day the last beat_committed showed
                 checked: set[str] = set()  # intents whose beat_checks were already printed
@@ -1098,6 +1131,11 @@ def connect(
                             typer.echo(
                                 f"\n  ✗ beat failed ({msg.get('intent', '')!r}): {msg['error']}"
                             )
+                        elif kind == "choice_answered" and str(msg.get("intent_id")) in asked:
+                            left = ", ".join(c["id"] for c in msg.get("choices") or []) or "none"
+                            typer.echo(f"  · answered {msg.get('choice_id')}; choices left: {left}")
+                        elif kind == "choice_refused" and str(msg.get("intent_id")) in asked:
+                            typer.echo(f"  ! {msg.get('reason')}")
                         elif kind == "encounter_action_refused" and ours:
                             # every seat hears it; only the player who acted is shown it (review)
                             for line in refusal_lines(
@@ -1127,6 +1165,26 @@ def connect(
                             break
                         if intent in ("/quit", "/exit"):
                             break
+                        if intent.startswith("/choose "):  # D-113: /choose <id> <json answer>
+                            cid, _, raw = intent[8:].strip().partition(" ")
+                            try:
+                                ans = json.loads(raw) if raw.strip() else {}
+                            except ValueError:
+                                typer.echo("usage: /choose <choice_id> <json answer>")
+                                continue
+                            cid_req = uuid.uuid4().hex
+                            asked.add(cid_req)
+                            await ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "choose",
+                                        "choice_id": cid,
+                                        "answer": ans,
+                                        "id": cid_req,
+                                    }
+                                )
+                            )
+                            continue
                         if intent.startswith("/say "):  # non-canon table-talk (D-38)
                             await ws.send(json.dumps({"type": "table_talk", "text": intent[5:]}))
                         elif intent.startswith("/vote "):  # non-canon consensus vote (D-38)
@@ -2109,6 +2167,12 @@ def campaign_new(
     encounters: str = typer.Option(
         "auto", "--encounters", help="auto (a fight is one beat) | turns (pick each action)"
     ),
+    holdings: str = typer.Option(
+        None, "--holdings", help="what the PC starts holding: JSON [{name, data?}] or @file (D-113)"
+    ),
+    character: str = typer.Option(
+        None, "--character", help="begin as a character the world suggests (`world characters`)"
+    ),
 ) -> None:
     """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one).
     With --own-branch it gets a branch of its own, so it can later be removed alone (D-99).
@@ -2116,8 +2180,11 @@ def campaign_new(
     the story it came from's, and any other branch its world's."""
 
     async def _run() -> None:
-        if (adopt is None) == (pc is None):
-            typer.echo("provide exactly one of --adopt <actor_id> or --pc <name>", err=True)
+        if (adopt is None) == (pc is None and character is None):
+            typer.echo(
+                "provide exactly one of --adopt <actor_id> or --pc <name> (or --character)",
+                err=True,
+            )
             raise typer.Exit(1)
         store = build_store()
         await connect_store(store)
@@ -2158,6 +2225,8 @@ def campaign_new(
                         ruleset_config=_json_option(ruleset_config, "--ruleset-config"),
                         seed=seed,
                         encounters=encounters,
+                        holdings=_json_list_option(holdings, "--holdings"),
+                        character=character,
                     )
                 except (CharSpecError, ValueError, KeyError) as exc:
                     _echo_refused(exc)
@@ -2310,14 +2379,23 @@ def campaign_join(
     spec: str = typer.Option(
         None, "--spec", help="the PC's build as JSON, or @file.json (the ruleset's spec, D-112)"
     ),
+    holdings: str = typer.Option(
+        None, "--holdings", help="what the PC starts holding: JSON [{name, data?}] or @file (D-113)"
+    ),
+    character: str = typer.Option(
+        None, "--character", help="begin as a character the world suggests (`world characters`)"
+    ),
 ) -> None:
     """Seat an ADDITIONAL participant on a live campaign, binding their OWN PC (docs/08, OQ-7) —
     the party-join path. Round-robin free-roam then rotates turns across the party (`uro serve`
     with multiple --token spins up a PartyArbiter)."""
 
     async def _run() -> None:
-        if (adopt is None) == (pc is None):
-            typer.echo("provide exactly one of --adopt <actor_id> or --pc <name>", err=True)
+        if (adopt is None) == (pc is None and character is None):
+            typer.echo(
+                "provide exactly one of --adopt <actor_id> or --pc <name> (or --character)",
+                err=True,
+            )
             raise typer.Exit(1)
         store = build_store()
         await connect_store(store)
@@ -2337,6 +2415,8 @@ def campaign_join(
                     adopt_actor_id=adopt,
                     new_pc_name=pc,
                     spec=_json_option(spec, "--spec"),
+                    holdings=_json_list_option(holdings, "--holdings"),
+                    character=character,
                 )
             except (CharSpecError, ValueError, KeyError) as exc:
                 _echo_refused(exc)
@@ -2353,6 +2433,30 @@ character_app = typer.Typer(
     help="A participant's character: preview a build, show it, rebuild it before play (D-112).",
 )
 app.add_typer(character_app, name="character")
+
+
+@world_app.command("characters")
+def world_characters(world: str) -> None:
+    """The player characters a world's author suggests (D-113): start as one with
+    `campaign new --character <id>`."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            w = await _world_or_exit(store, world)
+            suggested = await store.world_characters(w.main_branch_id)
+        finally:
+            await store.close()
+        if not suggested:
+            typer.echo("(the world suggests no characters)")
+        for c in suggested:
+            tag = "" if c.get("provenance", "author") == "author" else f" [{c['provenance']}]"
+            typer.echo(
+                f"{c['id']}  {c['name']}{tag}" + (f" — {c['line']}" if c.get("line") else "")
+            )
+
+    _run_async(_run)
 
 
 @character_app.command("show")
@@ -2379,6 +2483,10 @@ def character_show(
         state = "open until the first beat" if view.build_open else f"frozen: {view.frozen_reason}"
         typer.echo(f"{view.name}  [{view.actor_id}]  ruleset {view.ruleset}  build {state}")
         typer.echo(json.dumps(view.sheet, indent=2, sort_keys=True))
+        for c in view.choices:  # D-113: what the ruleset left for this player to decide
+            typer.echo(f"  ? {c.id}: {c.prompt}")
+            for o in c.options:
+                typer.echo(f"      {json.dumps(o, sort_keys=True)}")
         for h in view.holdings:
             typer.echo(
                 f"  holds {h['name']} [{h['item_id']}]" + (f" {h['data']}" if h["data"] else "")
@@ -2500,15 +2608,49 @@ def character_propose(
     _run_async(_run)
 
 
+@character_app.command("choose")
+def character_choose(
+    campaign_id: str,
+    choice_id: str,
+    answer: str = typer.Argument(..., help='the answer as JSON, e.g. \'{"ability": "CON"}\''),
+    participant: str = typer.Option(PARTICIPANT, "--participant", help="whose character"),
+) -> None:
+    """Answer a choice the ruleset left on a character (D-113): `uro character show` lists them."""
+
+    async def _run() -> None:
+        from uro_core.characters import ChoiceError, answer_character_choice
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            try:
+                view = await answer_character_choice(
+                    store, c, participant, choice_id, _json_option(answer, "answer") or {}
+                )
+            except (CharSpecError, ChoiceError, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        left = ", ".join(ch.id for ch in view.choices) or "none"
+        typer.echo(f"answered; choices left: {left}")
+
+    _run_async(_run)
+
+
 @character_app.command("rebuild")
 def character_rebuild(
     campaign_id: str,
     participant: str = typer.Option(PARTICIPANT, "--participant", help="whose character"),
     spec: str = typer.Option(None, "--spec", help="the new build as JSON, or @file.json"),
     name: str = typer.Option(None, "--name", help="a new name"),
+    holdings: str = typer.Option(
+        None, "--holdings", help="replace the chosen holdings: JSON [{name, data?}] or @file"
+    ),
 ) -> None:
-    """Replace a character's build and/or name before the story starts (until the first beat after
-    it was bound); after that only play changes a character."""
+    """Replace a character's build, name and/or chosen holdings before the story starts (until the
+    first beat after it was bound); after that only play changes a character."""
 
     async def _run() -> None:
         from uro_core.characters import CharacterFrozen, rebuild_character
@@ -2519,7 +2661,12 @@ def character_rebuild(
             c = await _campaign_or_exit(store, campaign_id)
             try:
                 view = await rebuild_character(
-                    store, c, participant, spec=_json_option(spec, "--spec"), name=name
+                    store,
+                    c,
+                    participant,
+                    spec=_json_option(spec, "--spec"),
+                    name=name,
+                    holdings=_json_list_option(holdings, "--holdings"),
                 )
             except (CharSpecError, CharacterFrozen, KeyError) as exc:
                 _echo_refused(exc)

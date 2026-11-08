@@ -51,6 +51,11 @@ def ruleset_problem(pack: WorldPack) -> str | None:
                 build_character(ruleset, CharSpec(data=a.spec, threat=a.threat), Rng(0))
             except CharSpecError as exc:
                 return f"actor {a.id!r}: its spec doesn't build under {ruleset.id}: {exc}"
+    for c in pack.characters:  # suggested player characters (D-113), the same rule
+        try:
+            build_character(ruleset, CharSpec(data=c.spec), Rng(0))
+        except CharSpecError as exc:
+            return f"suggested character {c.id!r}: its spec doesn't build under {ruleset.id}: {exc}"
     return None
 
 
@@ -71,7 +76,8 @@ async def import_pack(
     added: list[str] = []
     # Backfill can fill every dimension, places and people included (D-108), so an insufficient
     # pack gets the attempt too; it's refused below if the gaps remain.
-    if backfill_router is not None and report.grade != "runnable":
+    # A pack that suggests no characters gets them too (D-113), even when it is runnable.
+    if backfill_router is not None and (report.grade != "runnable" or not pack.characters):
         pack, added = await backfill_gaps(
             pack, backfill_router, report=report, play_creates_actors=makes_people
         )
@@ -91,6 +97,7 @@ async def import_pack(
         starting_gear=[
             g if isinstance(g, str) else g.model_dump() for g in pack.manifest.starting_gear
         ],
+        characters=[c.model_dump() for c in pack.characters],
         description=pack.manifest.description,
         # only a declaration the pack made (its `[content]` table), never the defaults (D-104)
         content=(

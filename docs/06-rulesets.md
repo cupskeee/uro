@@ -30,6 +30,10 @@ class Ruleset(Protocol):
 
     # Optional since D-112 (a ruleset without it still loads, port version unchanged)
     def spec_schema(self) -> JsonSchema             # what CharSpec.data may hold; {} = any object
+    # Optional since D-113
+    def check_holdings(self, holdings) -> None      # refuse a new character's chosen holdings
+    def pending_choices(self, sheet) -> list[Choice]   # choices left for the player, from the sheet
+    def answer_choice(self, sheet, choice_id, answer) -> Sheet   # the sheet after an answer
 ```
 
 **Characters, held things and what a player sees (D-112, optional on the port).** A ruleset may
@@ -46,6 +50,13 @@ carry what the actor holds (`Holding`: item id, name, opaque data from a pack's 
 starting gear); a ruleset may ignore them. `CheckResult.player_view` is the part of a check a
 player may see, the ruleset's choice (the built-ins: the actor's own dice, modifier, total, the
 difficulty faced and the band); the engine sends it only for the acting player's own character.
+
+**Choices left for the player (D-113, optional).** A ruleset may leave a choice on a character (how
+it grows, what a setback costs): `pending_choices(sheet)` derives them from the sheet, so a choice is
+event-sourced and forks with the character, and `answer_choice` returns the sheet after the player's
+answer (or refuses it). Play never waits on one. Uro Basic's opt-in `ability_choice_on_level`
+setting proves it: each level gained leaves an ability score to raise. A ruleset may also check the
+things a new character starts holding (`check_holdings`).
 
 **GAME-AGNOSTIC BY CONSTRUCTION (OQ-13 → D-30).** The port names NO game vocabulary — no
 abilities, no hp/ac, no DC, no attack/damage. A `Sheet` is an opaque `dict` each ruleset

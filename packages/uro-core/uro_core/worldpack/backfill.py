@@ -36,6 +36,7 @@ from uro_core.providers.base import Message
 from uro_core.providers.router import ProviderRouter
 from uro_core.worldpack.models import (
     ActorSeed,
+    CharacterSeed,
     ClaimSeed,
     FactionSeed,
     PlaceSeed,
@@ -96,6 +97,14 @@ _PROMPTS = {
         "(name existing places, groups and people); invent no other proper nouns. "
         'JSON: {"past": ["…", "…", "…", "…"]}'
     ),
+    "characters": (
+        "The world suggests no characters for a player to begin as. Invent THREE, different from "
+        "one another and from the people who exist, who fit this world and could start a story "
+        "in it. Each has a name, one line on who they are, and a build for the game's rules that "
+        "follows this JSON Schema, using only its keys and within its limits (leave out what you "
+        "don't need):\n{schema}\n"
+        'JSON: {"characters": [{"name": "…", "line": "one sentence", "spec": {…}}]}'
+    ),
 }
 
 _ORDER = ("geography", "power", "population", "conflict", "tone", "history")
@@ -124,7 +133,50 @@ async def backfill_gaps(
                 update={"backfilled": [*pack.manifest.backfilled, dim]}
             )
             pack = pack.model_copy(update={"manifest": manifest})
+    if not pack.characters:  # not a sufficiency gap, but a world may suggest some (D-113)
+        pack, lines = await _characters(pack, router)
+        if lines:
+            added.extend(lines)
+            manifest = pack.manifest.model_copy(
+                update={"backfilled": [*pack.manifest.backfilled, "characters"]}
+            )
+            pack = pack.model_copy(update={"manifest": manifest})
     return pack, added
+
+
+async def _characters(pack: WorldPack, router: ProviderRouter) -> tuple[WorldPack, list[str]]:
+    """Three suggested player characters (D-113), each with a build for the pack's ruleset: a
+    build that ruleset refuses is kept as no build (the ruleset's default character), so a
+    suggestion is never dropped for its numbers alone."""
+    from uro_core.rulesets import registry
+    from uro_core.rulesets.base import CharSpec, CharSpecError, build_character, spec_schema_of
+    from uro_core.rulesets.rng import Rng
+
+    decl = pack.manifest.ruleset
+    ruleset = registry.resolve(decl.id, decl.version, decl.config)
+    schema = json.dumps(spec_schema_of(ruleset) or {"type": "object"})
+    data = await _ask(router, "characters", pack, schema=schema)
+    taken = {a.name.casefold() for a in pack.actors}
+    made: list[CharacterSeed] = []
+    for row in _list(data, "characters"):
+        name = _text(row, "name")
+        if not name or name.casefold() in taken or len(made) >= 3:
+            continue
+        spec = row.get("spec") if isinstance(row.get("spec"), dict) else {}
+        try:
+            build_character(ruleset, CharSpec(data=spec), Rng(0))
+        except CharSpecError:
+            spec = {}
+        made.append(
+            CharacterSeed(
+                id=f"pc:{new_id()}", name=name, line=_text(row, "line"), spec=spec, provenance=TAG
+            )
+        )
+        taken.add(name.casefold())
+    return (
+        pack.model_copy(update={"characters": made}),
+        [f"suggested character ({TAG}): {c.name}" for c in made],
+    )
 
 
 # --- the fillers: (pack, router) -> (augmented pack, lines added) ---
@@ -285,7 +337,9 @@ _FILLERS = {
 
 
 async def _ask(router: ProviderRouter, dim: str, pack: WorldPack, **fill: Any) -> Any:
-    task = _PROMPTS[dim].replace("{n}", str(fill["n"])) if "n" in fill else _PROMPTS[dim]
+    task = _PROMPTS[dim]
+    for key, value in fill.items():
+        task = task.replace("{" + key + "}", str(value))
     messages = [
         Message(role="system", content=f"{_SHARED}\n\n{task}"),
         Message(role="user", content=_world_brief(pack)),

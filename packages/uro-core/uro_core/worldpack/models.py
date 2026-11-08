@@ -169,6 +169,21 @@ class ActorSeed(BaseModel):
         return v
 
 
+class CharacterSeed(BaseModel):
+    """A player character the world's author suggests (D-113): an offer, not an actor — nothing
+    exists in the world until a campaign begins as it. Its spec is for the pack's ruleset and is
+    checked by it at validate and import."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    line: str = ""  # one line on who they are
+    portrait: str = ""  # a reference a client resolves (a path in the pack, a URL, an id)
+    spec: dict[str, Any] = Field(default_factory=dict)
+    provenance: str = "author"  # "ai_backfill" when backfill suggested it (D-108)
+
+
 class ThreadSeed(BaseModel):
     """A conflict seed / tension hook (docs/09 sufficiency) — something to play about."""
 
@@ -198,6 +213,15 @@ class WorldPack(BaseModel):
     lore: dict[str, str] = Field(default_factory=dict)  # relative path → markdown
     prompts: dict[str, str] = Field(default_factory=dict)  # filename → template override
     rule_pack: RulePack | None = None  # rules.yaml/agendas.yaml — the Reaction Layer (docs/17)
+    characters: list[CharacterSeed] = Field(default_factory=list)  # characters.yaml (D-113)
+
+    @model_validator(mode="after")
+    def _character_ids_unique(self) -> WorldPack:
+        ids = [c.id for c in self.characters]
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        if dupes:
+            raise ValueError(f"suggested character ids appear twice: {', '.join(dupes)}")
+        return self
 
     @model_validator(mode="after")
     def _knows_refs_resolve(self) -> WorldPack:
