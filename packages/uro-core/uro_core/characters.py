@@ -17,12 +17,14 @@ This is a composition module (it resolves rulesets through the registry), outsid
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from uro_core.domain.events import CausedBy, actor_renamed, sheet_updated
 from uro_core.ports.projections import EngineStore
+from uro_core.providers.base import Message
 from uro_core.rulesets.base import (
     CharSpec,
     CharSpecError,
@@ -47,6 +49,7 @@ __all__ = [
     "join_campaign",
     "own_character",
     "preview_character",
+    "propose_character",
     "rebuild_character",
     "start_campaign",
 ]
@@ -303,3 +306,101 @@ def ruleset_info(ruleset: Ruleset) -> dict[str, Any]:
         "spec_schema": spec_schema_of(ruleset),
         "config_schema": ruleset.config_schema(),
     }
+
+
+# --- proposing a character from a description (D-112, Uro Loom request 14) ---
+
+PROPOSAL_ROLE = "worldsmith"  # the authoring role backfill uses (unbound → the router's default)
+
+_PROPOSAL_SYSTEM = """You turn a player's description of their character into a build for the
+game's rules. Reply with ONLY a JSON object: {{"name": "<a name, if the description gives or
+suggests one, else empty>", "spec": {{...}}}}. The spec follows this JSON Schema, and uses only the
+keys it allows:
+
+{schema}
+
+Put in the spec what the description suggests (a strong, slow character: high strength, low
+speed); leave out what it doesn't. Keep within every limit the schema states.{tone}"""
+
+
+class Proposal(BaseModel):
+    """A character build proposed from free text (D-112), checked through the same build a campaign
+    start runs. Nothing is saved: the player edits `spec` and sends it to start or join."""
+
+    ok: bool
+    ruleset: str
+    name: str = ""
+    spec: dict[str, Any] = Field(default_factory=dict)
+    sheet: Sheet | None = None
+    problems: list[SpecProblem] = Field(default_factory=list)
+
+
+def _with_defs_hoisted(spec_schema: dict[str, Any]) -> dict[str, Any]:
+    """The reply's schema: {name, spec} with the spec schema nested and its `$defs` at the top, so
+    its `#/$defs/…` references still resolve."""
+    spec = dict(spec_schema)
+    defs = spec.pop("$defs", None)
+    out: dict[str, Any] = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "spec": spec},
+        "required": ["spec"],
+    }
+    if defs:
+        out["$defs"] = defs
+    return out
+
+
+async def propose_character(
+    store: EngineStore,
+    router: Any,
+    *,
+    branch_id: str,
+    description: str,
+    campaign: Campaign | None = None,
+    ruleset_id: str | None = None,
+    ruleset_config: dict[str, Any] | None = None,
+) -> Proposal:
+    """Ask the bound model for a build matching `description` under a campaign's game (or the one a
+    new campaign on the branch would play), given the ruleset's spec schema and the world's tone,
+    then check it like a preview. A reply that isn't a JSON object is a proposal with a problem,
+    never an exception; the call itself may raise ProviderError. The model call lives here, in the
+    narrator layer, never in a ruleset."""
+    if campaign is not None:
+        ruleset = await resolve_for_campaign(store, campaign)
+    else:
+        ruleset = (
+            await campaign_game(
+                store, branch_id, ruleset_id=ruleset_id, ruleset_config=ruleset_config
+            )
+        ).ruleset
+    schema = spec_schema_of(ruleset)
+    tone, _ = await store.world_style(branch_id)
+    system = _PROPOSAL_SYSTEM.format(
+        schema=json.dumps(schema or {"type": "object"}, indent=2),
+        tone=f"\n\nThe world's tone: {tone}." if tone else "",
+    )
+    raw = await router.complete(
+        PROPOSAL_ROLE,
+        [Message(role="system", content=system), Message(role="user", content=description)],
+        json_mode=True,
+        json_schema=_with_defs_hoisted(schema) if schema.get("type") == "object" else None,
+        temperature=0.7,
+        branch_id=branch_id,
+    )
+    try:
+        reply = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
+    except ValueError:
+        reply = None
+    spec = reply.get("spec") if isinstance(reply, dict) else None
+    if not isinstance(spec, dict):
+        return Proposal(
+            ok=False,
+            ruleset=ruleset.id,
+            problems=[SpecProblem(message="the model's reply held no build; try again")],
+        )
+    name = reply.get("name") if isinstance(reply.get("name"), str) else ""
+    try:
+        sheet = character_sheet(ruleset, spec)
+    except CharSpecError as exc:
+        return Proposal(ok=False, ruleset=ruleset.id, name=name, spec=spec, problems=exc.problems)
+    return Proposal(ok=True, ruleset=ruleset.id, name=name, spec=spec, sheet=sheet)

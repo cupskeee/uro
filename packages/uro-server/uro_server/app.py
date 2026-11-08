@@ -340,6 +340,14 @@ class ServerDeps:
     # connection (a 1-token call), and rebuild the instance router from the registry without a
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
     refresh_models: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None
+    # D-112: propose a character build from a description through the bound model:
+    # (branch_id, campaign_id or None, ruleset or None, ruleset_config or None, description)
+    propose_character: (
+        Callable[
+            [str, str | None, str | None, dict[str, Any] | None, str], Awaitable[dict[str, Any]]
+        ]
+        | None
+    ) = None
     # (connection id, model, reasoning effort or None)
     test_connection: Callable[[str, str, str | None], Awaitable[dict[str, Any]]] | None = None
     reload_router: Callable[[], Awaitable[dict[str, Any]]] | None = None
@@ -571,6 +579,27 @@ def engine_deps(
 
         return await _seed_world(store, world, pack, seed)
 
+    async def propose_character(
+        branch_id: str,
+        campaign_id: str | None,
+        ruleset_id: str | None,
+        ruleset_config: dict[str, Any] | None,
+        description: str,
+    ) -> dict[str, Any]:
+        from uro_core.characters import propose_character as _propose
+
+        campaign = await store.get_campaign(campaign_id) if campaign_id else None
+        proposal = await _propose(
+            store,
+            engine.router,
+            branch_id=branch_id,
+            description=description,
+            campaign=campaign,
+            ruleset_id=ruleset_id,
+            ruleset_config=ruleset_config,
+        )
+        return proposal.model_dump()
+
     async def refresh_models(connection_id: str) -> list[dict[str, str]]:
         from uro_core.providers.registry import refresh_connection_models
 
@@ -693,6 +722,7 @@ def engine_deps(
         import_pack=import_pack,
         seed_world=seed_world,
         refresh_models=refresh_models,
+        propose_character=propose_character,
         test_connection=test_connection,
         reload_router=reload_router,
         codex_start=codex_start,
@@ -2300,6 +2330,63 @@ def create_app(
             store, branch_id=campaign.branch_id, spec=_spec_field(body), campaign=campaign
         )
         return preview.model_dump()
+
+    async def _propose(
+        request: Request,
+        branch_id: str,
+        campaign_id: str | None,
+        body: dict[str, Any],
+        rid: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        description = body.get("description")
+        if not isinstance(description, str) or not description.strip():
+            raise HTTPException(status_code=400, detail="description must be a non-empty string")
+        if deps.propose_character is None:
+            raise HTTPException(status_code=501, detail="no model wired for proposals")
+        from uro_core.errors import ProviderError
+
+        try:
+            return await deps.propose_character(
+                branch_id, campaign_id, rid, config, description.strip()
+            )
+        except ProviderError as exc:
+            raise HTTPException(status_code=502, detail=f"the model call failed: {exc}") from exc
+        except (ValueError, KeyError) as exc:  # an unknown ruleset, or settings it refuses
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/worlds/{world_id}/character-proposal", **_out(S.CharacterProposal))
+    async def world_character_proposal(
+        world_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Propose a character build from a `description` (D-112), for a new campaign on a branch
+        of this world (with the `ruleset`/`ruleset_config` it would name): the bound model reads
+        the ruleset's spec schema and the world's tone, and the proposal is checked like a preview
+        (`ok`, `problems`). Saves nothing. OPERATOR-only: it is a model call (cost, D-44)."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch = await _branch_ref(store, world_id, body.get("branch") or "main")
+        rid, config = _game_fields(body)
+        return await _propose(request, branch.branch_id, None, body, rid, config)
+
+    @app.post("/campaigns/{campaign_id}/character/proposal", **_out(S.CharacterProposal))
+    async def campaign_character_proposal(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Propose a character build from a `description` under this campaign's game (D-112), to
+        join with or to rebuild into. Saves nothing. OPERATOR-only (a model call, D-44)."""
+        _require_operator(request)
+        store = _mgmt()
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        return await _propose(request, campaign.branch_id, campaign_id, body)
 
     @app.get("/campaigns/{campaign_id}/character", **_out(S.CharacterOut))
     async def campaign_character(campaign_id: str, request: Request) -> dict[str, Any]:

@@ -167,6 +167,17 @@ class CampaignCharacterPreviewIn(In):
     spec: dict[str, Any] | None = _SPEC
 
 
+class WorldCharacterProposalIn(In):
+    description: str = Field(description="The player's words for their character.")
+    branch: str = Field(default="main", description="A branch name or id.")
+    ruleset: str | None = None
+    ruleset_config: dict[str, Any] | None = None
+
+
+class CampaignCharacterProposalIn(In):
+    description: str = Field(description="The player's words for their character.")
+
+
 class CharacterPatch(In):
     spec: dict[str, Any] | None = _SPEC
     name: str | None = None
@@ -236,6 +247,8 @@ BODIES: dict[tuple[str, str], type[BaseModel]] = {
     ("POST", "/worlds/{world_id}/character-preview"): WorldCharacterPreviewIn,
     ("POST", "/campaigns/{campaign_id}/character/preview"): CampaignCharacterPreviewIn,
     ("PATCH", "/campaigns/{campaign_id}/character"): CharacterPatch,
+    ("POST", "/worlds/{world_id}/character-proposal"): WorldCharacterProposalIn,
+    ("POST", "/campaigns/{campaign_id}/character/proposal"): CampaignCharacterProposalIn,
 }
 
 

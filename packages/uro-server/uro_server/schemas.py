@@ -524,6 +524,17 @@ class CharacterPreview(Out):
     problems: list[SpecProblemOut]
 
 
+class CharacterProposal(Out):
+    """A build proposed from a description (D-112), checked like a preview; nothing is saved."""
+
+    ok: bool
+    ruleset: str
+    name: str
+    spec: dict[str, Any]
+    sheet: dict[str, Any] | None = None
+    problems: list[SpecProblemOut]
+
+
 class HoldingOut(Out):
     item_id: str
     name: str

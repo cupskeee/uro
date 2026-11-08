@@ -2704,7 +2704,7 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 68  # D-112: +4
+    assert len([op for ops in spec["paths"].values() for op in ops]) == 70  # D-112: +6
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).

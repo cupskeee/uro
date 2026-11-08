@@ -2346,6 +2346,63 @@ def character_preview(
     _run_async(_run)
 
 
+@character_app.command("propose")
+def character_propose(
+    target: str = typer.Argument(..., help="a world (a new campaign's game) or a campaign id"),
+    description: str = typer.Argument(..., help="the player's words for their character"),
+    provider: str = typer.Option("openai", help="stub | local | openai | anthropic"),
+    model: str = typer.Option(None, help="model id for the worldsmith role"),
+    branch: str = typer.Option("main", "--branch", help="for a world: the branch to start on"),
+    ruleset_id: str = typer.Option(None, "--ruleset", help="for a world: a campaign's own ruleset"),
+) -> None:
+    """Propose a build from a description through the model, checked like a preview (D-112). Saves
+    nothing: pass the printed spec to `campaign new|join --spec`."""
+
+    async def _run() -> None:
+        from uro_core.characters import propose_character
+        from uro_core.errors import ProviderError
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            campaign = await store.get_campaign(target)
+            if campaign is not None:
+                branch_id = campaign.branch_id
+            else:
+                w = await _world_or_exit(store, target)
+                b = await store.get_branch_by_name(w.world_id, branch)
+                if b is None:
+                    typer.echo(f"no such branch: {branch}", err=True)
+                    raise typer.Exit(1)
+                branch_id = b.branch_id
+            router = build_router(provider, model)
+            router.recorder = store.record_llm_call
+            try:
+                proposal = await propose_character(
+                    store,
+                    router,
+                    branch_id=branch_id,
+                    description=description,
+                    campaign=campaign,
+                    ruleset_id=ruleset_id,
+                )
+            except (ProviderError, ValueError, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        typer.echo(
+            f"{'ok' if proposal.ok else 'not buildable'} ({proposal.ruleset})"
+            + (f": {proposal.name}" if proposal.name else "")
+        )
+        typer.echo(json.dumps(proposal.spec, indent=2, sort_keys=True))
+        if not proposal.ok:
+            _echo_refused(CharSpecError(proposal.problems))
+            raise typer.Exit(1)
+
+    _run_async(_run)
+
+
 @character_app.command("rebuild")
 def character_rebuild(
     campaign_id: str,
