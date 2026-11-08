@@ -191,3 +191,186 @@ async def test_complete_raises_on_non_json_body() -> None:
     provider = _provider(lambda request: httpx.Response(200, text="<html>gateway</html>"))
     with pytest.raises(ProviderError):
         await provider.complete(_req())
+
+
+# --- structured outputs and room for thinking ---------------------------------------------------
+
+_SCHEMA = {
+    "$defs": {
+        "Item": {
+            "properties": {
+                "name": {"title": "Name", "type": "string", "minLength": 1},
+                "note": {"default": "", "title": "Note", "type": "string"},
+            },
+            "required": ["name"],
+            "title": "Item",
+            "type": "object",
+        }
+    },
+    "properties": {
+        "items": {"items": {"$ref": "#/$defs/Item"}, "title": "Items", "type": "array"},
+        "speaker": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None},
+    },
+    "title": "Out",
+    "type": "object",
+}
+
+
+def _schema_req() -> CompletionRequest:
+    return _req(json_mode=True).model_copy(update={"json_schema": _SCHEMA})
+
+
+def _recording(model: str, replies: list[httpx.Response]) -> tuple[AnthropicProvider, list[dict]]:
+    import json
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return replies[min(len(bodies), len(replies)) - 1]
+
+    return AnthropicProvider(
+        model=model, api_key="k" * 12, transport=httpx.MockTransport(handler)
+    ), bodies
+
+
+def _ok(text: str = '{"items": []}') -> httpx.Response:
+    return httpx.Response(200, json={"content": [{"type": "text", "text": text}]})
+
+
+def test_strict_schema_closes_objects_and_keeps_optional_fields_optional() -> None:
+    from uro_core.providers.adapters.anthropic import strict_schema
+
+    out = strict_schema(_SCHEMA)
+    item = out["$defs"]["Item"]
+    assert out["additionalProperties"] is False and item["additionalProperties"] is False
+    assert item["required"] == ["name"]  # `note` stays optional
+    assert "minLength" not in item["properties"]["name"]  # moved where the model can read it
+    assert "minLength: 1" in item["properties"]["name"]["description"]
+    assert "default" not in item["properties"]["note"]
+    assert out["properties"]["speaker"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    assert out["properties"]["items"]["items"] == {"$ref": "#/$defs/Item"}
+
+
+def test_the_engine_stage_schemas_convert() -> None:
+    from uro_core.pipeline.extraction import Extraction
+    from uro_core.pipeline.plan import BeatPlan
+    from uro_core.providers.adapters.anthropic import strict_schema
+
+    for model in (BeatPlan, Extraction):
+        out = strict_schema(model.model_json_schema())
+
+        def closed(node: object) -> None:
+            if isinstance(node, dict):
+                if node.get("type") == "object":
+                    assert node["additionalProperties"] is False
+                assert "default" not in node
+                for v in node.values():
+                    closed(v)
+            elif isinstance(node, list):
+                for v in node:
+                    closed(v)
+
+        closed(out)
+
+
+@pytest.mark.parametrize(
+    ("model", "takes"),
+    [
+        ("claude-opus-5-5", True),
+        ("claude-sonnet-5-5", True),
+        ("claude-haiku-5-5", True),
+        ("claude-fable-5-1", True),
+        ("claude-opus-4-8", True),
+        ("claude-haiku-4-5-20251001", True),
+        ("claude-opus-4-1-20250805", True),
+        ("claude-opus-4-7", False),
+        ("claude-sonnet-4-6", False),
+        ("claude-3-5-haiku-20241022", False),
+        ("some-proxy-alias", False),  # unknown → no format: the safe direction for this field
+    ],
+)
+async def test_a_schema_goes_out_only_to_the_models_that_take_one(model: str, takes: bool) -> None:
+    provider, bodies = _recording(model, [_ok()])
+    await provider.complete(_schema_req())
+    fmt = (bodies[0].get("output_config") or {}).get("format")
+    assert (fmt is not None) is takes
+    if takes:
+        assert fmt["type"] == "json_schema" and fmt["schema"]["additionalProperties"] is False
+        assert bodies[0]["messages"][-1]["role"] == "user"  # never a prefill beside a format
+
+
+async def test_a_schema_rides_with_the_effort() -> None:
+    import json
+
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _ok()
+
+    provider = AnthropicProvider(
+        model="claude-opus-5-5",
+        api_key="k",
+        transport=httpx.MockTransport(handler),
+        reasoning_effort="low",
+    )
+    await provider.complete(_schema_req())
+    assert seen[0]["output_config"]["effort"] == "low" and "format" in seen[0]["output_config"]
+
+
+async def test_no_schema_without_json_mode_or_without_one_given() -> None:
+    provider, bodies = _recording("claude-opus-5-5", [_ok(), _ok()])
+    await provider.complete(_req(json_mode=True))
+    await provider.complete(_req().model_copy(update={"json_schema": _SCHEMA}))
+    assert all("output_config" not in b for b in bodies)
+
+
+async def test_a_refused_schema_falls_back_once_and_is_not_sent_again() -> None:
+    refused = httpx.Response(
+        400,
+        json={"error": {"type": "invalid_request_error", "message": "schema too complex"}},
+    )
+    provider, bodies = _recording("claude-sonnet-5-5", [refused, _ok(), _ok()])
+    assert await provider.complete(_schema_req()) == '{"items": []}'
+    assert "output_config" in bodies[0] and "output_config" not in bodies[1]
+    await provider.complete(_schema_req())  # the connection now sends plain JSON mode
+    assert len(bodies) == 3 and "output_config" not in bodies[2]
+
+
+async def test_a_400_that_isnt_the_schema_keeps_the_schema() -> None:
+    bad = httpx.Response(
+        400, json={"error": {"type": "invalid_request_error", "message": "bad effort"}}
+    )
+    provider, bodies = _recording("claude-sonnet-5-5", [bad, bad, _ok()])
+    with pytest.raises(ProviderError):
+        await provider.complete(_schema_req())
+    await provider.complete(_schema_req())
+    assert len(bodies) == 3 and "format" in bodies[2]["output_config"]
+
+
+async def test_a_server_error_is_not_retried_as_a_schema_refusal() -> None:
+    provider, bodies = _recording("claude-sonnet-5-5", [httpx.Response(529, json={})])
+    with pytest.raises(ProviderError):
+        await provider.complete(_schema_req())
+    assert len(bodies) == 1
+
+
+@pytest.mark.parametrize(
+    ("model", "extra"),
+    [
+        ("claude-opus-5-5", 12_000),
+        ("claude-sonnet-5-5", 12_000),
+        ("claude-haiku-5-5", 12_000),
+        ("claude-fable-5-1", 12_000),
+        ("claude-opus-4-8", 0),  # thinks only when asked
+        ("claude-haiku-4-5", 0),
+        ("some-proxy-alias", 0),  # its output cap is unknown: never raise it
+    ],
+)
+def test_a_thinking_by_default_model_gets_room_to_think(model: str, extra: int) -> None:
+    req = _req().model_copy(update={"max_tokens": 1024})
+    provider = AnthropicProvider(model=model, api_key="k")
+    assert provider._body(req, stream=False)["max_tokens"] == 1024 + extra
+    # narration (no stage cap) gets the same room on top of the adapter's default
+    assert provider._body(_req(), stream=True)["max_tokens"] == 2048 + extra

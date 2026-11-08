@@ -77,6 +77,20 @@ def _bearer_token(request: Request) -> str:
     return auth[7:] if auth.lower().startswith("bearer ") else ""
 
 
+async def _branch_ref(store: Any, world_id: str, ref: Any) -> Any:
+    """A world's branch by name or by id — every route that takes a branch takes either. A name
+    wins over an id (names are what people type); an id from another world is no such branch."""
+    if not isinstance(ref, str) or not ref:
+        raise HTTPException(status_code=400, detail="branch must be a branch name or id")
+    branch = await store.get_branch_by_name(world_id, ref)
+    if branch is None:
+        by_id = await store.get_branch(ref)
+        branch = by_id if by_id is not None and by_id.world_id == world_id else None
+    if branch is None:
+        raise HTTPException(status_code=404, detail=f"no such branch: {ref}")
+    return branch
+
+
 _MAX_PACK_BYTES = 20 * 1024 * 1024  # 20 MB — an authored world pack is small; cap untrusted input
 _MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MB — the DECOMPRESSED-size cap (zip-bomb guard)
 
@@ -1725,9 +1739,7 @@ def create_app(
         store = _mgmt()
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
-        branch = await store.get_branch_by_name(world_id, name)
-        if branch is None:
-            raise HTTPException(status_code=404, detail="no such branch")
+        branch = await _branch_ref(store, world_id, name)  # by name or by id
         doomed = {
             c.campaign_id
             for c in await store.list_campaigns(world_id)
@@ -1801,10 +1813,7 @@ def create_app(
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
         name = _require(body, "name")
-        branch = str(body.get("branch") or "main")
-        b = await store.get_branch_by_name(world_id, branch)
-        if b is None:
-            raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
+        b = await _branch_ref(store, world_id, body.get("branch") or "main")
         try:
             marker = await store.create_marker(world_id, name, b.branch_id)
         except ValueError as exc:  # duplicate marker name (UNIQUE per world) = bad input
@@ -1819,14 +1828,12 @@ def create_app(
         store = _mgmt()
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
-        branch = request.query_params.get("branch") or "main"
         limit = _parse_limit(request, 20)
-        b = await store.get_branch_by_name(world_id, branch)
-        if b is None:
-            raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
+        b = await _branch_ref(store, world_id, request.query_params.get("branch") or "main")
         entries = await store.lineage(b.branch_id, limit)
         return {
-            "branch": branch,
+            "branch": b.name,
+            "branch_id": b.branch_id,
             "head_depth": b.head_depth,
             "entries": [e.model_dump() for e in entries],
         }
@@ -1841,11 +1848,8 @@ def create_app(
         store = _mgmt()
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
-        branch = request.query_params.get("branch") or "main"
         limit = _parse_limit(request, 50)
-        b = await store.get_branch_by_name(world_id, branch)
-        if b is None:
-            raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
+        b = await _branch_ref(store, world_id, request.query_params.get("branch") or "main")
         events = await store.branch_events(
             b.branch_id,
             event_type=request.query_params.get("type"),
@@ -1853,7 +1857,7 @@ def create_app(
             caused_by=request.query_params.get("caused_by"),
             limit=limit,
         )
-        return {"branch": branch, "events": [e.model_dump() for e in events]}
+        return {"branch": b.name, "events": [e.model_dump() for e in events]}
 
     @app.get("/worlds/{world_id}/commits/{commit_id}", **_out(S.CommitOut))
     async def world_commit_detail(
@@ -1892,12 +1896,9 @@ def create_app(
             if at:
                 commit_id, state = await store.state_at(world_id, at, sections)
                 return {"at": commit_id, "state": state}
-            name = branch or "main"
-            b = await store.get_branch_by_name(world_id, name)
-            if b is None:
-                raise HTTPException(status_code=404, detail=f"no such branch: {name}")
+            b = await _branch_ref(store, world_id, branch or "main")
             across = await store.query_across([b.branch_id], sections)
-            return {"branch": name, "at": b.head_commit, "state": across[b.branch_id]}
+            return {"branch": b.name, "at": b.head_commit, "state": across[b.branch_id]}
         except KeyError as exc:  # an unknown or ambiguous commit ref
             raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
         except ValueError as exc:  # an unknown section — typo-loud
@@ -1913,22 +1914,23 @@ def create_app(
         store = _mgmt()
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
-        ids = []
+        ids, names = [], []
         for side in ("a", "b"):
-            name = request.query_params.get(side)
-            if not name:
-                raise HTTPException(status_code=400, detail=f"missing ?{side}= (a branch name)")
-            b = await store.get_branch_by_name(world_id, name)
-            if b is None:
-                raise HTTPException(status_code=404, detail=f"no such branch: {name}")
+            ref = request.query_params.get(side)
+            if not ref:
+                raise HTTPException(
+                    status_code=400, detail=f"missing ?{side}= (a branch name or id)"
+                )
+            b = await _branch_ref(store, world_id, ref)
             ids.append(b.branch_id)
+            names.append(b.name)
         raw = request.query_params.get("sections")
         sections = [x for x in raw.split(",") if x] if raw else None
         try:
             diff = await store.diff_branches(ids[0], ids[1], sections)
         except ValueError as exc:  # an unknown section — typo-loud → 400
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"a": request.query_params["a"], "b": request.query_params["b"], "diff": diff}
+        return {"a": names[0], "b": names[1], "diff": diff}
 
     @app.get("/worlds/{world_id}/chronicle", **_out(S.Chronicle))
     async def world_chronicle(world_id: str, request: Request) -> dict[str, Any]:
@@ -1941,13 +1943,10 @@ def create_app(
         store = _mgmt()
         if await store.get_world(world_id) is None:
             raise HTTPException(status_code=404, detail="no such world")
-        branch = str(request.query_params.get("branch") or "main")
-        b = await store.get_branch_by_name(world_id, branch)
-        if b is None:
-            raise HTTPException(status_code=404, detail=f"no such branch: {branch}")
+        b = await _branch_ref(store, world_id, request.query_params.get("branch") or "main")
         limit = _parse_limit(request, 20)
         beats = await store.recent_beats(b.branch_id, limit)
-        return {"branch": branch, "beats": [bt.model_dump() for bt in beats]}
+        return {"branch": b.name, "beats": [bt.model_dump() for bt in beats]}
 
     # Every field, set or default: the bundle's `v` is a default, and a bundle must carry its format
     # version like `uro world export` writes it (review: exclude_unset dropped it).
@@ -2018,15 +2017,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="seed must be an integer") from exc
         # Play ANY branch of the world, like `uro campaign new --branch` (by name, or by id): a fork
         # is only playable once a campaign starts on it — the continue/new-life/what-if paths.
-        branch_ref = body.get("branch") or "main"
-        if not isinstance(branch_ref, str):
-            raise HTTPException(status_code=400, detail="branch must be a branch name or id")
-        branch = await store.get_branch_by_name(world_id, branch_ref)
-        if branch is None:
-            by_id = await store.get_branch(branch_ref)
-            branch = by_id if by_id is not None and by_id.world_id == world_id else None
-        if branch is None:
-            raise HTTPException(status_code=404, detail=f"no such branch: {branch_ref}")
+        branch = await _branch_ref(store, world_id, body.get("branch") or "main")
         # `own_branch` (D-100): a playthrough of its own — fork `branch` (at its head, or at `from`:
         # a marker or a commit) and start there; removable alone (D-99). Operator-only, like a fork.
         own = body.get("own_branch", False)
@@ -2616,6 +2607,20 @@ def create_app(
                     campaign_id, {"type": "participant_left", "participant_id": participant}
                 )
 
+    # `/openapi.json` also says what every route takes (`uro_server.inputs`): the handlers read
+    # their inputs by hand, so FastAPI alone would publish none of them.
+    def _openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            from fastapi.openapi.utils import get_openapi
+
+            from uro_server.inputs import document_inputs
+
+            app.openapi_schema = document_inputs(
+                get_openapi(title=app.title, version=app.version, routes=app.routes)
+            )
+        return app.openapi_schema
+
+    app.openapi = _openapi  # type: ignore[method-assign]
     return app
 
 

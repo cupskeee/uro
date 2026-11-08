@@ -185,6 +185,17 @@ read; `beat_failed` broadcasts a generic reason (the raw exception is logged, no
 upload caps decompressed size (zip-bomb); `?limit<0` and a non-int `seed` are `400`; `/roster` `404`s
 an unknown campaign.
 
+### Inputs in the OpenAPI (D-111)
+
+`/openapi.json` also says what each route takes (`uro_server/inputs.py`): every query parameter
+(with its default), a model for every JSON body, and the two ways to send a token (`Authorization:
+Bearer …` or `?token=`; every route but `/healthz`). The declarations document and don't validate:
+handlers still read their own inputs and answer a bad one with a 400 naming the field. A test parses
+every handler and fails if one reads a query parameter or body field the declarations lack. A body
+model that would share a component name with a different response shape is published as
+`<Name>Input`. Every `branch` input (query or body, and `DELETE /worlds/{w}/branches/{name}`) takes
+a branch name or a branch id (a name wins); `/log` replies with both.
+
 ### Response schemas (D-74)
 
 Every HTTP route declares its response shape (`uro_server/schemas.py`), so `GET /openapi.json`

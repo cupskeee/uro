@@ -613,7 +613,12 @@ async def run_gauntlet(
             return None
         fid = f"f:{new_id()}"
         events.append(
-            faction_created(faction_id=fid, name=name.strip(), description=description.strip())
+            faction_created(
+                faction_id=fid,
+                name=name.strip(),
+                description=description.strip(),
+                provenance="emergent",  # made in play, like an extracted thread
+            )
         )
         factions_by_key[key] = fid
         faction_words[fid] = [_name_parts(name)]
@@ -636,7 +641,12 @@ async def run_gauntlet(
             return None
         pid = f"p:{new_id()}"
         events.append(
-            place_created(place_id=pid, name=name.strip(), description=description.strip())
+            place_created(
+                place_id=pid,
+                name=name.strip(),
+                description=description.strip(),
+                provenance="emergent",
+            )
         )
         places_by_key[key] = pid
         place_words[pid] = [_name_parts(name)]
@@ -715,7 +725,11 @@ async def run_gauntlet(
         if _not_a_person(name):
             return None
         aid = f"a:{new_id()}"
-        events.append(actor_created(actor_id=aid, name=name.strip(), tier=1, role=role.strip()))
+        events.append(
+            actor_created(
+                actor_id=aid, name=name.strip(), tier=1, role=role.strip(), provenance="emergent"
+            )
+        )
         actors_by_key.setdefault(key, []).append(aid)
         actor_words[aid] = [_name_parts(name)]
         name_to_ref[key] = aid

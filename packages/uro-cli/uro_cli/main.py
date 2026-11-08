@@ -887,12 +887,21 @@ def serve(
     )
     typer.echo(f"  LLM: {llm_source}")
     for t, p in tokens.items():
-        typer.echo(f"  token {t!r} → {p}")
+        role = " (operator)" if t in admin_tokens else ""
+        typer.echo(f"  token {_mask_token(t)} → {p}{role}")
     if cors_origin:
         typer.echo(f"  CORS: allowing {', '.join(cors_origin)}")
     if nats_url:
         typer.echo(f"  live commits: {nats_url} ({subject_prefix}.>) — run `uro outbox relay` too")
     uvicorn.run(fastapi_app, host=host, port=port, log_level="warning")
+
+
+def _mask_token(token: str) -> str:
+    """A token as the startup lines show it: enough to tell tokens apart, never the secret itself.
+    A terminal's scrollback and a process log are read by more people than the token's holder."""
+    if len(token) < 12:
+        return f"****  ({len(token)} chars)"
+    return f"{token[:4]}…{token[-2:]}  ({len(token)} chars)"
 
 
 @app.command()

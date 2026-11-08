@@ -134,9 +134,9 @@ opens, then closes with the code and nothing before it, so a browser's `close` e
 | delete a playthrough (privacy) | `DELETE /campaigns/{c}` removes it and its branch for good; `DELETE /worlds/{w}` removes a whole world. A campaign on the world's `main` branch can't be removed alone, so start each separate game with `own_branch: true`. A campaign removal keeps history another branch shares (a fork made from it) and the player's codex notes for the world; only a world removal takes those |
 | a plot's lifecycle | `state?sections=threads` gives each thread's `developments` (beats that brought it into play) and `beats_live`; `POST /campaigns/{c}/threads/{t}/state` `{state}` (operator token) lets your game open, park or end a plot (the world's rules react, D-102) |
 | plots gone quiet (a journal's "loose ends") | `GET /campaigns/{c}/pacing`: each live thread's beats since it came up; a world that opts in (`[pacing]`) also has the engine nudge the quietest back into the story (D-95, D-96) |
-| world history / timeline | `GET /worlds/{w}/branches`, `GET /worlds/{w}/log` |
+| world history / timeline | `GET /worlds/{w}/branches`, `GET /worlds/{w}/log` (every `branch` input takes a name or an id, D-111) |
 | import a world pack | `POST /worlds/create` (multipart field `pack`: a `.zip` of the pack folder); check it first with `POST /worlds/validate` |
-| show what the machine invented | places, actors, factions and threads have `provenance` (`author`, `ai_backfill`; `""` = not recorded: made in play, by History seeding, a new player character, or before D-108); a claim's `origin` is `ai_backfill` for a backfilled fact (D-108) |
+| show what the machine invented | places, actors, factions and threads have `provenance` (`author`, `ai_backfill`, `emergent` = made in play by the extractor (D-111), `module` = a thread a world rule made; `""` = not recorded: by History seeding, a new player character, or before D-108/D-111); a claim's `origin` is `ai_backfill` for a backfilled fact (D-108) |
 | read or edit a pack | `POST /worlds/parse` returns an uploaded pack as Uro reads it (JSON, every default filled in, nothing imported); `GET /rules/schema` is the world-rules grammar as JSON Schema, and `POST /rules/validate` checks a rule pack on its own (D-105) |
 
 ## Bring your own model: the settings screen

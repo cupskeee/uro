@@ -197,7 +197,13 @@ def test_an_admin_token_alone_opens_no_default_token(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: served.append(app))
     code, out = _uro("serve", "--provider", "stub", "--admin-token", "dev=player-1")
     assert code == 0 and served, out
-    assert "token 'local'" not in out and "1 token(s)" in out and "arbiter=solo" in out
+    assert "1 token(s)" in out and "arbiter=solo" in out
+    token_lines = [ln for ln in out.splitlines() if ln.startswith("  token ")]
+    assert token_lines == ["  token ****  (3 chars) → player-1 (operator)"]  # no default 'local'
+    # the startup lines never print a token itself: a long one shows its ends, a short one nothing
+    secret = "s3cr3t-0123456789abcdef"
+    code, out = _uro("serve", "--provider", "stub", "--token", f"{secret}=alice")
+    assert code == 0 and secret not in out and "s3cr…ef  (23 chars) → alice" in out
     # two tokens for different players is a party
     code, out = _uro("serve", "--provider", "stub", "--token", "a=p1", "--token", "b=p2")
     assert code == 0 and "arbiter=PartyArbiter" in out
