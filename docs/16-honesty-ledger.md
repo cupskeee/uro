@@ -701,3 +701,17 @@ once**, not a measure of quality across models.
 | `/openapi.json` declares every input | **proven (structural)** | `test_openapi_describes_every_input` parses every handler (and the helpers that read for them) and fails on an undeclared query parameter or body field, a JSON body without a model, or a declaration for a route that doesn't exist. The declarations' types are read from the handlers by hand, not checked by the test. |
 | Every `branch` input takes a name or an id | **proven** | one `_branch_ref` on every route; `test_world_log_takes_a_branch_id_as_well_as_a_name` (and a foreign world's id is a 404). |
 | Play-made places, people and factions say `emergent` | **proven** | `test_relational_actor_cascades_faction_and_place`: on the events and on the committed rows. |
+
+## Post-PoC — a campaign's own game, characters, checks shown, fights turn by turn (2026-11-08, D-112)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| A campaign plays the ruleset and settings it names; a fork plays its story's | **proven** | `test_campaign_game.py`: pinned as a snapshot, refused settings start nothing, a What if and a fork of it carry the pin, a root-branch campaign naming nothing plays the world's. |
+| A PC is built from a spec, or refused with located problems | **proven** | `test_character_specs.py` (every built-in, caps from the world's settings, the threat hint), `test_campaign_game.py`, `test_rest_characters.py` (the 400's problems). |
+| A build can change until the story starts, and not after | **proven (structural)** | `amend_character` checks and appends under a branch lock; tests: rebuilt before the first beat, 409 after, a later joiner's own window. |
+| A participant reads only their own character | **proven** | `test_rest_characters.py`: a player is 403 on another's; an operator may name anyone. |
+| A character proposed from a description | **stub-only** | scripted replies (`test_character_proposal.py`): buildable, past a cap, no build at all; the request carries the spec schema and the world's tone. Never run live: whether a model's proposals are good builds is unmeasured. |
+| An unsheeted foe is built from its hint; checks and fights see holdings | **proven** | `test_game_systems_play.py` (a `deadly` foe's sheet, its spec winning; holdings with gear data in a check and both sides of a fight; a pack spec that won't build fails validation). The extractor's `threat` line: **stub-only** (the gauntlet keeps an engine word, drops another); the prompt line has not run live. |
+| A check's player-safe part reaches only its own player | **proven** | the acting PC's outcome carries `player_view`, an NPC's doesn't; the log keeps both; frames omit it when absent. |
+| Fights turn by turn | **proven (deterministic)** | `test_turn_encounters.py`: opens and waits on the PC, refuses free text, illegal actions and targets (committing nothing), plays out to the end with ModeChanged in and out once each, a fork taken mid-fight carries it and the same choice rolls the same dice on both branches; the socket test covers the action and the refusal frame. One PC per fight. |
+| A ruleset with no checks | **proven** | three beats of pure narration; a supplied plan can't invoke a check. |
