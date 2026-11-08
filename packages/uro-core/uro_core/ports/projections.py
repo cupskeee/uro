@@ -145,6 +145,12 @@ class ProjectionQueries(Protocol):
 
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]: ...
 
+    async def open_encounter(
+        self, branch_id: str
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+        """The fight being played turn by turn on the branch (D-112): its start and its turns."""
+        ...
+
     async def holdings(self, branch_id: str, owner_ref: str) -> list[dict[str, Any]]:
         """What an actor holds (D-112): `{item_id, name, data}` per item, by id."""
         ...

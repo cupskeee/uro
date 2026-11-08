@@ -89,6 +89,7 @@ class EventStore(Protocol):
         ruleset_version: str = "",
         seed: int = 0,
         ruleset_config: dict[str, Any] | None = None,
+        encounters: str = "auto",
     ) -> Campaign:
         """Create a campaign on a branch and bind its PC (adopt an existing actor or make
         a fresh one), optionally with a ruleset-built character sheet — CampaignStarted +

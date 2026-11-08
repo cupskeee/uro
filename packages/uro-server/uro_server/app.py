@@ -50,6 +50,7 @@ from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.errors import ExportError
 from uro_core.export import BundleCommit, WorldBundle
+from uro_core.pipeline.encounter import ChoiceRefused, TurnChoice
 from uro_core.pipeline.engine import NARRATION_DONE, BeatMechanics, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
@@ -340,6 +341,8 @@ class ServerDeps:
     # connection (a 1-token call), and rebuild the instance router from the registry without a
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
     refresh_models: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None
+    # D-112: the fight on a campaign waiting on a player's choice, or None
+    fight_status: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None
     # D-112: propose a character build from a description through the bound model:
     # (branch_id, campaign_id or None, ruleset or None, ruleset_config or None, description)
     propose_character: (
@@ -428,7 +431,7 @@ def engine_deps(
         engine.router.recorder = getattr(store, "record_llm_call", None)
 
     async def run_beat(
-        campaign_id: str, participant: str, text: str
+        campaign_id: str, participant: str, text: str, action: dict[str, Any] | None = None
     ) -> AsyncIterator[str | BeatResult | BeatMechanics]:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
@@ -449,6 +452,7 @@ def engine_deps(
             mark_narrated=True,
             on_result=results.append,
             on_mechanics=mechanics.append,
+            action=_turn_choice(action),
         )
         async for chunk in stream:
             if mechanics:  # resolved before the first chunk: the rules' answer goes first
@@ -578,6 +582,13 @@ def engine_deps(
         from uro_core.worldpack.create import seed_world as _seed_world
 
         return await _seed_world(store, world, pack, seed)
+
+    async def fight_status(campaign_id: str) -> dict[str, Any] | None:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise KeyError(campaign_id)
+        wait = await (await engine_for(campaign)).fight_status(campaign)
+        return wait.model_dump() if wait is not None else None
 
     async def propose_character(
         branch_id: str,
@@ -723,6 +734,7 @@ def engine_deps(
         seed_world=seed_world,
         refresh_models=refresh_models,
         propose_character=propose_character,
+        fight_status=fight_status,
         test_connection=test_connection,
         reload_router=reload_router,
         codex_start=codex_start,
@@ -2103,6 +2115,7 @@ def create_app(
                 ruleset_id=ruleset_choice,
                 ruleset_config=config_choice,
                 seed=seed,
+                encounters=str(body.get("encounters") or "auto"),
             )
         except CharSpecError as exc:
             if own:
@@ -2387,6 +2400,20 @@ def create_app(
         if campaign is None:
             raise HTTPException(status_code=404, detail="no such campaign")
         return await _propose(request, campaign.branch_id, campaign_id, body)
+
+    @app.get("/campaigns/{campaign_id}/encounter", **_out(S.EncounterStatus))
+    async def campaign_encounter(campaign_id: str, request: Request) -> dict[str, Any]:
+        """The fight waiting on a player's choice, in a campaign that plays fights turn by turn
+        (D-112): whose turn it is and the legal actions (kind and targets) to send as an intent's
+        `action`. `{encounter: null}` when none is. Any-authed, within a minted token's campaign."""
+        _auth(request)
+        _reject_foreign_scope(request, campaign_id)
+        if deps.fight_status is None:
+            raise HTTPException(status_code=501, detail="encounters not enabled")
+        try:
+            return {"encounter": await deps.fight_status(campaign_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such campaign") from exc
 
     @app.get("/campaigns/{campaign_id}/character", **_out(S.CharacterOut))
     async def campaign_character(campaign_id: str, request: Request) -> dict[str, Any]:
@@ -2730,14 +2757,16 @@ def create_app(
                     break
                 mtype = msg.get("type")
                 if mtype == "intent":
+                    action = msg.get("action")  # D-112: a choice on a fight turn
                     await _run_and_broadcast(
                         deps,
                         arb,
                         hub,
                         campaign_id,
                         participant,
-                        str(msg.get("text", "")),
+                        str(msg.get("text", "") or _action_text(action)),
                         msg.get("id"),
+                        action if isinstance(action, dict) else None,
                     )
                 elif mtype == "table_talk":
                     # The NON-CANON coordination lane (D-38): out-of-world debate/proposals. It only
@@ -2829,6 +2858,25 @@ async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> No
         await ws.send_json(message)
 
 
+def _action_text(action: Any) -> str:
+    """The words a fight-turn action stands for, when a client sends no text with it (D-112)."""
+    if not isinstance(action, dict) or not action.get("kind"):
+        return ""
+    target = action.get("target_id")
+    return f"{action['kind']} {target}" if target else str(action["kind"])
+
+
+def _turn_choice(action: dict[str, Any] | None) -> TurnChoice | None:
+    """A socket's `action` as the engine's TurnChoice; a malformed one is refused like an illegal
+    action, with no legal actions to offer (the client sent something unreadable)."""
+    if action is None:
+        return None
+    try:
+        return TurnChoice.model_validate(action)
+    except ValueError as exc:
+        raise ChoiceRefused(f"an action is {{kind, target_id?, data?}}: {exc}") from exc
+
+
 def _beat_details(result: BeatResult) -> dict[str, object]:
     """What `beat_committed` carries beside the narration (D-98), sent to every seat: each check's
     ruleset-graded outcome (not its trace, which may carry sheet values, D-46), the acting
@@ -2841,6 +2889,8 @@ def _beat_details(result: BeatResult) -> dict[str, object]:
         "world_day": result.world_day,
         "created": [c.model_dump() for c in result.created],
         "threads_changed": [t.model_dump() for t in result.threads_changed],  # D-103
+        # D-112: the fight this beat left waiting on a player's choice, or null
+        "encounter": result.encounter.model_dump() if result.encounter is not None else None,
     }
 
 
@@ -2852,6 +2902,7 @@ async def _run_and_broadcast(
     participant: str,
     text: str,
     intent_id: object = None,
+    action: dict[str, Any] | None = None,
 ) -> None:
     """Admit the intent, run the beat, and broadcast its narration + commit to the whole session
     (docs/08 broadcast-shaped output) — so every connected client sees the SAME beat. A client's
@@ -2891,8 +2942,13 @@ async def _run_and_broadcast(
     )
     chunks: list[str] = []
     result: BeatResult | None = None
+    beat = (
+        deps.run_beat(campaign_id, participant, text)
+        if action is None
+        else deps.run_beat(campaign_id, participant, text, action)  # type: ignore[call-arg]
+    )
     try:
-        async for chunk in deps.run_beat(campaign_id, participant, text):
+        async for chunk in beat:
             if isinstance(chunk, BeatResult):  # the committed beat (D-98), after the narration
                 result = chunk
                 continue
@@ -2925,6 +2981,20 @@ async def _run_and_broadcast(
                 campaign_id,
                 {"type": "narration_chunk", "participant_id": participant, "text": chunk},
             )
+    except ChoiceRefused as exc:
+        # D-112: a fight waits on this player's choice (or the action can't be played): say why
+        # and what they may do. Nothing was committed, and the turn stays theirs — no rotation.
+        await hub.publish(
+            campaign_id,
+            {
+                "type": "encounter_action_refused",
+                "participant_id": participant,
+                "reason": str(exc),
+                "legal_actions": [a.model_dump() for a in exc.legal_actions],
+                **echo,
+            },
+        )
+        return
     except Exception:
         # A beat failure (e.g. a ruleset mismatch, a provider error) must NOT crash the WS
         # connection — broadcast a graceful failure and keep the session alive (mirrors the CLI

@@ -535,6 +535,23 @@ class CharacterProposal(Out):
     problems: list[SpecProblemOut]
 
 
+class ActionSpecOut(Out):
+    kind: str
+    targets: list[str]
+
+
+class EncounterWaitOut(Out):
+    encounter_id: str
+    actor_id: str
+    legal_actions: list[ActionSpecOut]
+
+
+class EncounterStatus(Out):
+    """The fight waiting on a player's choice (D-112), or null."""
+
+    encounter: EncounterWaitOut | None
+
+
 class HoldingOut(Out):
     item_id: str
     name: str

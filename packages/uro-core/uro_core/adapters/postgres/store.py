@@ -728,7 +728,7 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT campaign_id, world_id, branch_id, ruleset_id, ruleset_version, seed, "
-                "ruleset_config "
+                "ruleset_config, encounters "
                 "FROM campaigns WHERE campaign_id = $1",
                 campaign_id,
             )
@@ -751,6 +751,7 @@ class PostgresEventStore:
         ruleset_version: str = "",
         seed: int = 0,
         ruleset_config: dict[str, Any] | None = None,
+        encounters: str = "auto",
     ) -> Campaign:
         """Create a campaign on a branch and bind its PC — either ADOPT an existing world
         actor (the meteor 'continue': play the one who caused it) or CREATE a fresh PC.
@@ -779,6 +780,7 @@ class PostgresEventStore:
                 ruleset_version=ruleset_version,
                 seed=seed,
                 ruleset_config=ruleset_config,
+                encounters=encounters,
             )
         )
         events.append(
@@ -827,7 +829,8 @@ class PostgresEventStore:
                     )
             await conn.execute(
                 "INSERT INTO campaigns (campaign_id, world_id, branch_id, ruleset_id, "
-                "ruleset_version, seed, ruleset_config) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                "ruleset_version, seed, ruleset_config, encounters) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                 campaign_id,
                 world_id,
                 branch_id,
@@ -835,6 +838,7 @@ class PostgresEventStore:
                 ruleset_version,
                 seed,
                 ruleset_config,
+                encounters,
             )
             await self._append(conn, branch_id, events)
         return Campaign(
@@ -845,6 +849,7 @@ class PostgresEventStore:
             ruleset_version=ruleset_version,
             seed=seed,
             ruleset_config=ruleset_config,
+            encounters=encounters,
         )
 
     async def end_campaign(
@@ -1341,7 +1346,7 @@ class PostgresEventStore:
         async with self.pool.acquire() as conn:
             base = (
                 "SELECT campaign_id, world_id, branch_id, ruleset_id, ruleset_version, seed, "
-                "ruleset_config "
+                "ruleset_config, encounters "
                 "FROM campaigns"
             )
             if world_id is None:
@@ -2418,6 +2423,44 @@ class PostgresEventStore:
             if reason is not None:
                 raise ValueError(reason)
             return await self._append(conn, branch_id, events)
+
+    async def open_encounter(
+        self, branch_id: str
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+        """The fight still being played turn by turn on this branch (D-112): its EncounterStarted
+        payload and the payloads of the turns taken since, in order; None when none is open. On the
+        branch's lineage, so a fork taken mid-fight carries the fight."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE chain AS (
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+                    WHERE b.branch_id = $1
+                    UNION ALL
+                    SELECT c.commit_id, c.parent_id, c.depth
+                    FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+                )
+                SELECT e.event_type, e.payload FROM events e JOIN chain ch
+                  ON e.commit_id = ch.commit_id
+                WHERE e.event_type IN ('EncounterStarted', 'EncounterTurnTaken', 'EncounterEnded')
+                ORDER BY ch.depth, e.seq
+                """,
+                branch_id,
+            )
+        started: dict[str, Any] | None = None
+        turns: list[dict[str, Any]] = []
+        for r in rows:
+            p = r["payload"]
+            if r["event_type"] == "EncounterStarted" and p.get("interactive"):
+                started, turns = p, []
+            elif started is None or p.get("encounter_id") != started["encounter_id"]:
+                continue
+            elif r["event_type"] == "EncounterTurnTaken":
+                turns.append(p)
+            elif r["event_type"] == "EncounterEnded":
+                started, turns = None, []
+        return (started, turns) if started is not None else None
 
     async def holdings(self, branch_id: str, owner_ref: str) -> list[dict[str, Any]]:
         """What an actor holds (D-112): each item's id, name and opaque data, by id."""

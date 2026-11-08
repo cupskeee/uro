@@ -18,6 +18,7 @@ from typing import Any
 import typer
 from dotenv import find_dotenv, load_dotenv
 from uro_core.adapters.postgres.store import PostgresEventStore
+from uro_core.pipeline.encounter import ChoiceRefused, TurnChoice
 from uro_core.pipeline.engine import BeatMechanics, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
@@ -686,15 +687,20 @@ def play(
                     break
                 if not intent:
                     continue
+                choice = parse_act(intent)  # D-112: `/act <kind> [target]` on a fight turn
+                if intent.startswith("/act") and choice is None:
+                    typer.echo("usage: /act <action> [target]", err=True)
+                    continue
                 try:
                     results: list[BeatResult] = []
                     mechanics: list[BeatMechanics] = []
                     async for chunk in engine.run_beat_stream(
                         campaign,
                         PARTICIPANT,
-                        intent,
+                        intent[4:].strip() if choice is not None else intent,
                         on_result=results.append,
                         on_mechanics=mechanics.append,
+                        action=TurnChoice.model_validate(choice) if choice else None,
                     ):
                         if mechanics:  # the rules' answer, before the story (D-100)
                             m = mechanics.pop()
@@ -710,6 +716,12 @@ def play(
                         typer.echo(line)
                     if results:
                         day = results[0].world_day
+                except ChoiceRefused as exc:
+                    sys.stdout.write("\n")
+                    for line in refusal_lines(
+                        str(exc), [a.model_dump() for a in exc.legal_actions]
+                    ):
+                        typer.echo(line, err=True)
                 except Exception as exc:
                     sys.stdout.write("\n")
                     typer.echo(f"beat failed ({exc}); nothing was saved — try again.", err=True)
@@ -728,7 +740,25 @@ def _details(result: BeatResult) -> dict[str, Any]:
         "world_day": result.world_day,
         "created": [c.model_dump() for c in result.created],
         "threads_changed": [t.model_dump() for t in result.threads_changed],
+        "encounter": result.encounter.model_dump() if result.encounter is not None else None,
     }
+
+
+def parse_act(line: str) -> dict[str, Any] | None:
+    """`/act <kind> [target]` as an encounter action (D-112), or None when it isn't one."""
+    parts = line.split()
+    if len(parts) < 2 or parts[0] != "/act":
+        return None
+    return {"kind": parts[1], "target_id": parts[2] if len(parts) > 2 else None}
+
+
+def refusal_lines(reason: str, legal: list[dict[str, Any]]) -> list[str]:
+    """A refused fight-turn action and what may be done instead (D-112)."""
+    lines = [f"  ! {reason}"]
+    for a in legal:
+        targets = f" <{'|'.join(a.get('targets') or [])}>" if a.get("targets") else ""
+        lines.append(f"    /act {a['kind']}{targets}")
+    return lines
 
 
 def mechanics_lines(details: dict[str, Any]) -> list[str]:
@@ -757,6 +787,10 @@ def beat_detail_lines(
     for t in details.get("threads_changed") or []:  # D-103: any plot whose state moved
         moved = f"{t['from_state']} → {t['to_state']}" if t["from_state"] else t["to_state"]
         lines.append(f"  ~ plot {moved}: {t['stakes']}")
+    wait = details.get("encounter")  # D-112: the fight waits on a player's choice
+    if wait:
+        lines.append(f"  · the fight waits on {wait['actor_id']}:")
+        lines += refusal_lines("", wait.get("legal_actions") or [])[1:]
     created = details.get("created") or []
     if created:
         lines.append("  + new: " + ", ".join(f"{c['name']} ({c['kind']})" for c in created))
@@ -974,6 +1008,7 @@ def connect(
                     "not_your_turn",
                     "proposal_opened",
                     "intent_rejected",
+                    "encounter_action_refused",  # D-112: a fight waits on a different choice
                 }
                 # intent id → (its text, set when it settles). The server echoes the id as
                 # `intent_id`, so another player's identical text never settles ours. Only a server
@@ -1063,6 +1098,11 @@ def connect(
                             typer.echo(
                                 f"\n  ✗ beat failed ({msg.get('intent', '')!r}): {msg['error']}"
                             )
+                        elif kind == "encounter_action_refused":
+                            for line in refusal_lines(
+                                msg["reason"], msg.get("legal_actions") or []
+                            ):
+                                typer.echo(line)
                         elif kind == "intent_rejected":
                             typer.echo(
                                 f"  ✗ [{msg['participant_id']}] intent rejected: {msg['text']!r}"
@@ -1093,8 +1133,13 @@ def connect(
                         elif intent:
                             rid = uuid.uuid4().hex
                             settled = asyncio.Event()
-                            pending[rid] = (intent, settled)
-                            await ws.send(json.dumps({"type": "intent", "text": intent, "id": rid}))
+                            act = parse_act(intent)  # D-112: `/act <kind> [target]`, a fight turn
+                            text = intent[4:].strip() if act is not None else intent
+                            pending[rid] = (text, settled)
+                            frame: dict[str, Any] = {"type": "intent", "text": text, "id": rid}
+                            if act is not None:
+                                frame["action"] = act
+                            await ws.send(json.dumps(frame))
                             waiting = asyncio.ensure_future(settled.wait())
                             # a slow beat (a reasoning model's extraction) still settles well
                             # inside this; past it, or if the server goes away, the prompt returns
@@ -2052,6 +2097,9 @@ def campaign_new(
     ruleset_config: str = typer.Option(
         None, "--ruleset-config", help="this campaign's own settings as JSON, or @file.json"
     ),
+    encounters: str = typer.Option(
+        "auto", "--encounters", help="auto (a fight is one beat) | turns (pick each action)"
+    ),
 ) -> None:
     """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one).
     With --own-branch it gets a branch of its own, so it can later be removed alone (D-99).
@@ -2100,6 +2148,7 @@ def campaign_new(
                         ruleset_id=ruleset_id,
                         ruleset_config=_json_option(ruleset_config, "--ruleset-config"),
                         seed=seed,
+                        encounters=encounters,
                     )
                 except (CharSpecError, ValueError, KeyError) as exc:
                     _echo_refused(exc)

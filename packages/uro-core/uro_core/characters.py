@@ -55,6 +55,9 @@ __all__ = [
 ]
 
 
+ENCOUNTER_MODES = ("auto", "turns")
+
+
 class CharacterFrozen(ValueError):
     """A character's build can no longer change (D-112); the message says why."""
 
@@ -155,8 +158,13 @@ async def start_campaign(
     ruleset_id: str | None = None,
     ruleset_config: dict[str, Any] | None = None,
     seed: int = 0,
+    encounters: str = "auto",
 ) -> Campaign:
-    """Start a campaign whose game is `campaign_game`'s and whose PC is built from `spec`."""
+    """Start a campaign whose game is `campaign_game`'s and whose PC is built from `spec`.
+    `encounters` is how its fights play: "auto" (one beat) or "turns" (the player picks each of
+    their character's actions)."""
+    if encounters not in ENCOUNTER_MODES:
+        raise ValueError(f"encounters is one of {', '.join(ENCOUNTER_MODES)}")
     game = await campaign_game(
         store, branch_id, ruleset_id=ruleset_id, ruleset_config=ruleset_config
     )
@@ -176,6 +184,7 @@ async def start_campaign(
         ruleset_version=game.pin.version,
         seed=seed,
         ruleset_config=game.own,
+        encounters=encounters,
     )
 
 

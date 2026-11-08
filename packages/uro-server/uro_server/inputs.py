@@ -141,6 +141,11 @@ class CampaignIn(In):
     ruleset_config: dict[str, Any] | None = Field(
         default=None, description="This campaign's own settings, validated by the ruleset."
     )
+    encounters: Literal["auto", "turns"] = Field(
+        default="auto",
+        description="How fights play (D-112): resolved in one beat, or the player picks each of "
+        "their character's actions (`encounter_action`).",
+    )
     seed: int = 0
     own_branch: bool = Field(default=False, description="Fork a playthrough of its own (D-100).")
     from_: str | None = Field(

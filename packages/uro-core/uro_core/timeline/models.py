@@ -87,6 +87,8 @@ class Campaign(BaseModel):
     # D-112: the ruleset settings this campaign pinned (its own, or the story it was forked from);
     # None = it plays under its world's [ruleset.config]
     ruleset_config: dict[str, Any] | None = None
+    # D-112: "auto" (a fight resolves in one beat) or "turns" (its PC's turns are the player's)
+    encounters: str = "auto"
 
 
 # --- Projection read-models (docs/02, 07). Materialized state at a branch head. ---

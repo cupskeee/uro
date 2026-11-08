@@ -511,6 +511,9 @@ class CampaignStartedPayload(BaseModel):
     # D-112: the settings the campaign pinned for itself, or inherited from the story it was forked
     # from (a snapshot). None = it plays under its world's [ruleset.config].
     ruleset_config: dict[str, Any] | None = None
+    # D-112: how this campaign's fights play — "auto" (resolved in one beat, D-29) or "turns" (a
+    # player character's turns are the player's own choice, one beat each)
+    encounters: str = "auto"
 
 
 class CampaignEndedPayload(BaseModel):
@@ -543,6 +546,7 @@ def campaign_started(
     ruleset_version: str = "",
     seed: int = 0,
     ruleset_config: dict[str, Any] | None = None,
+    encounters: str = "auto",
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -557,6 +561,7 @@ def campaign_started(
             ruleset_version=ruleset_version,
             seed=seed,
             ruleset_config=ruleset_config,
+            encounters=encounters,
         ).model_dump(),
     )
 
@@ -798,6 +803,12 @@ class EncounterStartedPayload(BaseModel):
     # No `initiative` field: turn ordering (if any) is ruleset-internal state (D-30) — d20 has
     # initiative, PbtA does not. The old d20-shaped field was orphaned when the runner stopped
     # introspecting encounter state; removed so the shared event names no game-specific mechanic.
+    # D-112, an encounter played turn by turn: it pauses on a player character's turn, and each
+    # later beat rebuilds its state by replaying it from here — the seed its dice come from, the
+    # combatants as they entered (sheets and holdings) — and the choices its players made.
+    interactive: bool = False
+    seed: int | None = None
+    combatants: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EncounterTurnTakenPayload(BaseModel):
@@ -807,6 +818,9 @@ class EncounterTurnTakenPayload(BaseModel):
     action: str
     result: str = ""
     trace: str = ""
+    # D-112: the action a PLAYER chose on this turn (kind, target, data), recorded so the turn
+    # replays; None for a turn the ruleset's own `npc_action` decided (that replays by itself).
+    chosen: dict[str, Any] | None = None
 
 
 class EncounterEndedPayload(BaseModel):
@@ -890,6 +904,9 @@ def encounter_started(
     *,
     encounter_id: str,
     participants: list[str],
+    interactive: bool = False,
+    seed: int | None = None,
+    combatants: list[dict[str, Any]] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -897,7 +914,11 @@ def encounter_started(
         entity_refs=list(participants),
         caused_by=_default_cause(caused_by),
         payload=EncounterStartedPayload(
-            encounter_id=encounter_id, participants=participants
+            encounter_id=encounter_id,
+            participants=participants,
+            interactive=interactive,
+            seed=seed,
+            combatants=combatants or [],
         ).model_dump(),
     )
 
@@ -909,6 +930,7 @@ def encounter_turn_taken(
     action: str,
     result: str = "",
     trace: str = "",
+    chosen: dict[str, Any] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -916,7 +938,12 @@ def encounter_turn_taken(
         entity_refs=[actor_id],
         caused_by=_default_cause(caused_by),
         payload=EncounterTurnTakenPayload(
-            encounter_id=encounter_id, actor_id=actor_id, action=action, result=result, trace=trace
+            encounter_id=encounter_id,
+            actor_id=actor_id,
+            action=action,
+            result=result,
+            trace=trace,
+            chosen=chosen,
         ).model_dump(),
     )
 
