@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from uro_core.rulesets.base import (
     RULESET_API_VERSION,
@@ -24,12 +24,14 @@ from uro_core.rulesets.base import (
     Affordance,
     Award,
     CharSpec,
+    CharSpecError,
     CheckRequest,
     CheckResult,
     Effect,
     EncounterCtx,
     EncounterOutcome,
     EncounterState,
+    SpecProblem,
 )
 from uro_core.rulesets.base import Sheet as SheetDict
 from uro_core.rulesets.rng import Rng
@@ -57,6 +59,40 @@ class BasicConfig(BaseModel):
     max_level: int = Field(5, ge=1, le=20, description="the level ceiling")
     levels_per_win: int = Field(1, ge=0, le=20, description="levels a PC gains for winning a fight")
     heal_on_level: bool = Field(True, description="a level-up restores full hit points")
+
+
+# What a threat hint (D-112) means here: a level and the abilities it changes, and a weapon tier.
+# A spec's own values win over these.
+_THREAT: dict[str, tuple[int, dict[str, int], int]] = {
+    "harmless": (1, {"STR": 8, "DEX": 10, "CON": 8}, 1),
+    "weak": (1, {"STR": 10, "CON": 10}, 1),
+    "average": (1, {}, 1),
+    "strong": (3, {"STR": 14, "CON": 14}, 2),
+    "deadly": (5, {"STR": 16, "DEX": 14, "CON": 16}, 3),
+}
+
+
+class Spec(BaseModel):
+    """What Uro Basic's `new_character` takes (D-112): any of a level, ability scores and a weapon
+    tier; the rest is defaulted. A score is 1-20; an unknown key is refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: int | None = Field(None, ge=1, le=20, description="the starting level")
+    abilities: dict[str, int] = Field(
+        default_factory=dict, description="scores (1-20) for any of STR DEX CON INT WIS CHA"
+    )
+    weapon_tier: int | None = Field(None, ge=1, le=3, description="1 → d6, 2 → d8, 3 → d10")
+
+    @field_validator("abilities")
+    @classmethod
+    def _known_scores(cls, v: dict[str, int]) -> dict[str, int]:
+        for name, score in v.items():
+            if name not in ABILITIES:
+                raise ValueError(f"unknown ability {name!r}; one of {', '.join(ABILITIES)}")
+            if not 1 <= score <= 20:
+                raise ValueError(f"{name} must be 1-20, not {score}")
+        return v
 
 
 class Sheet(BaseModel):
@@ -121,17 +157,22 @@ class UroBasic:
     def config_schema(self) -> dict[str, Any]:
         return BasicConfig.model_json_schema()
 
+    def spec_schema(self) -> dict[str, Any]:
+        return Spec.model_json_schema()
+
     # --- character model ---
 
     def new_character(self, spec: CharSpec, rng: Rng) -> SheetDict:
         # Uro Basic is a level 1-5 system by default (docs/06); clamp here so a high-level spec
         # can't mint an off-spec sheet — the ceiling is Uro Basic's rule, NOT the port's (OQ-13).
-        d = spec.data
-        level = min(self.config.max_level, int(d.get("level", 1)))
-        spec_abilities = d.get("abilities")
-        abilities = (
-            {**_DEFAULT_ABILITIES, **spec_abilities} if spec_abilities else dict(_DEFAULT_ABILITIES)
-        )
+        d = Spec.model_validate(spec.data)
+        t_level, t_abilities, t_tier = _THREAT.get(spec.threat, (1, {}, 1))
+        if d.level is not None and d.level > self.config.max_level:
+            raise CharSpecError(
+                [SpecProblem(loc=["level"], message=f"at most {self.config.max_level} here")]
+            )
+        level = d.level if d.level is not None else min(self.config.max_level, t_level)
+        abilities = {**_DEFAULT_ABILITIES, **t_abilities, **d.abilities}
         con_mod = (abilities.get("CON", 10) - 10) // 2
         dex_mod = (abilities.get("DEX", 10) - 10) // 2
         max_hp = _hp_for_level(con_mod, level)
@@ -142,7 +183,7 @@ class UroBasic:
             ac=10 + dex_mod,
             level=level,
             proficiency=2,  # flat across levels 1-5 (docs/06)
-            weapon_tier=int(d.get("weapon_tier", 1)),
+            weapon_tier=d.weapon_tier if d.weapon_tier is not None else t_tier,
         ).model_dump()
 
     def progression(self, sheet: SheetDict, award: Award) -> SheetDict:
@@ -222,6 +263,15 @@ class UroBasic:
             outcome="success" if success else "failure",
             trace=trace,
             detail={"roll": roll, "modifier": modifier, "total": total, "dc": dc},
+            # the actor's own roll and the difficulty they faced: nothing of anyone else's
+            player_view={
+                "stat": ability,
+                "dice": [roll],
+                "modifier": modifier,
+                "total": total,
+                "against": dc,
+                "band": "success" if success else "failure",
+            },
         )
 
     # --- encounter mode ---

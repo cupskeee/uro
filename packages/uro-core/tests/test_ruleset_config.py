@@ -11,7 +11,7 @@ from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.domain.ids import new_id
 from uro_core.errors import PackError
 from uro_core.rulesets import registry
-from uro_core.rulesets.base import Award, CharSpec, CheckRequest
+from uro_core.rulesets.base import Award, CharSpec, CharSpecError, CheckRequest
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import Campaign
 
@@ -67,7 +67,9 @@ def test_settings_change_the_rules() -> None:
     assert advanced is not None and advanced["stats"]["quick"] == pbta_sheet["stats"]["quick"] + 1
 
     capped = registry.resolve("uro-basic", "", {"max_level": 2})
-    d20 = capped.new_character(CharSpec(data={"level": 5}), Rng(0))
+    with pytest.raises(CharSpecError, match="at most 2"):  # a build over the cap is refused
+        capped.new_character(CharSpec(data={"level": 5}), Rng(0))
+    d20 = capped.new_character(CharSpec(threat="deadly"), Rng(0))  # a hint is capped, not refused
     assert d20["level"] == 2
     assert capped.progression(d20, Award(data={"levels": 3}))["level"] == 2
 
