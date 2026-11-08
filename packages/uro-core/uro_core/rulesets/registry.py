@@ -151,7 +151,14 @@ async def campaign_pin(store: EngineStore, campaign: Campaign) -> RulesetPin:
     """What a campaign plays: its pinned id + version, with its WORLD's settings. (A legacy campaign
     pinned to a different ruleset than its world declares gets that ruleset's defaults.) The id is
     "" when neither the campaign nor its world names one — `resolve` then picks the default, and a
-    server can apply its own default (`uro serve --ruleset`)."""
+    server can apply its own default (`uro serve --ruleset`). A campaign that pinned its own
+    settings (D-112: chosen at start, or inherited from the story it was forked from) plays them."""
+    if campaign.ruleset_config is not None:
+        return RulesetPin(
+            id=campaign.ruleset_id,
+            version=campaign.ruleset_version,
+            config=dict(campaign.ruleset_config),
+        )
     world = await store.world_ruleset(campaign.branch_id)
     rid = campaign.ruleset_id or world.id
     same = (rid or DEFAULT_RULESET_ID) == (world.id or DEFAULT_RULESET_ID)

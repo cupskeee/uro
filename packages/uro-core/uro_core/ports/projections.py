@@ -145,6 +145,22 @@ class ProjectionQueries(Protocol):
 
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]: ...
 
+    async def holdings(self, branch_id: str, owner_ref: str) -> list[dict[str, Any]]:
+        """What an actor holds (D-112): `{item_id, name, data}` per item, by id."""
+        ...
+
+    async def actor_spec(self, branch_id: str, actor_id: str) -> tuple[dict[str, Any], str]:
+        """An actor's spec and threat word (D-112); ({}, "") for none."""
+        ...
+
+    async def inherited_ruleset_pin(self, branch_id: str) -> RulesetPin | None:
+        """The ruleset pin a fork carries from the story it came from (D-112), or None."""
+        ...
+
+    async def character_frozen(self, branch_id: str, actor_id: str) -> str | None:
+        """Why a PC's build can no longer change (D-112), or None while it can."""
+        ...
+
     async def get_item(self, branch_id: str, item_id: str) -> dict[str, Any] | None: ...
 
     async def find_actor_by_name(self, branch_id: str, name: str) -> ActorView | None:

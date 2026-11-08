@@ -54,8 +54,8 @@ from uro_core.pipeline.engine import NARRATION_DONE, BeatMechanics, BeatResult, 
 from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
+from uro_core.rulesets.base import CharSpecError
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
-from uro_core.timeline.gear import starting_gear
 from uro_core.timeline.models import FORK_TIME_SKIP, World
 from uro_core.worldpack.create import SeedResult
 
@@ -161,18 +161,6 @@ def _safe_extract_pack(data: bytes, dest: Path) -> Path:
     raise HTTPException(status_code=400, detail="no world.toml found in the archive")
 
 
-def _new_pc_sheet(ruleset: Any) -> dict[str, Any]:
-    """A default character sheet from the world's ruleset, built with the world's settings
-    (docs/06, D-30, D-62) — like the CLI's `_build_pc_sheet`, so a REST-created PC is sheeted and
-    pinned exactly like a CLI-created one (an empty pin would play the campaign under the
-    server's default ruleset, with mechanics off)."""
-    from uro_core.rulesets.base import CharSpec
-    from uro_core.rulesets.rng import Rng
-
-    sheet: dict[str, Any] = ruleset.new_character(CharSpec(), Rng(0))
-    return sheet
-
-
 _FEED_RETRY_S = 1.0  # first wait before reconnecting a failed live commit feed; doubles to 30s
 
 
@@ -183,6 +171,34 @@ def _effort_field(body: dict[str, Any]) -> str | None:
     if raw is not None and not isinstance(raw, str):
         raise HTTPException(status_code=400, detail="reasoning_effort must be a string")
     return raw
+
+
+def _spec_field(body: dict[str, Any]) -> dict[str, Any] | None:
+    """A body's optional character `spec` (D-112): an object or absent, else a 400."""
+    spec = body.get("spec")
+    if spec is not None and not isinstance(spec, dict):
+        raise HTTPException(status_code=400, detail="spec must be an object")
+    return spec
+
+
+def _game_fields(body: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    """A body's optional `ruleset` (an id) and `ruleset_config` (an object) (D-112): a campaign's
+    own game. Absent = inherit, as before."""
+    rid, config = body.get("ruleset"), body.get("ruleset_config")
+    if rid is not None and (not isinstance(rid, str) or not rid):
+        raise HTTPException(status_code=400, detail="ruleset must be a ruleset id")
+    if config is not None and not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="ruleset_config must be an object")
+    return rid, config
+
+
+def _spec_refused(exc: CharSpecError) -> HTTPException:
+    """A refused character spec as a 400 whose detail names each problem, located in the spec, so a
+    character form can mark the field (`{message, problems: [{loc, message}]}`)."""
+    return HTTPException(
+        status_code=400,
+        detail={"message": str(exc), "problems": [p.model_dump() for p in exc.problems]},
+    )
 
 
 async def _call(hook: Callable[[], Any]) -> None:
@@ -513,13 +529,9 @@ def engine_deps(
         out: list[dict[str, Any]] = []
         for rid in ruleset_registry.available():
             try:  # one plugin's fault (e.g. a setting with no default) must not 500 the listing
-                rs = ruleset_registry.resolve(rid)
-                entry = {
-                    "id": rs.id,
-                    "version": rs.version,
-                    "sheet_schema": rs.sheet_schema(),
-                    "config_schema": rs.config_schema(),
-                }
+                from uro_core.characters import ruleset_info
+
+                entry = ruleset_info(ruleset_registry.resolve(rid))  # + spec_schema (D-112)
             except Exception as exc:
                 entry = {"id": rid, "error": f"can't list with default settings: {exc}"}
             out.append(entry)
@@ -2011,6 +2023,8 @@ def create_app(
             )
         new_pc_name = body.get("new_pc_name")
         adopt_actor_id = body.get("adopt_actor_id")
+        spec = _spec_field(body)
+        ruleset_choice, config_choice = _game_fields(body)
         try:  # a non-int seed (e.g. a JSON array) is TypeError — the block below wouldn't catch it
             seed = int(body.get("seed") or 0)  # docs/18 G-3: reproducible-combat seed
         except (TypeError, ValueError) as exc:
@@ -2042,36 +2056,28 @@ def create_app(
             except (ValueError, KeyError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
-            # Pin the WORLD's declared ruleset + sheet the PC (D-30 + Phase-3), like the CLI `uro
-            # campaign new` path — a REST-created PbtA campaign must not silently fall to an empty
-            # pin + no sheet (which plays it under the default ruleset and disables mechanics).
-            from uro_core.rulesets.registry import resolve_for_branch
+            # The campaign's game (D-112): the one it names, else the story a fork came from, else
+            # its world's, pinned with its settings; the PC is built from `spec` under it. Every
+            # surface goes through `uro_core.characters`, so a REST PbtA campaign is sheeted and
+            # pinned exactly like a CLI one.
+            from uro_core.characters import start_campaign
 
-            pin = await store.world_ruleset(branch.branch_id)
-            ruleset = await resolve_for_branch(store, branch.branch_id)  # with the world's settings
-            pc_sheet: dict[str, Any] | None = None
-            if new_pc_name is not None or (
-                adopt_actor_id is not None
-                and await store.get_sheet(branch.branch_id, adopt_actor_id) is None
-            ):
-                pc_sheet = _new_pc_sheet(ruleset)
-            ruleset_id = ruleset.id  # an adopted, already-sheeted actor keeps its sheet
-            c = await store.start_campaign(
+            c = await start_campaign(
+                store,
                 world_id,
                 branch.branch_id,
                 participant_id=participant,
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
-                pc_sheet=pc_sheet,
-                starting_items=(
-                    await starting_gear(store, branch.branch_id)
-                    if new_pc_name is not None
-                    else None
-                ),
-                ruleset_id=ruleset_id,
-                ruleset_version=pin.version,
+                spec=spec,
+                ruleset_id=ruleset_choice,
+                ruleset_config=config_choice,
                 seed=seed,
             )
+        except CharSpecError as exc:
+            if own:
+                await store.delete_branch(branch.branch_id)
+            raise _spec_refused(exc) from exc
         except (ValueError, KeyError) as exc:  # bad PC choice, or world pins an absent ruleset
             if own:  # nothing half-made: the playthrough's fork goes with the failed start
                 await store.delete_branch(branch.branch_id)
@@ -2125,29 +2131,21 @@ def create_app(
             )
         new_pc_name = body.get("new_pc_name")
         adopt_actor_id = body.get("adopt_actor_id")
+        spec = _spec_field(body)
         try:
-            # Sheet the joining PC from the campaign's ruleset (D-30 + Phase-3), like CLI join.
-            pc_sheet: dict[str, Any] | None = None
-            if new_pc_name is not None or (
-                adopt_actor_id is not None
-                and await store.get_sheet(campaign.branch_id, adopt_actor_id) is None
-            ):
-                from uro_core.rulesets.registry import resolve_for_campaign
+            # Sheet the joining PC from `spec` under the campaign's game (D-112), like CLI join.
+            from uro_core.characters import join_campaign as seat
 
-                pc_sheet = _new_pc_sheet(await resolve_for_campaign(store, campaign))
-            actor_id = await store.bind_pc(
-                campaign_id,
-                participant,
+            actor_id = await seat(
+                store,
+                campaign,
+                participant_id=participant,
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
-                pc_sheet=pc_sheet,
-                starting_items=(
-                    await starting_gear(store, campaign.branch_id)
-                    if new_pc_name is not None
-                    else None
-                ),
-                ruleset_id=campaign.ruleset_id,
+                spec=spec,
             )
+        except CharSpecError as exc:
+            raise _spec_refused(exc) from exc
         except (ValueError, KeyError) as exc:  # bad PC choice, or an absent pinned ruleset
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         result: dict[str, Any] = {"actor_id": actor_id}
@@ -2241,6 +2239,117 @@ def create_app(
             )
         revoked = await deps.revoke_token(target)
         return {"revoked": revoked, "closed_sockets": await _close_revoked_sockets()}
+
+    # --- a participant's character (D-112): preview a build, read your own, rebuild until the
+    # story starts. Self-or-operator, like join: a player reads and changes only their own. ---
+
+    def _whose(request: Request, requested: Any) -> str:
+        _, caller, admin = _scope(request)
+        if caller is None:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        target = str(requested or caller)
+        if target != caller and not admin:
+            raise HTTPException(status_code=403, detail="only an operator may act for another")
+        return target
+
+    @app.post("/worlds/{world_id}/character-preview", **_out(S.CharacterPreview))
+    async def world_character_preview(
+        world_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The sheet a character spec would make in a NEW campaign on a branch of this world (with
+        the `ruleset`/`ruleset_config` that campaign would name), or `{ok: false, problems}` —
+        the same build campaign start runs (D-112). Any-authed; writes nothing."""
+        _auth(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch = await _branch_ref(store, world_id, body.get("branch") or "main")
+        rid, config = _game_fields(body)
+        from uro_core.characters import preview_character
+
+        try:
+            preview = await preview_character(
+                store,
+                branch_id=branch.branch_id,
+                spec=_spec_field(body),
+                ruleset_id=rid,
+                ruleset_config=config,
+            )
+        except (ValueError, KeyError) as exc:  # an unknown ruleset, or settings it refuses
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return preview.model_dump()
+
+    @app.post("/campaigns/{campaign_id}/character/preview", **_out(S.CharacterPreview))
+    async def campaign_character_preview(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The sheet a spec would make under this campaign's game (to join, or to rebuild), or
+        `{ok: false, problems}` (D-112). Any-authed; writes nothing."""
+        _auth(request)
+        store = _mgmt()
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        from uro_core.characters import preview_character
+
+        preview = await preview_character(
+            store, branch_id=campaign.branch_id, spec=_spec_field(body), campaign=campaign
+        )
+        return preview.model_dump()
+
+    @app.get("/campaigns/{campaign_id}/character", **_out(S.CharacterOut))
+    async def campaign_character(campaign_id: str, request: Request) -> dict[str, Any]:
+        """Your own character in this campaign (D-112): its sheet as the ruleset shapes it, what it
+        holds, and whether its build may still change. A player reads only their own (an operator
+        may pass `?participant=`); nothing of anyone else's."""
+        target = _whose(request, request.query_params.get("participant"))
+        store = _mgmt()
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        _reject_foreign_scope(request, campaign_id)
+        from uro_core.characters import own_character
+
+        try:
+            return (await own_character(store, campaign, target)).model_dump()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+
+    @app.patch("/campaigns/{campaign_id}/character", **_out(S.CharacterOut))
+    async def rebuild_campaign_character(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Replace your character's build (`spec`) and/or `name` until the story starts: until the
+        first beat after the character was bound (D-112). A refused spec is a 400 with its problems;
+        after the first beat, a 409 saying why. Self-or-operator (`participant`)."""
+        target = _whose(request, body.get("participant"))
+        store = _mgmt()
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        _reject_foreign_scope(request, campaign_id)
+        name = body.get("name")
+        if name is not None and not isinstance(name, str):
+            raise HTTPException(status_code=400, detail="name must be a string")
+        from uro_core.characters import CharacterFrozen, rebuild_character
+
+        try:
+            view = await rebuild_character(
+                store, campaign, target, spec=_spec_field(body), name=name
+            )
+        except CharSpecError as exc:
+            raise _spec_refused(exc) from exc
+        except CharacterFrozen as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        return view.model_dump()
 
     @app.get("/campaigns/{campaign_id}/roster", **_out(S.Roster))
     async def campaign_roster(campaign_id: str, request: Request) -> dict[str, Any]:

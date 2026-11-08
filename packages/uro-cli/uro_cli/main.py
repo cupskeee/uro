@@ -22,7 +22,7 @@ from uro_core.pipeline.engine import BeatMechanics, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
-from uro_core.rulesets.base import CharSpec, Ruleset
+from uro_core.rulesets.base import CharSpec, CharSpecError, Ruleset
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.gear import starting_gear
 from uro_core.timeline.models import FORK_TIME_SKIP, World
@@ -209,6 +209,33 @@ async def _time_skip_ruleset(pick: Awaitable[Ruleset]) -> Ruleset | None:
             f"warning: no downtime rules — the world's ruleset can't be built: {exc}", err=True
         )
         return None
+
+
+def _json_option(raw: str | None, flag: str) -> dict[str, Any] | None:
+    """A JSON-object option (`--spec`, `--ruleset-config`): inline JSON, or `@path` to a file."""
+    if raw is None:
+        return None
+    try:
+        text = Path(raw[1:]).read_text() if raw.startswith("@") else raw
+        value = json.loads(text)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"{flag}: not a JSON object ({exc})", err=True)
+        raise typer.Exit(2) from exc
+    if not isinstance(value, dict):
+        typer.echo(f"{flag}: not a JSON object", err=True)
+        raise typer.Exit(2)
+    return value
+
+
+def _echo_refused(exc: Exception) -> None:
+    """A refused start, join or build, with each spec problem on its own line (D-112)."""
+    if isinstance(exc, CharSpecError):
+        typer.echo("the character can't be built:", err=True)
+        for p in exc.problems:
+            where = ".".join(str(x) for x in p.loc)
+            typer.echo(f"  {where + ': ' if where else ''}{p.message}", err=True)
+    else:
+        typer.echo(f"error: {exc.args[0] if exc.args else exc}", err=True)
 
 
 def _build_pc_sheet(ruleset: Ruleset) -> dict[str, Any]:
@@ -2016,9 +2043,20 @@ def campaign_new(
     branch_name: str = typer.Option(
         None, "--branch-name", help="with --own-branch: the new branch's name (default play-…)"
     ),
+    spec: str = typer.Option(
+        None, "--spec", help="the PC's build as JSON, or @file.json (the ruleset's spec, D-112)"
+    ),
+    ruleset_id: str = typer.Option(
+        None, "--ruleset", help="this campaign's own ruleset (D-112; default: inherit)"
+    ),
+    ruleset_config: str = typer.Option(
+        None, "--ruleset-config", help="this campaign's own settings as JSON, or @file.json"
+    ),
 ) -> None:
     """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one).
-    With --own-branch it gets a branch of its own, so it can later be removed alone (D-99)."""
+    With --own-branch it gets a branch of its own, so it can later be removed alone (D-99).
+    --ruleset / --ruleset-config give the campaign its own game (D-112); otherwise a fork plays
+    the story it came from's, and any other branch its world's."""
 
     async def _run() -> None:
         if (adopt is None) == (pc is None):
@@ -2046,33 +2084,26 @@ def campaign_new(
                     typer.echo(f"error: {exc}", err=True)
                     raise typer.Exit(1) from exc
             try:  # from here on, a failure removes the playthrough's fork (D-100 review)
-                # Bind the WORLD's declared ruleset (docs/06, D-30): a PbtA world's campaign is
-                # played under uro_pbta, not the hard-coded default. ('' → registry default.)
-                pin = await store.world_ruleset(b.branch_id)
-                # with the world's settings
-                rs = await registry.resolve_for_branch(store, b.branch_id)
-                # Every PC needs a sheet so the mechanics gate can check it. A fresh PC gets one; an
-                # adopted actor is sheeted only if it lacks one (a re-adopted PC keeps its sheet).
-                pc_sheet = None
-                if pc is not None or (
-                    adopt is not None and await store.get_sheet(b.branch_id, adopt) is None
-                ):
-                    pc_sheet = _build_pc_sheet(rs)
-                ruleset_id = rs.id
-                campaign = await store.start_campaign(
-                    w.world_id,
-                    b.branch_id,
-                    participant_id=participant,
-                    adopt_actor_id=adopt,
-                    new_pc_name=pc,
-                    pc_sheet=pc_sheet,
-                    starting_items=(
-                        await starting_gear(store, b.branch_id) if pc is not None else None
-                    ),
-                    ruleset_id=ruleset_id,
-                    ruleset_version=pin.version,
-                    seed=seed,
-                )
+                # The campaign's game and its PC's build (D-112), through the one core path the
+                # server uses: the named ruleset, else a fork's story's, else the world's.
+                from uro_core.characters import start_campaign
+
+                try:
+                    campaign = await start_campaign(
+                        store,
+                        w.world_id,
+                        b.branch_id,
+                        participant_id=participant,
+                        adopt_actor_id=adopt,
+                        new_pc_name=pc,
+                        spec=_json_option(spec, "--spec"),
+                        ruleset_id=ruleset_id,
+                        ruleset_config=_json_option(ruleset_config, "--ruleset-config"),
+                        seed=seed,
+                    )
+                except (CharSpecError, ValueError, KeyError) as exc:
+                    _echo_refused(exc)
+                    raise typer.Exit(1) from exc
             except BaseException:
                 if own_branch:  # nothing half-made: the playthrough's fork goes too
                     await store.delete_branch(b.branch_id)
@@ -2183,6 +2214,9 @@ def campaign_join(
     participant: str = typer.Option(..., "--participant", help="joining participant id"),
     adopt: str = typer.Option(None, "--adopt", help="adopt an existing actor as this PC"),
     pc: str = typer.Option(None, "--pc", help="create a fresh PC with this name"),
+    spec: str = typer.Option(
+        None, "--spec", help="the PC's build as JSON, or @file.json (the ruleset's spec, D-112)"
+    ),
 ) -> None:
     """Seat an ADDITIONAL participant on a live campaign, binding their OWN PC (docs/08, OQ-7) —
     the party-join path. Round-robin free-roam then rotates turns across the party (`uro serve`
@@ -2199,26 +2233,146 @@ def campaign_join(
             if campaign is None:
                 typer.echo(f"no such campaign: {campaign_id}", err=True)
                 raise typer.Exit(1)
-            # Sheet a fresh PC (or an adopted actor lacking one) from the campaign's bound ruleset.
-            pc_sheet = None
-            if pc is not None or (
-                adopt is not None and await store.get_sheet(campaign.branch_id, adopt) is None
-            ):
-                pc_sheet = _build_pc_sheet(await registry.resolve_for_campaign(store, campaign))
-            actor = await store.bind_pc(
-                campaign_id,
-                participant,
-                adopt_actor_id=adopt,
-                new_pc_name=pc,
-                pc_sheet=pc_sheet,
-                starting_items=(
-                    await starting_gear(store, campaign.branch_id) if pc is not None else None
-                ),
-                ruleset_id=campaign.ruleset_id,
-            )
+            # Sheet the PC from --spec under the campaign's game (D-112), as the server does.
+            from uro_core.characters import join_campaign
+
+            try:
+                actor = await join_campaign(
+                    store,
+                    campaign,
+                    participant_id=participant,
+                    adopt_actor_id=adopt,
+                    new_pc_name=pc,
+                    spec=_json_option(spec, "--spec"),
+                )
+            except (CharSpecError, ValueError, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
         finally:
             await store.close()
         typer.echo(f"joined: participant {participant!r} → PC {actor}")
+
+    _run_async(_run)
+
+
+character_app = typer.Typer(
+    no_args_is_help=True,
+    help="A participant's character: preview a build, show it, rebuild it before play (D-112).",
+)
+app.add_typer(character_app, name="character")
+
+
+@character_app.command("show")
+def character_show(
+    campaign_id: str,
+    participant: str = typer.Option(PARTICIPANT, "--participant", help="whose character"),
+) -> None:
+    """A participant's character: name, sheet, what it holds, and whether its build is open."""
+
+    async def _run() -> None:
+        from uro_core.characters import own_character
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            try:
+                view = await own_character(store, c, participant)
+            except KeyError as exc:
+                typer.echo(f"error: {exc.args[0]}", err=True)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        state = "open until the first beat" if view.build_open else f"frozen: {view.frozen_reason}"
+        typer.echo(f"{view.name}  [{view.actor_id}]  ruleset {view.ruleset}  build {state}")
+        typer.echo(json.dumps(view.sheet, indent=2, sort_keys=True))
+        for h in view.holdings:
+            typer.echo(
+                f"  holds {h['name']} [{h['item_id']}]" + (f" {h['data']}" if h["data"] else "")
+            )
+
+    _run_async(_run)
+
+
+@character_app.command("preview")
+def character_preview(
+    target: str = typer.Argument(..., help="a world (a new campaign's game) or a campaign id"),
+    spec: str = typer.Option(None, "--spec", help="the build as JSON, or @file.json"),
+    branch: str = typer.Option("main", "--branch", help="for a world: the branch to start on"),
+    ruleset_id: str = typer.Option(None, "--ruleset", help="for a world: a campaign's own ruleset"),
+    ruleset_config: str = typer.Option(
+        None, "--ruleset-config", help="for a world: a campaign's own settings as JSON"
+    ),
+) -> None:
+    """The sheet a build would make, or the ruleset's problems with it. Writes nothing."""
+
+    async def _run() -> None:
+        from uro_core.characters import preview_character
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            data = _json_option(spec, "--spec")
+            campaign = await store.get_campaign(target)
+            try:
+                if campaign is not None:
+                    preview = await preview_character(
+                        store, branch_id=campaign.branch_id, spec=data, campaign=campaign
+                    )
+                else:
+                    w = await _world_or_exit(store, target)
+                    b = await store.get_branch_by_name(w.world_id, branch)
+                    if b is None:
+                        typer.echo(f"no such branch: {branch}", err=True)
+                        raise typer.Exit(1)
+                    preview = await preview_character(
+                        store,
+                        branch_id=b.branch_id,
+                        spec=data,
+                        ruleset_id=ruleset_id,
+                        ruleset_config=_json_option(ruleset_config, "--ruleset-config"),
+                    )
+            except (ValueError, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        if not preview.ok:
+            _echo_refused(CharSpecError(preview.problems))
+            raise typer.Exit(1)
+        typer.echo(f"ok ({preview.ruleset}):")
+        typer.echo(json.dumps(preview.sheet, indent=2, sort_keys=True))
+
+    _run_async(_run)
+
+
+@character_app.command("rebuild")
+def character_rebuild(
+    campaign_id: str,
+    participant: str = typer.Option(PARTICIPANT, "--participant", help="whose character"),
+    spec: str = typer.Option(None, "--spec", help="the new build as JSON, or @file.json"),
+    name: str = typer.Option(None, "--name", help="a new name"),
+) -> None:
+    """Replace a character's build and/or name before the story starts (until the first beat after
+    it was bound); after that only play changes a character."""
+
+    async def _run() -> None:
+        from uro_core.characters import CharacterFrozen, rebuild_character
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            try:
+                view = await rebuild_character(
+                    store, c, participant, spec=_json_option(spec, "--spec"), name=name
+                )
+            except (CharSpecError, CharacterFrozen, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        typer.echo(f"rebuilt: {view.name} [{view.actor_id}]")
 
     _run_async(_run)
 

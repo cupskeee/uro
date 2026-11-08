@@ -122,11 +122,25 @@ class MarkerIn(In):
 # --- campaigns ---
 
 
+_SPEC = Field(
+    default=None,
+    description="The character build, as the ruleset's `spec_schema` (`GET /rulesets`) describes "
+    "it (D-112). Absent = the ruleset's default character.",
+)
+
+
 class CampaignIn(In):
     participant: str
     branch: str = Field(default="main", description="A branch name or id.")
     new_pc_name: str | None = None
     adopt_actor_id: str | None = None
+    spec: dict[str, Any] | None = _SPEC
+    ruleset: str | None = Field(
+        default=None, description="This campaign's own ruleset (D-112). Absent = inherit."
+    )
+    ruleset_config: dict[str, Any] | None = Field(
+        default=None, description="This campaign's own settings, validated by the ruleset."
+    )
     seed: int = 0
     own_branch: bool = Field(default=False, description="Fork a playthrough of its own (D-100).")
     from_: str | None = Field(
@@ -139,6 +153,24 @@ class JoinIn(In):
     participant: str
     new_pc_name: str | None = None
     adopt_actor_id: str | None = None
+    spec: dict[str, Any] | None = _SPEC
+
+
+class WorldCharacterPreviewIn(In):
+    spec: dict[str, Any] | None = _SPEC
+    branch: str = Field(default="main", description="A branch name or id.")
+    ruleset: str | None = None
+    ruleset_config: dict[str, Any] | None = None
+
+
+class CampaignCharacterPreviewIn(In):
+    spec: dict[str, Any] | None = _SPEC
+
+
+class CharacterPatch(In):
+    spec: dict[str, Any] | None = _SPEC
+    name: str | None = None
+    participant: str | None = Field(default=None, description="Absent = the caller.")
 
 
 class MintIn(In):
@@ -201,6 +233,9 @@ BODIES: dict[tuple[str, str], type[BaseModel]] = {
     ("POST", "/campaigns/{campaign_id}/dry-run"): DryRunIn,
     ("POST", "/campaigns/{campaign_id}/end"): EndIn,
     ("POST", "/campaigns/{campaign_id}/codex"): CodexNoteIn,
+    ("POST", "/worlds/{world_id}/character-preview"): WorldCharacterPreviewIn,
+    ("POST", "/campaigns/{campaign_id}/character/preview"): CampaignCharacterPreviewIn,
+    ("PATCH", "/campaigns/{campaign_id}/character"): CharacterPatch,
 }
 
 
@@ -264,6 +299,11 @@ QUERY: dict[tuple[str, str], list[Query]] = {
         )
     ],
     ("GET", "/campaigns/{campaign_id}/chronicle"): [_LIMIT[20]],
+    ("GET", "/campaigns/{campaign_id}/character"): [
+        Query(
+            "participant", "Whose character (an operator may read anyone's). Absent = the caller."
+        )
+    ],
     ("GET", "/campaigns/{campaign_id}/codex"): [
         Query("participant", "Whose notes (an operator may read anyone's). Absent = the caller.")
     ],

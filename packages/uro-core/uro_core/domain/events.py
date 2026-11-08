@@ -194,6 +194,19 @@ class ActorCreatedPayload(BaseModel):
     role: str = ""
     aliases: list[str] = Field(default_factory=list)
     provenance: str = ""  # D-108: "author" or "ai_backfill" (a pack); "" = not recorded
+    # D-112: what the ruleset builds this actor's sheet from, the first time one is needed: a
+    # pack's opaque spec, and the engine's neutral danger word (rulesets.base.THREAT_LEVELS).
+    spec: dict[str, Any] = Field(default_factory=dict)
+    threat: str = ""
+
+
+class ActorRenamedPayload(BaseModel):
+    """A character's name changed (D-112): only while its build is still open (before the story
+    has used it), so the record never narrates one name and shows another for the same past."""
+
+    v: int = 1
+    actor_id: str
+    name: str
 
 
 class ActorPromotedPayload(BaseModel):
@@ -240,6 +253,8 @@ def actor_created(
     aliases: list[str] | None = None,
     caused_by: CausedBy | None = None,
     provenance: str = "",
+    spec: dict[str, Any] | None = None,
+    threat: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="ActorCreated",
@@ -252,7 +267,18 @@ def actor_created(
             role=role,
             aliases=aliases or [],
             provenance=provenance,
+            spec=spec or {},
+            threat=threat,
         ).model_dump(),
+    )
+
+
+def actor_renamed(*, actor_id: str, name: str, caused_by: CausedBy | None = None) -> DomainEvent:
+    return DomainEvent(
+        event_type="ActorRenamed",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=ActorRenamedPayload(actor_id=actor_id, name=name).model_dump(),
     )
 
 
@@ -481,6 +507,9 @@ class CampaignStartedPayload(BaseModel):
     ruleset_id: str = ""  # the ruleset this campaign is played under (docs/06, 12)
     ruleset_version: str = ""  # pinned at creation so a later play/fork rebinds the same ruleset
     seed: int = 0
+    # D-112: the settings the campaign pinned for itself, or inherited from the story it was forked
+    # from (a snapshot). None = it plays under its world's [ruleset.config].
+    ruleset_config: dict[str, Any] | None = None
 
 
 class CampaignEndedPayload(BaseModel):
@@ -512,6 +541,7 @@ def campaign_started(
     ruleset_id: str = "",
     ruleset_version: str = "",
     seed: int = 0,
+    ruleset_config: dict[str, Any] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -525,6 +555,7 @@ def campaign_started(
             ruleset_id=ruleset_id,
             ruleset_version=ruleset_version,
             seed=seed,
+            ruleset_config=ruleset_config,
         ).model_dump(),
     )
 
@@ -733,6 +764,7 @@ class ItemCreatedPayload(BaseModel):
     name: str
     owner_ref: str = ""
     kind: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)  # D-112: opaque, a pack's or a ruleset's
 
 
 class ItemTransferredPayload(BaseModel):
@@ -807,6 +839,7 @@ def item_created(
     name: str,
     owner_ref: str = "",
     kind: str = "",
+    data: dict[str, Any] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -814,7 +847,7 @@ def item_created(
         entity_refs=[item_id, owner_ref] if owner_ref else [item_id],
         caused_by=_default_cause(caused_by),
         payload=ItemCreatedPayload(
-            item_id=item_id, name=name, owner_ref=owner_ref, kind=kind
+            item_id=item_id, name=name, owner_ref=owner_ref, kind=kind, data=data or {}
         ).model_dump(),
     )
 

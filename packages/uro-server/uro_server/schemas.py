@@ -163,6 +163,7 @@ class RulesetInfo(Out):
     id: str
     version: str | None = None
     sheet_schema: dict[str, Any] | None = None
+    spec_schema: dict[str, Any] | None = None  # D-112: what a character spec may hold; {} = any
     config_schema: dict[str, Any] | None = None
     error: str | None = None  # set instead of the schemas when it can't be listed
 
@@ -359,6 +360,8 @@ class ActorRow(Out):
     aliases: list[str]
     status: str
     provenance: str  # D-108: "author" | "ai_backfill"; "" = not recorded (see D-108's correction)
+    spec: dict[str, Any]  # D-112: what its sheet is built from when one is first needed
+    threat: str  # D-112: the engine's neutral danger word, "" = none
 
 
 class ClaimRow(Out):
@@ -406,6 +409,7 @@ class ItemRow(Out):
     name: str
     kind: str
     owner_ref: str
+    data: dict[str, Any]  # D-112: opaque, a pack's or a ruleset's
 
 
 class FactionRow(Out):
@@ -504,6 +508,40 @@ class CampaignView(Campaign):
 
     model_config = ConfigDict(extra="forbid")
     seed: int | None = None  # type: ignore[assignment]
+
+
+class SpecProblemOut(Out):
+    loc: list[str | int]
+    message: str
+
+
+class CharacterPreview(Out):
+    """A character build checked without writing (D-112): the sheet, or the ruleset's problems."""
+
+    ok: bool
+    ruleset: str
+    sheet: dict[str, Any] | None = None
+    problems: list[SpecProblemOut]
+
+
+class HoldingOut(Out):
+    item_id: str
+    name: str
+    data: dict[str, Any]
+
+
+class CharacterOut(Out):
+    """A participant's own character (D-112)."""
+
+    campaign_id: str
+    participant_id: str
+    actor_id: str
+    name: str
+    ruleset: str
+    sheet: dict[str, Any] | None = None
+    holdings: list[HoldingOut]
+    build_open: bool
+    frozen_reason: str
 
 
 class CampaignCreated(Out):

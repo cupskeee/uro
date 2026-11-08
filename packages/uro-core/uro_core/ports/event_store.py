@@ -88,6 +88,7 @@ class EventStore(Protocol):
         ruleset_id: str = "",
         ruleset_version: str = "",
         seed: int = 0,
+        ruleset_config: dict[str, Any] | None = None,
     ) -> Campaign:
         """Create a campaign on a branch and bind its PC (adopt an existing actor or make
         a fresh one), optionally with a ruleset-built character sheet — CampaignStarted +
@@ -146,6 +147,12 @@ class EventStore(Protocol):
 
     async def append_beat(self, branch_id: str, events: list[DomainEvent]) -> Commit:
         """Append one beat commit to the branch head and advance it — one transaction."""
+        ...
+
+    async def amend_character(
+        self, branch_id: str, actor_id: str, events: list[DomainEvent]
+    ) -> Commit:
+        """Commit a change to a PC's build while it is open (D-112); `ValueError` names why not."""
         ...
 
     async def days_since_last_beat(self, branch_id: str) -> int:

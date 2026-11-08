@@ -84,6 +84,9 @@ class Campaign(BaseModel):
     ruleset_id: str = ""  # the ruleset this campaign is bound to (docs/06); "" → registry default
     ruleset_version: str = ""
     seed: int = 0  # mechanics RNG seed (docs/18 G-3) — makes a played campaign's combat replayable
+    # D-112: the ruleset settings this campaign pinned (its own, or the story it was forked from);
+    # None = it plays under its world's [ruleset.config]
+    ruleset_config: dict[str, Any] | None = None
 
 
 # --- Projection read-models (docs/02, 07). Materialized state at a branch head. ---
