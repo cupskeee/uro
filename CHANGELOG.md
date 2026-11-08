@@ -9,6 +9,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-08
+
+Upgrading: no migration. Current Anthropic models (Opus 4.7 and later, Sonnet 5 and 5.5, Haiku
+5.5, Fable) now work as any role. For embedders, `ProviderError` gains `detail`, and
+`POST /providers/{id}/test` replies with `model`.
+
 ### Fixed
 
 - Current Anthropic models work (D-110): the adapter no longer sends `temperature` or a JSON
