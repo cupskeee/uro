@@ -382,7 +382,7 @@ async def test_a_failed_probe_says_why_and_which_model(
         await store.delete_connection(ant)
     assert out["ok"] is False and out["model"] == "claude-opus-5-5"
     assert out["detail"] == (
-        "anthropic:claude-opus-5-5 failed (ProviderError) — "
+        "anthropic:claude-opus-5-5 failed: ProviderError ← HTTPStatusError (HTTP 401) — "
         "HTTP 401 authentication_error: invalid x-api-key"
     )
     assert "sk-ant" not in out["detail"]
