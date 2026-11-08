@@ -79,8 +79,9 @@ class WorldGenesisPayload(BaseModel):
     # The pack's `[pacing]` settings (D-95): when the engine names a quiet plot to the narrator.
     # {} = the defaults (`pipeline/pacing.py`).
     pacing: dict[str, Any] = Field(default_factory=dict)
-    # A fresh PC's starting gear in this world (D-97): item names, the game's own. [] = none.
-    starting_gear: list[str] = Field(default_factory=list)
+    # A fresh PC's starting gear in this world (D-97): item names, the game's own, or
+    # `{name, data}` with opaque data a ruleset may read (D-112). [] = none.
+    starting_gear: list[str | dict[str, Any]] = Field(default_factory=list)
     # What a platform lists the world by (D-104): the pack's pitch and its `[content]` declaration
     # ({} = none declared), and the whole parsed manifest, so a later step that reads the manifest
     # (History seeding) works from the world alone. {} for a world made without a pack.
@@ -118,7 +119,7 @@ def world_genesis(
     rule_pack: dict[str, Any] | None = None,
     clock: dict[str, Any] | None = None,
     pacing: dict[str, Any] | None = None,
-    starting_gear: list[str] | None = None,
+    starting_gear: list[str | dict[str, Any]] | None = None,
     description: str = "",
     content: dict[str, Any] | None = None,
     manifest: dict[str, Any] | None = None,
@@ -194,6 +195,19 @@ class ActorCreatedPayload(BaseModel):
     role: str = ""
     aliases: list[str] = Field(default_factory=list)
     provenance: str = ""  # D-108: "author" or "ai_backfill" (a pack); "" = not recorded
+    # D-112: what the ruleset builds this actor's sheet from, the first time one is needed: a
+    # pack's opaque spec, and the engine's neutral danger word (rulesets.base.THREAT_LEVELS).
+    spec: dict[str, Any] = Field(default_factory=dict)
+    threat: str = ""
+
+
+class ActorRenamedPayload(BaseModel):
+    """A character's name changed (D-112): only while its build is still open (before the story
+    has used it), so the record never narrates one name and shows another for the same past."""
+
+    v: int = 1
+    actor_id: str
+    name: str
 
 
 class ActorPromotedPayload(BaseModel):
@@ -240,6 +254,8 @@ def actor_created(
     aliases: list[str] | None = None,
     caused_by: CausedBy | None = None,
     provenance: str = "",
+    spec: dict[str, Any] | None = None,
+    threat: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="ActorCreated",
@@ -252,7 +268,18 @@ def actor_created(
             role=role,
             aliases=aliases or [],
             provenance=provenance,
+            spec=spec or {},
+            threat=threat,
         ).model_dump(),
+    )
+
+
+def actor_renamed(*, actor_id: str, name: str, caused_by: CausedBy | None = None) -> DomainEvent:
+    return DomainEvent(
+        event_type="ActorRenamed",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=ActorRenamedPayload(actor_id=actor_id, name=name).model_dump(),
     )
 
 
@@ -481,6 +508,12 @@ class CampaignStartedPayload(BaseModel):
     ruleset_id: str = ""  # the ruleset this campaign is played under (docs/06, 12)
     ruleset_version: str = ""  # pinned at creation so a later play/fork rebinds the same ruleset
     seed: int = 0
+    # D-112: the settings the campaign pinned for itself, or inherited from the story it was forked
+    # from (a snapshot). None = it plays under its world's [ruleset.config].
+    ruleset_config: dict[str, Any] | None = None
+    # D-112: how this campaign's fights play — "auto" (resolved in one beat, D-29) or "turns" (a
+    # player character's turns are the player's own choice, one beat each)
+    encounters: str = "auto"
 
 
 class CampaignEndedPayload(BaseModel):
@@ -512,6 +545,8 @@ def campaign_started(
     ruleset_id: str = "",
     ruleset_version: str = "",
     seed: int = 0,
+    ruleset_config: dict[str, Any] | None = None,
+    encounters: str = "auto",
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -525,6 +560,8 @@ def campaign_started(
             ruleset_id=ruleset_id,
             ruleset_version=ruleset_version,
             seed=seed,
+            ruleset_config=ruleset_config,
+            encounters=encounters,
         ).model_dump(),
     )
 
@@ -655,6 +692,16 @@ class CheckResolvedPayload(BaseModel):
     affordance: str
     outcome: str
     trace: str = ""
+    # D-112: the part of the check the ruleset says a player may see (the acting character's own
+    # dice and band); None when it declares none. Sent to players only for their own PC's checks.
+    player_view: dict[str, Any] | None = None
+
+
+def gear_item(entry: str | dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """A starting-gear entry (D-97, D-112) as (name, data): a bare name, or `{name, data}`."""
+    if isinstance(entry, str):
+        return entry, {}
+    return str(entry.get("name", "")), dict(entry.get("data") or {})
 
 
 def check_resolved(
@@ -663,6 +710,7 @@ def check_resolved(
     affordance: str,
     outcome: str,
     trace: str = "",
+    player_view: dict[str, Any] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -670,7 +718,11 @@ def check_resolved(
         entity_refs=[actor_id],
         caused_by=_default_cause(caused_by),
         payload=CheckResolvedPayload(
-            actor_id=actor_id, affordance=affordance, outcome=outcome, trace=trace
+            actor_id=actor_id,
+            affordance=affordance,
+            outcome=outcome,
+            trace=trace,
+            player_view=player_view,
         ).model_dump(),
     )
 
@@ -733,6 +785,7 @@ class ItemCreatedPayload(BaseModel):
     name: str
     owner_ref: str = ""
     kind: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)  # D-112: opaque, a pack's or a ruleset's
 
 
 class ItemTransferredPayload(BaseModel):
@@ -750,6 +803,13 @@ class EncounterStartedPayload(BaseModel):
     # No `initiative` field: turn ordering (if any) is ruleset-internal state (D-30) — d20 has
     # initiative, PbtA does not. The old d20-shaped field was orphaned when the runner stopped
     # introspecting encounter state; removed so the shared event names no game-specific mechanic.
+    # D-112, an encounter played turn by turn: it pauses on a player character's turn, and each
+    # later beat rebuilds its state by replaying it from here — the seed its dice come from, the
+    # combatants as they entered (sheets and holdings) — and the choices its players made.
+    interactive: bool = False
+    seed: int | None = None
+    combatants: list[dict[str, Any]] = Field(default_factory=list)
+    ruleset_id: str = ""  # the ruleset that must replay it (a turn-by-turn fight only)
 
 
 class EncounterTurnTakenPayload(BaseModel):
@@ -759,6 +819,9 @@ class EncounterTurnTakenPayload(BaseModel):
     action: str
     result: str = ""
     trace: str = ""
+    # D-112: the action a PLAYER chose on this turn (kind, target, data), recorded so the turn
+    # replays; None for a turn the ruleset's own `npc_action` decided (that replays by itself).
+    chosen: dict[str, Any] | None = None
 
 
 class EncounterEndedPayload(BaseModel):
@@ -807,6 +870,7 @@ def item_created(
     name: str,
     owner_ref: str = "",
     kind: str = "",
+    data: dict[str, Any] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -814,7 +878,7 @@ def item_created(
         entity_refs=[item_id, owner_ref] if owner_ref else [item_id],
         caused_by=_default_cause(caused_by),
         payload=ItemCreatedPayload(
-            item_id=item_id, name=name, owner_ref=owner_ref, kind=kind
+            item_id=item_id, name=name, owner_ref=owner_ref, kind=kind, data=data or {}
         ).model_dump(),
     )
 
@@ -841,6 +905,10 @@ def encounter_started(
     *,
     encounter_id: str,
     participants: list[str],
+    interactive: bool = False,
+    seed: int | None = None,
+    combatants: list[dict[str, Any]] | None = None,
+    ruleset_id: str = "",
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -848,7 +916,12 @@ def encounter_started(
         entity_refs=list(participants),
         caused_by=_default_cause(caused_by),
         payload=EncounterStartedPayload(
-            encounter_id=encounter_id, participants=participants
+            encounter_id=encounter_id,
+            participants=participants,
+            interactive=interactive,
+            seed=seed,
+            combatants=combatants or [],
+            ruleset_id=ruleset_id,
         ).model_dump(),
     )
 
@@ -860,6 +933,7 @@ def encounter_turn_taken(
     action: str,
     result: str = "",
     trace: str = "",
+    chosen: dict[str, Any] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -867,7 +941,12 @@ def encounter_turn_taken(
         entity_refs=[actor_id],
         caused_by=_default_cause(caused_by),
         payload=EncounterTurnTakenPayload(
-            encounter_id=encounter_id, actor_id=actor_id, action=action, result=result, trace=trace
+            encounter_id=encounter_id,
+            actor_id=actor_id,
+            action=action,
+            result=result,
+            trace=trace,
+            chosen=chosen,
         ).model_dump(),
     )
 

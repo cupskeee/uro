@@ -28,12 +28,14 @@ from uro_core.rulesets.base import (
     Affordance,
     Award,
     CharSpec,
+    CharSpecError,
     CheckRequest,
     CheckResult,
     Effect,
     EncounterCtx,
     EncounterOutcome,
     EncounterState,
+    SpecProblem,
 )
 from uro_core.rulesets.base import Sheet as SheetDict
 from uro_core.rulesets.rng import Rng
@@ -56,6 +58,41 @@ class PbtAConfig(BaseModel):
     )
     xp_per_advance: int = Field(5, ge=1, le=100, description="XP that raises the weakest stat")
     stat_cap: int = Field(3, ge=-1, le=10, description="the highest a stat can go")
+
+
+# What a threat hint (D-112) means here: a stat spread (capped by `stat_cap`). A spec's own wins.
+_THREAT: dict[str, dict[str, int]] = {
+    "harmless": {"forceful": -1, "clever": 0, "quick": 0, "steady": -1},
+    "weak": {"forceful": 0, "clever": 0, "quick": 0, "steady": 0},
+    "average": {},
+    "strong": {"forceful": 2, "clever": 1, "quick": 1, "steady": 1},
+    "deadly": {"forceful": 3, "clever": 2, "quick": 2, "steady": 2},
+}
+
+
+class StatSpread(BaseModel):
+    """Any of the four stats, from -3 (named fields, D-112 review); the cap is the world's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    forceful: int | None = Field(default=None, ge=-3)
+    clever: int | None = Field(default=None, ge=-3)
+    quick: int | None = Field(default=None, ge=-3)
+    steady: int | None = Field(default=None, ge=-3)
+
+
+class Spec(BaseModel):
+    """What Uro PbtA's `new_character` takes (D-112): any of its four stats (-3 to the cap), and a
+    starting harm, conditions and XP. An unknown key is refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stats: StatSpread = Field(
+        default_factory=lambda: StatSpread(), description="any of the four stats, from -3"
+    )
+    harm: int = Field(0, ge=0, le=_HARM_MAX - 1)
+    conditions: list[str] = Field(default_factory=list)
+    xp: int = Field(0, ge=0)
 
 
 class Sheet(BaseModel):
@@ -104,17 +141,25 @@ class UroPbtA:
     def config_schema(self) -> dict[str, Any]:
         return PbtAConfig.model_json_schema()
 
+    def spec_schema(self) -> dict[str, Any]:
+        return Spec.model_json_schema()
+
     # --- character model ---
 
     def new_character(self, spec: CharSpec, rng: Rng) -> SheetDict:
-        d = spec.data
-        stats = {**_DEFAULT_STATS, **(d.get("stats") or {})}
-        return Sheet(
-            stats=stats,
-            harm=int(d.get("harm", 0)),
-            conditions=list(d.get("conditions", [])),
-            xp=int(d.get("xp", 0)),
-        ).model_dump()
+        d = Spec.model_validate(spec.data)
+        chosen = d.stats.model_dump(exclude_none=True)
+        over = [k for k, v in chosen.items() if v > self.config.stat_cap]
+        if over:
+            raise CharSpecError(
+                [
+                    SpecProblem(loc=["stats", k], message=f"at most {self.config.stat_cap} here")
+                    for k in over
+                ]
+            )
+        hinted = {k: min(v, self.config.stat_cap) for k, v in _THREAT.get(spec.threat, {}).items()}
+        stats = {**_DEFAULT_STATS, **hinted, **chosen}
+        return Sheet(stats=stats, harm=d.harm, conditions=list(d.conditions), xp=d.xp).model_dump()
 
     def progression(self, sheet: SheetDict, award: Award) -> SheetDict:
         s = Sheet.model_validate(sheet)
@@ -192,6 +237,13 @@ class UroPbtA:
             trace=trace,
             detail={"dice": dice, "stat": mod, "total": total},
             sheet=after,
+            player_view={
+                "stat": stat,
+                "dice": [dice],
+                "modifier": mod,
+                "total": total,
+                "band": label,
+            },
         )
 
     # --- conflict (the move-exchange; no initiative, no rounds) ---

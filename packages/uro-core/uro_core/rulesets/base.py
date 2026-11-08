@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from uro_core.rulesets.rng import Rng
 
@@ -83,10 +83,88 @@ Sheet = dict[str, Any]
 # --- character model ---
 
 
+# How dangerous an actor is, in words every game can read (D-112): the one engine-defined hint a
+# spec carries. A pack's actor or the extractor may set it; the RULESET decides what it means (a
+# level, a dice pool, nothing at all). "" = no hint.
+THREAT_LEVELS: tuple[str, ...] = ("harmless", "weak", "average", "strong", "deadly")
+
+
 class CharSpec(BaseModel):
     """Ruleset-opaque character-creation input. The ruleset interprets `data` (uro_basic reads
-    `abilities`/`level`/`weapon_tier`; uro_pbta reads its stat spread + playbook)."""
+    `abilities`/`level`/`weapon_tier`; uro_pbta reads its stat spread + playbook). `threat` is the
+    engine's one neutral hint (`THREAT_LEVELS`, D-112); a ruleset may read it or ignore it, and a
+    value in `data` should win over what the hint implies."""
 
+    data: dict[str, Any] = Field(default_factory=dict)
+    threat: str = ""
+
+
+class SpecProblem(BaseModel):
+    """One reason a character spec can't be built (D-112), located like a rule-pack problem:
+    `loc` is the path inside the spec's `data` (empty = the spec as a whole)."""
+
+    loc: list[str | int] = Field(default_factory=list)
+    message: str
+
+
+class CharSpecError(ValueError):
+    """`new_character` refuses a spec (D-112) with the ruleset's own problems. A ruleset may raise
+    this, or a pydantic `ValidationError` from its own spec model; `build_character` turns either
+    into problems. A ruleset that never raises accepts every spec, as before."""
+
+    def __init__(self, problems: list[SpecProblem]) -> None:
+        self.problems = problems
+        super().__init__("; ".join(_problem_text(p) for p in problems) or "invalid spec")
+
+
+def _problem_text(p: SpecProblem) -> str:
+    return f"{'.'.join(str(x) for x in p.loc)}: {p.message}" if p.loc else p.message
+
+
+def spec_problems(exc: Exception) -> list[SpecProblem]:
+    """The located problems of a refused spec: a `CharSpecError`'s own, or a pydantic
+    `ValidationError`'s (the ruleset validated `data` into its spec model)."""
+    if isinstance(exc, CharSpecError):
+        return exc.problems
+    if isinstance(exc, ValidationError):
+        return [
+            SpecProblem(loc=[x for x in e["loc"] if isinstance(x, str | int)], message=e["msg"])
+            for e in exc.errors(include_url=False)
+        ]
+    return [SpecProblem(message=str(exc) or type(exc).__name__)]
+
+
+def build_character(ruleset: Any, spec: CharSpec, rng: Any) -> Sheet:
+    """`ruleset.new_character`, with a refused spec as a `CharSpecError` whatever the ruleset
+    raised (its own error, or a `ValidationError`/`ValueError`/`TypeError` from validating), and
+    an unknown threat word refused before the ruleset sees it."""
+    if spec.threat and spec.threat not in THREAT_LEVELS:
+        raise CharSpecError(
+            [SpecProblem(loc=["threat"], message=f"one of {', '.join(THREAT_LEVELS)}")]
+        )
+    try:
+        sheet: Sheet = ruleset.new_character(spec, rng)
+    except CharSpecError:
+        raise
+    except (ValidationError, ValueError, TypeError, KeyError) as exc:
+        raise CharSpecError(spec_problems(exc)) from exc
+    return sheet
+
+
+def spec_schema_of(ruleset: Any) -> dict[str, Any]:
+    """The JSON Schema of the `data` a ruleset's `new_character` takes (D-112), or `{}` (any object)
+    for a ruleset that doesn't declare one. Optional on the port, so a v1 plugin still loads."""
+    fn = getattr(ruleset, "spec_schema", None)
+    return dict(fn()) if callable(fn) else {}
+
+
+class Holding(BaseModel):
+    """Something an actor holds (D-112), as checks and encounters see it: the item's id and name,
+    and whatever opaque data a pack or a ruleset attached. Holding stays world state
+    (`ItemCreated`/`ItemTransferred`); a ruleset may read this or ignore it."""
+
+    item_id: str
+    name: str
     data: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -126,6 +204,7 @@ class CheckRequest(BaseModel):
     stat: str = ""
     difficulty: str = ""
     modifiers: dict[str, Any] = Field(default_factory=dict)
+    holdings: list[Holding] = Field(default_factory=list)  # what the actor holds (D-112)
 
 
 class CheckResult(BaseModel):
@@ -143,6 +222,10 @@ class CheckResult(BaseModel):
     trace: str
     detail: dict[str, Any] = Field(default_factory=dict)
     sheet: Sheet | None = None
+    # The part of this check a PLAYER may see (D-112): the ruleset's choice, e.g. the acting
+    # character's own dice, modifier and the band reached, never an opponent's hidden values.
+    # None = nothing beyond `outcome` (the D-46 default). Sent on `beat_checks`/`beat_committed`.
+    player_view: dict[str, Any] | None = None
 
 
 # --- encounter mode ---
@@ -156,6 +239,7 @@ class Combatant(BaseModel):
     team: str  # e.g. "party" | "foes"; the ruleset's is_over decides what a decided fight means
     sheet: Sheet
     is_pc: bool = False  # a player character (engine-known): rulesets advance PCs, not every foe
+    holdings: list[Holding] = Field(default_factory=list)  # what it holds (D-112)
 
 
 class EncounterCtx(BaseModel):
@@ -227,12 +311,19 @@ class Ruleset(Protocol):
 
     def sheet_schema(self) -> dict[str, Any]: ...
 
+    # Optional since D-112 (a ruleset without it still loads): `spec_schema()`, the JSON Schema of
+    # the `CharSpec.data` its `new_character` takes; read through `spec_schema_of`.
+
     def config_schema(self) -> dict[str, Any]:
         """JSON schema of the settings a world may give this ruleset (`[ruleset.config]`, D-62).
         The ruleset is constructed with them and must refuse an unknown or invalid key."""
         ...
 
-    def new_character(self, spec: CharSpec, rng: Rng) -> Sheet: ...
+    def new_character(self, spec: CharSpec, rng: Rng) -> Sheet:
+        """A sheet from a spec. May refuse one it can't build (D-112): raise `CharSpecError`, or
+        let a `ValidationError` from its own spec model escape; an EMPTY spec must always build
+        (it is what an unsheeted actor gets). Callers go through `build_character`."""
+        ...
 
     def progression(self, sheet: Sheet, award: Award) -> Sheet: ...
 

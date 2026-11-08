@@ -6,8 +6,10 @@ what it owns. A world that names none gives none."""
 
 from __future__ import annotations
 
+from typing import Any
 
-async def starting_gear(store: object, branch_id: str) -> list[str]:
+
+async def starting_gear(store: object, branch_id: str) -> list[str | dict[str, Any]]:
     """The items a fresh PC carries on this branch's world. A store from before D-97 (no
     `world_starting_gear`) gives none."""
     read = getattr(store, "world_starting_gear", None)

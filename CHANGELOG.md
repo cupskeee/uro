@@ -9,7 +9,34 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
-Upgrading: no migration.
+Upgrading: migrations 029 and 030 (`uro db migrate`). For embedders: an `EventStore`/`EngineStore`
+of your own gains `inherited_ruleset_pin`, `character_frozen`, `amend_character`, `holdings`,
+`actor_spec` and `open_encounter`, and `start_campaign` takes `ruleset_config` and `encounters`.
+Breaking: the built-in rulesets now refuse a character spec past a cap or with an unknown key
+(they used to clamp or ignore it).
+
+### Added (D-112, Uro Loom requests 11–19)
+
+- A campaign may name its own ruleset and settings at start (validated, pinned for good); a
+  campaign on a fork plays the game of the story it came from.
+- Characters built from a spec at campaign start and join, refused with the ruleset's located
+  problems; previews (`POST /worlds/{w}/character-preview`, `POST /campaigns/{c}/character/preview`);
+  a build and name that can change until the first beat (`PATCH /campaigns/{c}/character`, then
+  409); a player's own character and holdings (`GET /campaigns/{c}/character`); each ruleset's
+  `spec_schema` on `GET /rulesets`. CLI: `--spec`, `--ruleset`, `--ruleset-config`, `uro character
+  show|preview|propose|rebuild`.
+- A character proposed by the model from a description (operator routes
+  `.../character-proposal`), checked like a preview, saved nowhere.
+- Actors may carry a spec and a danger word (`threat`) that their first sheet is built from: from a
+  pack (checked against its ruleset) or, for a new person, from the extractor.
+- Checks and fights see what each actor holds; starting gear may carry data.
+- A check's player-safe part (`player_view`) on `beat_checks` and `beat_committed`, for the acting
+  player's own character only.
+- Fights played turn by turn for a campaign started with `encounters: "turns"`: an intent's
+  `action`, `encounter_action_refused`, `beat_committed.encounter`, `GET /campaigns/{c}/encounter`,
+  `/act` in `uro play` and `uro connect`. A fork taken mid-fight carries it.
+- Optional ruleset port hooks: `spec_schema`, refusing a spec (`CharSpecError`), `CharSpec.threat`,
+  holdings on checks and combatants, `CheckResult.player_view`. A ruleset without them still loads.
 
 ### Added
 

@@ -19,8 +19,10 @@ from uro_core.domain.events import DomainEvent
 async def _actor_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     await conn.execute(
         # provenance (D-108) is the first-recorded one: a later re-creation doesn't relabel it
-        "INSERT INTO proj_actors (branch_id, actor_id, name, tier, role, aliases, provenance) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7) "
+        # spec/threat (D-112) are the first-recorded too, like provenance: a re-creation doesn't
+        # change what the actor's sheet will be built from
+        "INSERT INTO proj_actors (branch_id, actor_id, name, tier, role, aliases, provenance, "
+        "spec, threat) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) "
         "ON CONFLICT (branch_id, actor_id) DO UPDATE SET "
         "name = EXCLUDED.name, tier = EXCLUDED.tier, role = EXCLUDED.role, "
         "aliases = EXCLUDED.aliases",
@@ -31,6 +33,17 @@ async def _actor_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, 
         p.get("role", ""),
         p.get("aliases", []),
         p.get("provenance", ""),
+        p.get("spec") or {},
+        p.get("threat", ""),
+    )
+
+
+async def _actor_renamed(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    await conn.execute(
+        "UPDATE proj_actors SET name = $3 WHERE branch_id = $1 AND actor_id = $2",
+        branch_id,
+        p["actor_id"],
+        p["name"],
     )
 
 
@@ -222,15 +235,17 @@ async def _actor_died(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any
 
 async def _item_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     await conn.execute(
-        "INSERT INTO proj_items (branch_id, item_id, name, kind, owner_ref) "
-        "VALUES ($1, $2, $3, $4, $5) "
+        "INSERT INTO proj_items (branch_id, item_id, name, kind, owner_ref, data) "
+        "VALUES ($1, $2, $3, $4, $5, $6) "
         "ON CONFLICT (branch_id, item_id) DO UPDATE SET "
-        "name = EXCLUDED.name, kind = EXCLUDED.kind, owner_ref = EXCLUDED.owner_ref",
+        "name = EXCLUDED.name, kind = EXCLUDED.kind, owner_ref = EXCLUDED.owner_ref, "
+        "data = EXCLUDED.data",
         branch_id,
         p["item_id"],
         p.get("name", ""),
         p.get("kind", ""),
         p.get("owner_ref", ""),
+        p.get("data") or {},
     )
 
 
@@ -356,6 +371,7 @@ async def _counter_changed(conn: asyncpg.Connection, branch_id: str, p: dict[str
 
 _HANDLERS = {
     "ActorCreated": _actor_created,
+    "ActorRenamed": _actor_renamed,
     "EntityAliasAdded": _entity_alias_added,
     "ActorPromoted": _actor_promoted,
     "ClaimRecorded": _claim_recorded,
@@ -406,16 +422,26 @@ async def apply_event(conn: asyncpg.Connection, branch_id: str, event: DomainEve
 
 # A snapshot's version: one taken before a projection gained columns can't restore them, so it is
 # skipped (replay covers it). v2: the threads' lifecycle counts (D-102).
-SNAPSHOT_VERSION = 3  # 3: places, actors and factions carry provenance (D-108)
+SNAPSHOT_VERSION = 4  # 3: provenance (D-108); 4: actors' spec/threat, items' data (D-112)
 
 _SNAPSHOT_TABLES: dict[str, tuple[str, ...]] = {
-    "actors": ("actor_id", "name", "tier", "role", "aliases", "status", "provenance"),
+    "actors": (
+        "actor_id",
+        "name",
+        "tier",
+        "role",
+        "aliases",
+        "status",
+        "provenance",
+        "spec",
+        "threat",
+    ),
     "claims": ("claim_id", "statement", "subject_refs", "truth", "origin", "created_day"),
     "beliefs": ("actor_id", "claim_id", "confidence", "learned_from"),
     "places": ("place_id", "name", "kind", "status", "description", "provenance"),
     "pcs": ("campaign_id", "actor_id", "participant_id", "active"),
     "sheets": ("actor_id", "ruleset_id", "sheet"),
-    "items": ("item_id", "name", "kind", "owner_ref"),
+    "items": ("item_id", "name", "kind", "owner_ref", "data"),
     "factions": ("faction_id", "name", "kind", "description", "provenance"),
     "edges": ("src", "rel_type", "dst", "weight", "attrs"),
     "threads": ("thread_id", "stakes", "state", "provenance", "developments", "beats_live"),

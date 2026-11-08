@@ -41,7 +41,7 @@ class EventStore(Protocol):
         ruleset_config: dict[str, Any] | None = None,
         clock: dict[str, Any] | None = None,
         pacing: dict[str, Any] | None = None,
-        starting_gear: list[str] | None = None,
+        starting_gear: list[str | dict[str, Any]] | None = None,
         description: str = "",
         content: dict[str, Any] | None = None,
         manifest: dict[str, Any] | None = None,
@@ -84,10 +84,12 @@ class EventStore(Protocol):
         new_pc_name: str | None = None,
         new_pc_id: str | None = None,
         pc_sheet: dict[str, Any] | None = None,
-        starting_items: list[str] | None = None,
+        starting_items: list[str | dict[str, Any]] | None = None,
         ruleset_id: str = "",
         ruleset_version: str = "",
         seed: int = 0,
+        ruleset_config: dict[str, Any] | None = None,
+        encounters: str = "auto",
     ) -> Campaign:
         """Create a campaign on a branch and bind its PC (adopt an existing actor or make
         a fresh one), optionally with a ruleset-built character sheet — CampaignStarted +
@@ -103,7 +105,7 @@ class EventStore(Protocol):
         new_pc_name: str | None = None,
         new_pc_id: str | None = None,
         pc_sheet: dict[str, Any] | None = None,
-        starting_items: list[str] | None = None,
+        starting_items: list[str | dict[str, Any]] | None = None,
         ruleset_id: str = "",
     ) -> str:
         """Seat an ADDITIONAL participant's PC on a live campaign (the party-join primitive,
@@ -146,6 +148,18 @@ class EventStore(Protocol):
 
     async def append_beat(self, branch_id: str, events: list[DomainEvent]) -> Commit:
         """Append one beat commit to the branch head and advance it — one transaction."""
+        ...
+
+    async def append_fight_beat(
+        self, branch_id: str, encounter_id: str, turns_seen: int, events: list[DomainEvent]
+    ) -> Commit:
+        """Commit a fight turn's beat if the fight still has `turns_seen` turns (D-112)."""
+        ...
+
+    async def amend_character(
+        self, branch_id: str, actor_id: str, events: list[DomainEvent], *, renames: bool = False
+    ) -> Commit:
+        """Commit a change to a PC's build while it is open (D-112); `ValueError` names why not."""
         ...
 
     async def days_since_last_beat(self, branch_id: str) -> int:

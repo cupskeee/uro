@@ -18,11 +18,12 @@ from typing import Any
 import typer
 from dotenv import find_dotenv, load_dotenv
 from uro_core.adapters.postgres.store import PostgresEventStore
+from uro_core.pipeline.encounter import ChoiceRefused, TurnChoice
 from uro_core.pipeline.engine import BeatMechanics, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
-from uro_core.rulesets.base import CharSpec, Ruleset
+from uro_core.rulesets.base import CharSpec, CharSpecError, Ruleset
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.gear import starting_gear
 from uro_core.timeline.models import FORK_TIME_SKIP, World
@@ -209,6 +210,33 @@ async def _time_skip_ruleset(pick: Awaitable[Ruleset]) -> Ruleset | None:
             f"warning: no downtime rules — the world's ruleset can't be built: {exc}", err=True
         )
         return None
+
+
+def _json_option(raw: str | None, flag: str) -> dict[str, Any] | None:
+    """A JSON-object option (`--spec`, `--ruleset-config`): inline JSON, or `@path` to a file."""
+    if raw is None:
+        return None
+    try:
+        text = Path(raw[1:]).read_text() if raw.startswith("@") else raw
+        value = json.loads(text)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"{flag}: not a JSON object ({exc})", err=True)
+        raise typer.Exit(2) from exc
+    if not isinstance(value, dict):
+        typer.echo(f"{flag}: not a JSON object", err=True)
+        raise typer.Exit(2)
+    return value
+
+
+def _echo_refused(exc: Exception) -> None:
+    """A refused start, join or build, with each spec problem on its own line (D-112)."""
+    if isinstance(exc, CharSpecError):
+        typer.echo("the character can't be built:", err=True)
+        for p in exc.problems:
+            where = ".".join(str(x) for x in p.loc)
+            typer.echo(f"  {where + ': ' if where else ''}{p.message}", err=True)
+    else:
+        typer.echo(f"error: {exc.args[0] if exc.args else exc}", err=True)
 
 
 def _build_pc_sheet(ruleset: Ruleset) -> dict[str, Any]:
@@ -659,15 +687,20 @@ def play(
                     break
                 if not intent:
                     continue
+                choice = parse_act(intent)  # D-112: `/act <kind> [target]` on a fight turn
+                if intent.startswith("/act") and choice is None:
+                    typer.echo("usage: /act <action> [target]", err=True)
+                    continue
                 try:
                     results: list[BeatResult] = []
                     mechanics: list[BeatMechanics] = []
                     async for chunk in engine.run_beat_stream(
                         campaign,
                         PARTICIPANT,
-                        intent,
+                        intent[4:].strip() if choice is not None else intent,
                         on_result=results.append,
                         on_mechanics=mechanics.append,
+                        action=TurnChoice.model_validate(choice) if choice else None,
                     ):
                         if mechanics:  # the rules' answer, before the story (D-100)
                             m = mechanics.pop()
@@ -683,6 +716,12 @@ def play(
                         typer.echo(line)
                     if results:
                         day = results[0].world_day
+                except ChoiceRefused as exc:
+                    sys.stdout.write("\n")
+                    for line in refusal_lines(
+                        str(exc), [a.model_dump() for a in exc.legal_actions]
+                    ):
+                        typer.echo(line, err=True)
                 except Exception as exc:
                     sys.stdout.write("\n")
                     typer.echo(f"beat failed ({exc}); nothing was saved — try again.", err=True)
@@ -701,7 +740,25 @@ def _details(result: BeatResult) -> dict[str, Any]:
         "world_day": result.world_day,
         "created": [c.model_dump() for c in result.created],
         "threads_changed": [t.model_dump() for t in result.threads_changed],
+        "encounter": result.encounter.model_dump() if result.encounter is not None else None,
     }
+
+
+def parse_act(line: str) -> dict[str, Any] | None:
+    """`/act <kind> [target]` as an encounter action (D-112), or None when it isn't one."""
+    parts = line.split()
+    if len(parts) < 2 or parts[0] != "/act":
+        return None
+    return {"kind": parts[1], "target_id": parts[2] if len(parts) > 2 else None}
+
+
+def refusal_lines(reason: str, legal: list[dict[str, Any]]) -> list[str]:
+    """A refused fight-turn action and what may be done instead (D-112)."""
+    lines = [f"  ! {reason}"]
+    for a in legal:
+        targets = f" <{'|'.join(a.get('targets') or [])}>" if a.get("targets") else ""
+        lines.append(f"    /act {a['kind']}{targets}")
+    return lines
 
 
 def mechanics_lines(details: dict[str, Any]) -> list[str]:
@@ -730,6 +787,10 @@ def beat_detail_lines(
     for t in details.get("threads_changed") or []:  # D-103: any plot whose state moved
         moved = f"{t['from_state']} → {t['to_state']}" if t["from_state"] else t["to_state"]
         lines.append(f"  ~ plot {moved}: {t['stakes']}")
+    wait = details.get("encounter")  # D-112: the fight waits on a player's choice
+    if wait:
+        lines.append(f"  · the fight waits on {wait['actor_id']}:")
+        lines += refusal_lines("", wait.get("legal_actions") or [])[1:]
     created = details.get("created") or []
     if created:
         lines.append("  + new: " + ", ".join(f"{c['name']} ({c['kind']})" for c in created))
@@ -947,6 +1008,7 @@ def connect(
                     "not_your_turn",
                     "proposal_opened",
                     "intent_rejected",
+                    "encounter_action_refused",  # D-112: a fight waits on a different choice
                 }
                 # intent id → (its text, set when it settles). The server echoes the id as
                 # `intent_id`, so another player's identical text never settles ours. Only a server
@@ -1036,6 +1098,12 @@ def connect(
                             typer.echo(
                                 f"\n  ✗ beat failed ({msg.get('intent', '')!r}): {msg['error']}"
                             )
+                        elif kind == "encounter_action_refused" and ours:
+                            # every seat hears it; only the player who acted is shown it (review)
+                            for line in refusal_lines(
+                                msg["reason"], msg.get("legal_actions") or []
+                            ):
+                                typer.echo(line)
                         elif kind == "intent_rejected":
                             typer.echo(
                                 f"  ✗ [{msg['participant_id']}] intent rejected: {msg['text']!r}"
@@ -1066,8 +1134,16 @@ def connect(
                         elif intent:
                             rid = uuid.uuid4().hex
                             settled = asyncio.Event()
-                            pending[rid] = (intent, settled)
-                            await ws.send(json.dumps({"type": "intent", "text": intent, "id": rid}))
+                            act = parse_act(intent)  # D-112: `/act <kind> [target]`, a fight turn
+                            if act is None and intent.split()[0] == "/act":
+                                typer.echo("usage: /act <action> [target]")
+                                continue
+                            text = intent[4:].strip() if act is not None else intent
+                            pending[rid] = (text, settled)
+                            frame: dict[str, Any] = {"type": "intent", "text": text, "id": rid}
+                            if act is not None:
+                                frame["action"] = act
+                            await ws.send(json.dumps(frame))
                             waiting = asyncio.ensure_future(settled.wait())
                             # a slow beat (a reasoning model's extraction) still settles well
                             # inside this; past it, or if the server goes away, the prompt returns
@@ -1732,10 +1808,15 @@ def ruleset_list() -> None:
             rs = registry.resolve(rid)
             sheet = ", ".join(rs.sheet_schema().get("properties", {}))
             settings = rs.config_schema().get("properties", {})
+            from uro_core.rulesets.base import spec_schema_of
+
+            spec_keys = ", ".join(spec_schema_of(rs).get("properties", {}))
         except Exception as exc:
             typer.echo(f"{rid}  (can't list with default settings: {exc})")
             continue
         typer.echo(f"{rs.id}@{rs.version}  sheet: {sheet}")
+        if spec_keys:  # what `--spec` may hold (D-112)
+            typer.echo(f"    spec: {spec_keys}")
         for key, spec in settings.items():
             what = spec.get("description", "")
             typer.echo(f"    {key:<24} default {spec.get('default')!s:<5} {what}")
@@ -2016,9 +2097,23 @@ def campaign_new(
     branch_name: str = typer.Option(
         None, "--branch-name", help="with --own-branch: the new branch's name (default play-…)"
     ),
+    spec: str = typer.Option(
+        None, "--spec", help="the PC's build as JSON, or @file.json (the ruleset's spec, D-112)"
+    ),
+    ruleset_id: str = typer.Option(
+        None, "--ruleset", help="this campaign's own ruleset (D-112; default: inherit)"
+    ),
+    ruleset_config: str = typer.Option(
+        None, "--ruleset-config", help="this campaign's own settings as JSON, or @file.json"
+    ),
+    encounters: str = typer.Option(
+        "auto", "--encounters", help="auto (a fight is one beat) | turns (pick each action)"
+    ),
 ) -> None:
     """Start a campaign on a branch, binding a PC (adopt an existing actor, or create one).
-    With --own-branch it gets a branch of its own, so it can later be removed alone (D-99)."""
+    With --own-branch it gets a branch of its own, so it can later be removed alone (D-99).
+    --ruleset / --ruleset-config give the campaign its own game (D-112); otherwise a fork plays
+    the story it came from's, and any other branch its world's."""
 
     async def _run() -> None:
         if (adopt is None) == (pc is None):
@@ -2046,33 +2141,27 @@ def campaign_new(
                     typer.echo(f"error: {exc}", err=True)
                     raise typer.Exit(1) from exc
             try:  # from here on, a failure removes the playthrough's fork (D-100 review)
-                # Bind the WORLD's declared ruleset (docs/06, D-30): a PbtA world's campaign is
-                # played under uro_pbta, not the hard-coded default. ('' → registry default.)
-                pin = await store.world_ruleset(b.branch_id)
-                # with the world's settings
-                rs = await registry.resolve_for_branch(store, b.branch_id)
-                # Every PC needs a sheet so the mechanics gate can check it. A fresh PC gets one; an
-                # adopted actor is sheeted only if it lacks one (a re-adopted PC keeps its sheet).
-                pc_sheet = None
-                if pc is not None or (
-                    adopt is not None and await store.get_sheet(b.branch_id, adopt) is None
-                ):
-                    pc_sheet = _build_pc_sheet(rs)
-                ruleset_id = rs.id
-                campaign = await store.start_campaign(
-                    w.world_id,
-                    b.branch_id,
-                    participant_id=participant,
-                    adopt_actor_id=adopt,
-                    new_pc_name=pc,
-                    pc_sheet=pc_sheet,
-                    starting_items=(
-                        await starting_gear(store, b.branch_id) if pc is not None else None
-                    ),
-                    ruleset_id=ruleset_id,
-                    ruleset_version=pin.version,
-                    seed=seed,
-                )
+                # The campaign's game and its PC's build (D-112), through the one core path the
+                # server uses: the named ruleset, else a fork's story's, else the world's.
+                from uro_core.characters import start_campaign
+
+                try:
+                    campaign = await start_campaign(
+                        store,
+                        w.world_id,
+                        b.branch_id,
+                        participant_id=participant,
+                        adopt_actor_id=adopt,
+                        new_pc_name=pc,
+                        spec=_json_option(spec, "--spec"),
+                        ruleset_id=ruleset_id,
+                        ruleset_config=_json_option(ruleset_config, "--ruleset-config"),
+                        seed=seed,
+                        encounters=encounters,
+                    )
+                except (CharSpecError, ValueError, KeyError) as exc:
+                    _echo_refused(exc)
+                    raise typer.Exit(1) from exc
             except BaseException:
                 if own_branch:  # nothing half-made: the playthrough's fork goes too
                     await store.delete_branch(b.branch_id)
@@ -2082,6 +2171,41 @@ def campaign_new(
         who = f"adopted {adopt}" if adopt else f"new PC {pc!r}"
         typer.echo(f"campaign: {campaign.campaign_id}  (branch {b.name!r}, {who})")
         typer.echo(f"play it:  uro play {campaign.campaign_id}")
+
+    _run_async(_run)
+
+
+@campaign_app.command("encounter")
+def campaign_encounter(
+    campaign_id: str,
+    participant: str = typer.Option(None, "--participant", help="whose fight (default: any)"),
+) -> None:
+    """The fight waiting on a player's choice in a campaign that plays fights turn by turn
+    (D-112): whose turn it is and the actions to send (`/act` in `uro play`/`uro connect`)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            engine = Engine(
+                store,
+                build_router("stub", None),
+                ruleset=await registry.resolve_for_campaign(store, c),
+            )
+            try:
+                wait = await engine.fight_status(c, participant)
+            except ChoiceRefused as exc:
+                typer.echo(f"error: {exc}", err=True)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        if wait is None:
+            typer.echo("(no fight is waiting on a choice)")
+            return
+        typer.echo(f"the fight {wait.encounter_id} waits on {wait.actor_id}:")
+        for line in refusal_lines("", [a.model_dump() for a in wait.legal_actions])[1:]:
+            typer.echo(line)
 
     _run_async(_run)
 
@@ -2183,6 +2307,9 @@ def campaign_join(
     participant: str = typer.Option(..., "--participant", help="joining participant id"),
     adopt: str = typer.Option(None, "--adopt", help="adopt an existing actor as this PC"),
     pc: str = typer.Option(None, "--pc", help="create a fresh PC with this name"),
+    spec: str = typer.Option(
+        None, "--spec", help="the PC's build as JSON, or @file.json (the ruleset's spec, D-112)"
+    ),
 ) -> None:
     """Seat an ADDITIONAL participant on a live campaign, binding their OWN PC (docs/08, OQ-7) —
     the party-join path. Round-robin free-roam then rotates turns across the party (`uro serve`
@@ -2199,26 +2326,207 @@ def campaign_join(
             if campaign is None:
                 typer.echo(f"no such campaign: {campaign_id}", err=True)
                 raise typer.Exit(1)
-            # Sheet a fresh PC (or an adopted actor lacking one) from the campaign's bound ruleset.
-            pc_sheet = None
-            if pc is not None or (
-                adopt is not None and await store.get_sheet(campaign.branch_id, adopt) is None
-            ):
-                pc_sheet = _build_pc_sheet(await registry.resolve_for_campaign(store, campaign))
-            actor = await store.bind_pc(
-                campaign_id,
-                participant,
-                adopt_actor_id=adopt,
-                new_pc_name=pc,
-                pc_sheet=pc_sheet,
-                starting_items=(
-                    await starting_gear(store, campaign.branch_id) if pc is not None else None
-                ),
-                ruleset_id=campaign.ruleset_id,
-            )
+            # Sheet the PC from --spec under the campaign's game (D-112), as the server does.
+            from uro_core.characters import join_campaign
+
+            try:
+                actor = await join_campaign(
+                    store,
+                    campaign,
+                    participant_id=participant,
+                    adopt_actor_id=adopt,
+                    new_pc_name=pc,
+                    spec=_json_option(spec, "--spec"),
+                )
+            except (CharSpecError, ValueError, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
         finally:
             await store.close()
         typer.echo(f"joined: participant {participant!r} → PC {actor}")
+
+    _run_async(_run)
+
+
+character_app = typer.Typer(
+    no_args_is_help=True,
+    help="A participant's character: preview a build, show it, rebuild it before play (D-112).",
+)
+app.add_typer(character_app, name="character")
+
+
+@character_app.command("show")
+def character_show(
+    campaign_id: str,
+    participant: str = typer.Option(PARTICIPANT, "--participant", help="whose character"),
+) -> None:
+    """A participant's character: name, sheet, what it holds, and whether its build is open."""
+
+    async def _run() -> None:
+        from uro_core.characters import own_character
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            try:
+                view = await own_character(store, c, participant)
+            except KeyError as exc:
+                typer.echo(f"error: {exc.args[0]}", err=True)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        state = "open until the first beat" if view.build_open else f"frozen: {view.frozen_reason}"
+        typer.echo(f"{view.name}  [{view.actor_id}]  ruleset {view.ruleset}  build {state}")
+        typer.echo(json.dumps(view.sheet, indent=2, sort_keys=True))
+        for h in view.holdings:
+            typer.echo(
+                f"  holds {h['name']} [{h['item_id']}]" + (f" {h['data']}" if h["data"] else "")
+            )
+
+    _run_async(_run)
+
+
+@character_app.command("preview")
+def character_preview(
+    target: str = typer.Argument(..., help="a world (a new campaign's game) or a campaign id"),
+    spec: str = typer.Option(None, "--spec", help="the build as JSON, or @file.json"),
+    branch: str = typer.Option("main", "--branch", help="for a world: the branch to start on"),
+    ruleset_id: str = typer.Option(None, "--ruleset", help="for a world: a campaign's own ruleset"),
+    ruleset_config: str = typer.Option(
+        None, "--ruleset-config", help="for a world: a campaign's own settings as JSON"
+    ),
+) -> None:
+    """The sheet a build would make, or the ruleset's problems with it. Writes nothing."""
+
+    async def _run() -> None:
+        from uro_core.characters import preview_character
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            data = _json_option(spec, "--spec")
+            campaign = await store.get_campaign(target)
+            try:
+                if campaign is not None:
+                    preview = await preview_character(
+                        store, branch_id=campaign.branch_id, spec=data, campaign=campaign
+                    )
+                else:
+                    w = await _world_or_exit(store, target)
+                    b = await store.get_branch_by_name(w.world_id, branch)
+                    if b is None:
+                        typer.echo(f"no such branch: {branch}", err=True)
+                        raise typer.Exit(1)
+                    preview = await preview_character(
+                        store,
+                        branch_id=b.branch_id,
+                        spec=data,
+                        ruleset_id=ruleset_id,
+                        ruleset_config=_json_option(ruleset_config, "--ruleset-config"),
+                    )
+            except (ValueError, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        if not preview.ok:
+            _echo_refused(CharSpecError(preview.problems))
+            raise typer.Exit(1)
+        typer.echo(f"ok ({preview.ruleset}):")
+        typer.echo(json.dumps(preview.sheet, indent=2, sort_keys=True))
+
+    _run_async(_run)
+
+
+@character_app.command("propose")
+def character_propose(
+    target: str = typer.Argument(..., help="a world (a new campaign's game) or a campaign id"),
+    description: str = typer.Argument(..., help="the player's words for their character"),
+    provider: str = typer.Option("openai", help="stub | local | openai | anthropic"),
+    model: str = typer.Option(None, help="model id for the worldsmith role"),
+    branch: str = typer.Option("main", "--branch", help="for a world: the branch to start on"),
+    ruleset_id: str = typer.Option(None, "--ruleset", help="for a world: a campaign's own ruleset"),
+    ruleset_config: str = typer.Option(
+        None, "--ruleset-config", help="for a world: a campaign's own settings as JSON"
+    ),
+) -> None:
+    """Propose a build from a description through the model, checked like a preview (D-112). Saves
+    nothing: pass the printed spec to `campaign new|join --spec`."""
+
+    async def _run() -> None:
+        from uro_core.characters import propose_character
+        from uro_core.errors import ProviderError
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            campaign = await store.get_campaign(target)
+            if campaign is not None:
+                branch_id = campaign.branch_id
+            else:
+                w = await _world_or_exit(store, target)
+                b = await store.get_branch_by_name(w.world_id, branch)
+                if b is None:
+                    typer.echo(f"no such branch: {branch}", err=True)
+                    raise typer.Exit(1)
+                branch_id = b.branch_id
+            router = build_router(provider, model)
+            router.recorder = store.record_llm_call
+            try:
+                proposal = await propose_character(
+                    store,
+                    router,
+                    branch_id=branch_id,
+                    description=description,
+                    campaign=campaign,
+                    ruleset_id=ruleset_id,
+                    ruleset_config=_json_option(ruleset_config, "--ruleset-config"),
+                )
+            except (ProviderError, ValueError, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        typer.echo(
+            f"{'ok' if proposal.ok else 'not buildable'} ({proposal.ruleset})"
+            + (f": {proposal.name}" if proposal.name else "")
+        )
+        typer.echo(json.dumps(proposal.spec, indent=2, sort_keys=True))
+        if not proposal.ok:
+            _echo_refused(CharSpecError(proposal.problems))
+            raise typer.Exit(1)
+
+    _run_async(_run)
+
+
+@character_app.command("rebuild")
+def character_rebuild(
+    campaign_id: str,
+    participant: str = typer.Option(PARTICIPANT, "--participant", help="whose character"),
+    spec: str = typer.Option(None, "--spec", help="the new build as JSON, or @file.json"),
+    name: str = typer.Option(None, "--name", help="a new name"),
+) -> None:
+    """Replace a character's build and/or name before the story starts (until the first beat after
+    it was bound); after that only play changes a character."""
+
+    async def _run() -> None:
+        from uro_core.characters import CharacterFrozen, rebuild_character
+
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            try:
+                view = await rebuild_character(
+                    store, c, participant, spec=_json_option(spec, "--spec"), name=name
+                )
+            except (CharSpecError, CharacterFrozen, KeyError) as exc:
+                _echo_refused(exc)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        typer.echo(f"rebuilt: {view.name} [{view.actor_id}]")
 
     _run_async(_run)
 

@@ -50,12 +50,13 @@ from starlette.websockets import WebSocketState
 from uro_core.adapters.crypto import SecretsUnavailable
 from uro_core.errors import ExportError
 from uro_core.export import BundleCommit, WorldBundle
+from uro_core.pipeline.encounter import ChoiceRefused, TurnChoice
 from uro_core.pipeline.engine import NARRATION_DONE, BeatMechanics, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
+from uro_core.rulesets.base import CharSpecError
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
-from uro_core.timeline.gear import starting_gear
 from uro_core.timeline.models import FORK_TIME_SKIP, World
 from uro_core.worldpack.create import SeedResult
 
@@ -161,18 +162,6 @@ def _safe_extract_pack(data: bytes, dest: Path) -> Path:
     raise HTTPException(status_code=400, detail="no world.toml found in the archive")
 
 
-def _new_pc_sheet(ruleset: Any) -> dict[str, Any]:
-    """A default character sheet from the world's ruleset, built with the world's settings
-    (docs/06, D-30, D-62) — like the CLI's `_build_pc_sheet`, so a REST-created PC is sheeted and
-    pinned exactly like a CLI-created one (an empty pin would play the campaign under the
-    server's default ruleset, with mechanics off)."""
-    from uro_core.rulesets.base import CharSpec
-    from uro_core.rulesets.rng import Rng
-
-    sheet: dict[str, Any] = ruleset.new_character(CharSpec(), Rng(0))
-    return sheet
-
-
 _FEED_RETRY_S = 1.0  # first wait before reconnecting a failed live commit feed; doubles to 30s
 
 
@@ -183,6 +172,34 @@ def _effort_field(body: dict[str, Any]) -> str | None:
     if raw is not None and not isinstance(raw, str):
         raise HTTPException(status_code=400, detail="reasoning_effort must be a string")
     return raw
+
+
+def _spec_field(body: dict[str, Any]) -> dict[str, Any] | None:
+    """A body's optional character `spec` (D-112): an object or absent, else a 400."""
+    spec = body.get("spec")
+    if spec is not None and not isinstance(spec, dict):
+        raise HTTPException(status_code=400, detail="spec must be an object")
+    return spec
+
+
+def _game_fields(body: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    """A body's optional `ruleset` (an id) and `ruleset_config` (an object) (D-112): a campaign's
+    own game. Absent = inherit, as before."""
+    rid, config = body.get("ruleset"), body.get("ruleset_config")
+    if rid is not None and (not isinstance(rid, str) or not rid):
+        raise HTTPException(status_code=400, detail="ruleset must be a ruleset id")
+    if config is not None and not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="ruleset_config must be an object")
+    return rid, config
+
+
+def _spec_refused(exc: CharSpecError) -> HTTPException:
+    """A refused character spec as a 400 whose detail names each problem, located in the spec, so a
+    character form can mark the field (`{message, problems: [{loc, message}]}`)."""
+    return HTTPException(
+        status_code=400,
+        detail={"message": str(exc), "problems": [p.model_dump() for p in exc.problems]},
+    )
 
 
 async def _call(hook: Callable[[], Any]) -> None:
@@ -324,6 +341,16 @@ class ServerDeps:
     # connection (a 1-token call), and rebuild the instance router from the registry without a
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
     refresh_models: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None
+    # D-112: the fight on a campaign waiting on a player's choice, or None
+    fight_status: Callable[[str, str | None], Awaitable[dict[str, Any] | None]] | None = None
+    # D-112: propose a character build from a description through the bound model:
+    # (branch_id, campaign_id or None, ruleset or None, ruleset_config or None, description)
+    propose_character: (
+        Callable[
+            [str, str | None, str | None, dict[str, Any] | None, str], Awaitable[dict[str, Any]]
+        ]
+        | None
+    ) = None
     # (connection id, model, reasoning effort or None)
     test_connection: Callable[[str, str, str | None], Awaitable[dict[str, Any]]] | None = None
     reload_router: Callable[[], Awaitable[dict[str, Any]]] | None = None
@@ -364,8 +391,11 @@ def engine_deps(
         return engine_for_pin(await campaign_pin(store, campaign), campaign.campaign_id)
 
     async def engine_for_branch(branch_id: str) -> Engine:
-        """The engine for a branch's world ruleset — a time-skip with no campaign (a fork)."""
-        return engine_for_pin(await store.world_ruleset(branch_id), f"branch {branch_id}")
+        """The engine for the game a branch plays — a time-skip with no campaign (a fork): its
+        story's own pin when it chose one (D-112 review), else its world's."""
+        from uro_core.rulesets.registry import branch_pin
+
+        return engine_for_pin(await branch_pin(store, branch_id), f"branch {branch_id}")
 
     async def time_engine(pick: Callable[[], Awaitable[Engine]], where: str) -> Engine:
         """The engine a time-skip runs on. A world whose ruleset this server can't build still gets
@@ -404,7 +434,7 @@ def engine_deps(
         engine.router.recorder = getattr(store, "record_llm_call", None)
 
     async def run_beat(
-        campaign_id: str, participant: str, text: str
+        campaign_id: str, participant: str, text: str, action: dict[str, Any] | None = None
     ) -> AsyncIterator[str | BeatResult | BeatMechanics]:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
@@ -425,6 +455,7 @@ def engine_deps(
             mark_narrated=True,
             on_result=results.append,
             on_mechanics=mechanics.append,
+            action=_turn_choice(action),
         )
         async for chunk in stream:
             if mechanics:  # resolved before the first chunk: the rules' answer goes first
@@ -513,13 +544,9 @@ def engine_deps(
         out: list[dict[str, Any]] = []
         for rid in ruleset_registry.available():
             try:  # one plugin's fault (e.g. a setting with no default) must not 500 the listing
-                rs = ruleset_registry.resolve(rid)
-                entry = {
-                    "id": rs.id,
-                    "version": rs.version,
-                    "sheet_schema": rs.sheet_schema(),
-                    "config_schema": rs.config_schema(),
-                }
+                from uro_core.characters import ruleset_info
+
+                entry = ruleset_info(ruleset_registry.resolve(rid))  # + spec_schema (D-112)
             except Exception as exc:
                 entry = {"id": rid, "error": f"can't list with default settings: {exc}"}
             out.append(entry)
@@ -558,6 +585,34 @@ def engine_deps(
         from uro_core.worldpack.create import seed_world as _seed_world
 
         return await _seed_world(store, world, pack, seed)
+
+    async def fight_status(campaign_id: str, participant: str | None) -> dict[str, Any] | None:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise KeyError(campaign_id)
+        wait = await (await engine_for(campaign)).fight_status(campaign, participant)
+        return wait.model_dump() if wait is not None else None
+
+    async def propose_character(
+        branch_id: str,
+        campaign_id: str | None,
+        ruleset_id: str | None,
+        ruleset_config: dict[str, Any] | None,
+        description: str,
+    ) -> dict[str, Any]:
+        from uro_core.characters import propose_character as _propose
+
+        campaign = await store.get_campaign(campaign_id) if campaign_id else None
+        proposal = await _propose(
+            store,
+            engine.router,
+            branch_id=branch_id,
+            description=description,
+            campaign=campaign,
+            ruleset_id=ruleset_id,
+            ruleset_config=ruleset_config,
+        )
+        return proposal.model_dump()
 
     async def refresh_models(connection_id: str) -> list[dict[str, str]]:
         from uro_core.providers.registry import refresh_connection_models
@@ -681,6 +736,8 @@ def engine_deps(
         import_pack=import_pack,
         seed_world=seed_world,
         refresh_models=refresh_models,
+        propose_character=propose_character,
+        fight_status=fight_status,
         test_connection=test_connection,
         reload_router=reload_router,
         codex_start=codex_start,
@@ -2011,6 +2068,8 @@ def create_app(
             )
         new_pc_name = body.get("new_pc_name")
         adopt_actor_id = body.get("adopt_actor_id")
+        spec = _spec_field(body)
+        ruleset_choice, config_choice = _game_fields(body)
         try:  # a non-int seed (e.g. a JSON array) is TypeError — the block below wouldn't catch it
             seed = int(body.get("seed") or 0)  # docs/18 G-3: reproducible-combat seed
         except (TypeError, ValueError) as exc:
@@ -2042,36 +2101,29 @@ def create_app(
             except (ValueError, KeyError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
-            # Pin the WORLD's declared ruleset + sheet the PC (D-30 + Phase-3), like the CLI `uro
-            # campaign new` path — a REST-created PbtA campaign must not silently fall to an empty
-            # pin + no sheet (which plays it under the default ruleset and disables mechanics).
-            from uro_core.rulesets.registry import resolve_for_branch
+            # The campaign's game (D-112): the one it names, else the story a fork came from, else
+            # its world's, pinned with its settings; the PC is built from `spec` under it. Every
+            # surface goes through `uro_core.characters`, so a REST PbtA campaign is sheeted and
+            # pinned exactly like a CLI one.
+            from uro_core.characters import start_campaign
 
-            pin = await store.world_ruleset(branch.branch_id)
-            ruleset = await resolve_for_branch(store, branch.branch_id)  # with the world's settings
-            pc_sheet: dict[str, Any] | None = None
-            if new_pc_name is not None or (
-                adopt_actor_id is not None
-                and await store.get_sheet(branch.branch_id, adopt_actor_id) is None
-            ):
-                pc_sheet = _new_pc_sheet(ruleset)
-            ruleset_id = ruleset.id  # an adopted, already-sheeted actor keeps its sheet
-            c = await store.start_campaign(
+            c = await start_campaign(
+                store,
                 world_id,
                 branch.branch_id,
                 participant_id=participant,
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
-                pc_sheet=pc_sheet,
-                starting_items=(
-                    await starting_gear(store, branch.branch_id)
-                    if new_pc_name is not None
-                    else None
-                ),
-                ruleset_id=ruleset_id,
-                ruleset_version=pin.version,
+                spec=spec,
+                ruleset_id=ruleset_choice,
+                ruleset_config=config_choice,
                 seed=seed,
+                encounters=str(body.get("encounters") or "auto"),
             )
+        except CharSpecError as exc:
+            if own:
+                await store.delete_branch(branch.branch_id)
+            raise _spec_refused(exc) from exc
         except (ValueError, KeyError) as exc:  # bad PC choice, or world pins an absent ruleset
             if own:  # nothing half-made: the playthrough's fork goes with the failed start
                 await store.delete_branch(branch.branch_id)
@@ -2125,29 +2177,21 @@ def create_app(
             )
         new_pc_name = body.get("new_pc_name")
         adopt_actor_id = body.get("adopt_actor_id")
+        spec = _spec_field(body)
         try:
-            # Sheet the joining PC from the campaign's ruleset (D-30 + Phase-3), like CLI join.
-            pc_sheet: dict[str, Any] | None = None
-            if new_pc_name is not None or (
-                adopt_actor_id is not None
-                and await store.get_sheet(campaign.branch_id, adopt_actor_id) is None
-            ):
-                from uro_core.rulesets.registry import resolve_for_campaign
+            # Sheet the joining PC from `spec` under the campaign's game (D-112), like CLI join.
+            from uro_core.characters import join_campaign as seat
 
-                pc_sheet = _new_pc_sheet(await resolve_for_campaign(store, campaign))
-            actor_id = await store.bind_pc(
-                campaign_id,
-                participant,
+            actor_id = await seat(
+                store,
+                campaign,
+                participant_id=participant,
                 new_pc_name=new_pc_name,
                 adopt_actor_id=adopt_actor_id,
-                pc_sheet=pc_sheet,
-                starting_items=(
-                    await starting_gear(store, campaign.branch_id)
-                    if new_pc_name is not None
-                    else None
-                ),
-                ruleset_id=campaign.ruleset_id,
+                spec=spec,
             )
+        except CharSpecError as exc:
+            raise _spec_refused(exc) from exc
         except (ValueError, KeyError) as exc:  # bad PC choice, or an absent pinned ruleset
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         result: dict[str, Any] = {"actor_id": actor_id}
@@ -2242,6 +2286,202 @@ def create_app(
         revoked = await deps.revoke_token(target)
         return {"revoked": revoked, "closed_sockets": await _close_revoked_sockets()}
 
+    # --- a participant's character (D-112): preview a build, read your own, rebuild until the
+    # story starts. Self-or-operator, like join: a player reads and changes only their own. ---
+
+    def _whose(request: Request, requested: Any) -> str:
+        _, caller, admin = _scope(request)
+        if caller is None:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        target = str(requested or caller)
+        if target != caller and not admin:
+            raise HTTPException(status_code=403, detail="only an operator may act for another")
+        return target
+
+    @app.post("/worlds/{world_id}/character-preview", **_out(S.CharacterPreview))
+    async def world_character_preview(
+        world_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The sheet a character spec would make in a NEW campaign on a branch of this world (with
+        the `ruleset`/`ruleset_config` that campaign would name), or `{ok: false, problems}` —
+        the same build campaign start runs (D-112). Any-authed; writes nothing."""
+        _auth(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch = await _branch_ref(store, world_id, body.get("branch") or "main")
+        rid, config = _game_fields(body)
+        from uro_core.characters import preview_character
+
+        try:
+            preview = await preview_character(
+                store,
+                branch_id=branch.branch_id,
+                spec=_spec_field(body),
+                ruleset_id=rid,
+                ruleset_config=config,
+            )
+        except (ValueError, KeyError) as exc:  # an unknown ruleset, or settings it refuses
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return preview.model_dump()
+
+    @app.post("/campaigns/{campaign_id}/character/preview", **_out(S.CharacterPreview))
+    async def campaign_character_preview(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The sheet a spec would make under this campaign's game (to join, or to rebuild), or
+        `{ok: false, problems}` (D-112). Any-authed; writes nothing."""
+        _auth(request)
+        store = _mgmt()
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        from uro_core.characters import preview_character
+
+        try:
+            preview = await preview_character(
+                store, branch_id=campaign.branch_id, spec=_spec_field(body), campaign=campaign
+            )
+        except (ValueError, KeyError) as exc:  # the campaign's ruleset can't be built here
+            raise HTTPException(
+                status_code=400, detail=str(exc.args[0] if exc.args else exc)
+            ) from exc
+        return preview.model_dump()
+
+    async def _propose(
+        request: Request,
+        branch_id: str,
+        campaign_id: str | None,
+        body: dict[str, Any],
+        rid: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        description = body.get("description")
+        if not isinstance(description, str) or not description.strip():
+            raise HTTPException(status_code=400, detail="description must be a non-empty string")
+        if deps.propose_character is None:
+            raise HTTPException(status_code=501, detail="no model wired for proposals")
+        from uro_core.errors import ProviderError
+
+        try:
+            return await deps.propose_character(
+                branch_id, campaign_id, rid, config, description.strip()
+            )
+        except ProviderError as exc:
+            raise HTTPException(status_code=502, detail=f"the model call failed: {exc}") from exc
+        except (ValueError, KeyError) as exc:  # an unknown ruleset, or settings it refuses
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/worlds/{world_id}/character-proposal", **_out(S.CharacterProposal))
+    async def world_character_proposal(
+        world_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Propose a character build from a `description` (D-112), for a new campaign on a branch
+        of this world (with the `ruleset`/`ruleset_config` it would name): the bound model reads
+        the ruleset's spec schema and the world's tone, and the proposal is checked like a preview
+        (`ok`, `problems`). Saves nothing. OPERATOR-only: it is a model call (cost, D-44)."""
+        _require_operator(request)
+        store = _mgmt()
+        if await store.get_world(world_id) is None:
+            raise HTTPException(status_code=404, detail="no such world")
+        branch = await _branch_ref(store, world_id, body.get("branch") or "main")
+        rid, config = _game_fields(body)
+        return await _propose(request, branch.branch_id, None, body, rid, config)
+
+    @app.post("/campaigns/{campaign_id}/character/proposal", **_out(S.CharacterProposal))
+    async def campaign_character_proposal(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Propose a character build from a `description` under this campaign's game (D-112), to
+        join with or to rebuild into. Saves nothing. OPERATOR-only (a model call, D-44)."""
+        _require_operator(request)
+        store = _mgmt()
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        return await _propose(request, campaign.branch_id, campaign_id, body)
+
+    @app.get("/campaigns/{campaign_id}/encounter", **_out(S.EncounterStatus))
+    async def campaign_encounter(campaign_id: str, request: Request) -> dict[str, Any]:
+        """The fight waiting on a player's choice, in a campaign that plays fights turn by turn
+        (D-112): whose turn it is and the legal actions (kind and targets) to send as an intent's
+        `action`. A player sees the fight their own character is in; an operator, any
+        participant's (`?participant=`) or the campaign's first. `{encounter: null}` when none."""
+        _auth(request)
+        _reject_foreign_scope(request, campaign_id)
+        if deps.fight_status is None:
+            raise HTTPException(status_code=501, detail="encounters not enabled")
+        _, caller, admin = _scope(request)
+        who = request.query_params.get("participant") if admin else caller
+        from uro_core.pipeline.encounter import ChoiceRefused as _Refused
+
+        try:
+            return {"encounter": await deps.fight_status(campaign_id, who)}
+        except _Refused as exc:  # a fight begun under another ruleset
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such campaign") from exc
+
+    @app.get("/campaigns/{campaign_id}/character", **_out(S.CharacterOut))
+    async def campaign_character(campaign_id: str, request: Request) -> dict[str, Any]:
+        """Your own character in this campaign (D-112): its sheet as the ruleset shapes it, what it
+        holds, and whether its build may still change. A player reads only their own (an operator
+        may pass `?participant=`); nothing of anyone else's."""
+        target = _whose(request, request.query_params.get("participant"))
+        store = _mgmt()
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        _reject_foreign_scope(request, campaign_id)
+        from uro_core.characters import own_character
+
+        try:
+            return (await own_character(store, campaign, target)).model_dump()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+
+    @app.patch("/campaigns/{campaign_id}/character", **_out(S.CharacterOut))
+    async def rebuild_campaign_character(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Replace your character's build (`spec`) and/or `name` until the story starts: until the
+        first beat after the character was bound (D-112). A refused spec is a 400 with its problems;
+        after the first beat, a 409 saying why. Self-or-operator (`participant`)."""
+        target = _whose(request, body.get("participant"))
+        store = _mgmt()
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="no such campaign")
+        _reject_foreign_scope(request, campaign_id)
+        name = body.get("name")
+        if name is not None and not isinstance(name, str):
+            raise HTTPException(status_code=400, detail="name must be a string")
+        from uro_core.characters import CharacterFrozen, rebuild_character
+
+        try:
+            view = await rebuild_character(
+                store, campaign, target, spec=_spec_field(body), name=name
+            )
+        except CharSpecError as exc:
+            raise _spec_refused(exc) from exc
+        except CharacterFrozen as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        except ValueError as exc:  # the campaign's ruleset can't be built here (review)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return view.model_dump()
+
     @app.get("/campaigns/{campaign_id}/roster", **_out(S.Roster))
     async def campaign_roster(campaign_id: str, request: Request) -> dict[str, Any]:
         _auth(request)
@@ -2277,7 +2517,12 @@ def create_app(
             across = await store.query_across([c.branch_id], sections)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"branch_id": c.branch_id, "state": across.get(c.branch_id, {})}
+        state = across.get(c.branch_id, {})
+        if not admin:  # an NPC's build and danger word are hidden values (D-46, D-112 review)
+            for row in state.get("actors", []):
+                row.pop("spec", None)
+                row.pop("threat", None)
+        return {"branch_id": c.branch_id, "state": state}
 
     @app.delete("/campaigns/{campaign_id}", **_out(S.Removed))
     async def delete_campaign_endpoint(campaign_id: str, request: Request) -> dict[str, Any]:
@@ -2386,13 +2631,16 @@ def create_app(
         intent = str(_require(body, "intent"))
         if not intent.strip():
             raise HTTPException(status_code=400, detail="intent must be non-empty")
-        _, participant, _ = _scope(request)  # token → acting participant (non-None past _auth)
+        _, participant, admin = _scope(request)  # token → acting participant (non-None)
         try:
             events = await deps.preview_beat(campaign_id, participant or "", intent)
         except (ValueError, KeyError) as exc:
             # ValueError: a ruleset this build doesn't have. KeyError: an unbound router
             # role (a residual incomplete-registry gap) → clean 400, not a raw 500.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not admin and deps.store is not None:
+            mine = await deps.store.pc_for_participant(campaign_id, participant or "")
+            events = _redact_for_player(events, mine)
         return {"events": events}
 
     @app.get("/campaigns/{campaign_id}/consistency", **_out(S.Consistency))
@@ -2534,14 +2782,16 @@ def create_app(
                     break
                 mtype = msg.get("type")
                 if mtype == "intent":
+                    action = msg.get("action")  # D-112: a choice on a fight turn
                     await _run_and_broadcast(
                         deps,
                         arb,
                         hub,
                         campaign_id,
                         participant,
-                        str(msg.get("text", "")),
+                        str(msg.get("text", "") or _action_text(action)),
                         msg.get("id"),
+                        action if isinstance(action, dict) else None,
                     )
                 elif mtype == "table_talk":
                     # The NON-CANON coordination lane (D-38): out-of-world debate/proposals. It only
@@ -2633,18 +2883,56 @@ async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> No
         await ws.send_json(message)
 
 
+def _redact_for_player(events: list[dict[str, Any]], own_pc: str | None) -> list[dict[str, Any]]:
+    """A dry-run's would-be events as a player may see them (D-46, D-112 review): another actor's
+    sheet, a check's player-safe numbers for anyone but the player's own character, and a fight's
+    recorded combatants (every sheet and holding) are the operator log's, not the player's."""
+    out: list[dict[str, Any]] = []
+    for e in events:
+        kind, payload = e.get("event_type"), dict(e.get("payload") or {})
+        if kind == "SheetUpdated" and payload.get("actor_id") != own_pc:
+            continue
+        if kind == "CheckResolved" and payload.get("actor_id") != own_pc:
+            payload.pop("player_view", None)
+        if kind == "EncounterStarted":
+            payload.pop("combatants", None)
+        out.append({**e, "payload": payload})
+    return out
+
+
+def _action_text(action: Any) -> str:
+    """The words a fight-turn action stands for, when a client sends no text with it (D-112)."""
+    if not isinstance(action, dict) or not action.get("kind"):
+        return ""
+    target = action.get("target_id")
+    return f"{action['kind']} {target}" if target else str(action["kind"])
+
+
+def _turn_choice(action: dict[str, Any] | None) -> TurnChoice | None:
+    """A socket's `action` as the engine's TurnChoice; a malformed one is refused like an illegal
+    action, with no legal actions to offer (the client sent something unreadable)."""
+    if action is None:
+        return None
+    try:
+        return TurnChoice.model_validate(action)
+    except ValueError as exc:
+        raise ChoiceRefused(f"an action is {{kind, target_id?, data?}}: {exc}") from exc
+
+
 def _beat_details(result: BeatResult) -> dict[str, object]:
     """What `beat_committed` carries beside the narration (D-98), sent to every seat: each check's
     ruleset-graded outcome (not its trace, which may carry sheet values, D-46), the acting
     player's suggestions, the beat's mode, the in-fiction day after it, and the entities it made
     (no claims: their truth is operator-only, D-45)."""
     return {
-        "checks": [c.model_dump() for c in result.outcomes],
+        "checks": [c.model_dump(exclude_none=True) for c in result.outcomes],
         "suggestions": list(result.suggestions),
         "mode": result.mode,
         "world_day": result.world_day,
         "created": [c.model_dump() for c in result.created],
         "threads_changed": [t.model_dump() for t in result.threads_changed],  # D-103
+        # D-112: the fight this beat left waiting on a player's choice, or null
+        "encounter": result.encounter.model_dump() if result.encounter is not None else None,
     }
 
 
@@ -2656,6 +2944,7 @@ async def _run_and_broadcast(
     participant: str,
     text: str,
     intent_id: object = None,
+    action: dict[str, Any] | None = None,
 ) -> None:
     """Admit the intent, run the beat, and broadcast its narration + commit to the whole session
     (docs/08 broadcast-shaped output) — so every connected client sees the SAME beat. A client's
@@ -2696,7 +2985,14 @@ async def _run_and_broadcast(
     chunks: list[str] = []
     result: BeatResult | None = None
     try:
-        async for chunk in deps.run_beat(campaign_id, participant, text):
+        # an action rides only to a run_beat that takes one; a 3-argument run_beat (the declared
+        # type, an embedder's) raises TypeError here, inside the try, as a failed beat (review)
+        beat = (
+            deps.run_beat(campaign_id, participant, text)
+            if action is None
+            else deps.run_beat(campaign_id, participant, text, action)  # type: ignore[call-arg]
+        )
+        async for chunk in beat:
             if isinstance(chunk, BeatResult):  # the committed beat (D-98), after the narration
                 result = chunk
                 continue
@@ -2708,7 +3004,7 @@ async def _run_and_broadcast(
                         "participant_id": participant,
                         "intent": text,
                         "mode": chunk.mode,
-                        "checks": [c.model_dump() for c in chunk.outcomes],
+                        "checks": [c.model_dump(exclude_none=True) for c in chunk.outcomes],
                         **echo,
                     },
                 )
@@ -2729,6 +3025,20 @@ async def _run_and_broadcast(
                 campaign_id,
                 {"type": "narration_chunk", "participant_id": participant, "text": chunk},
             )
+    except ChoiceRefused as exc:
+        # D-112: a fight waits on this player's choice (or the action can't be played): say why
+        # and what they may do. Nothing was committed, and the turn stays theirs — no rotation.
+        await hub.publish(
+            campaign_id,
+            {
+                "type": "encounter_action_refused",
+                "participant_id": participant,
+                "reason": str(exc),
+                "legal_actions": [a.model_dump() for a in exc.legal_actions],
+                **echo,
+            },
+        )
+        return
     except Exception:
         # A beat failure (e.g. a ruleset mismatch, a provider error) must NOT crash the WS
         # connection — broadcast a graceful failure and keep the session alive (mirrors the CLI

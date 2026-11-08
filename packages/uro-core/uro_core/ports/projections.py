@@ -91,7 +91,7 @@ class ProjectionQueries(Protocol):
         defaults, for a world with none (or created before D-80)."""
         ...
 
-    async def world_starting_gear(self, branch_id: str) -> list[str]:
+    async def world_starting_gear(self, branch_id: str) -> list[str | dict[str, Any]]:
         """The items a fresh PC carries in the branch's world (D-97), from its WorldGenesis. []
         for a world that names none (or was created before D-97)."""
         ...
@@ -144,6 +144,28 @@ class ProjectionQueries(Protocol):
         ...
 
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]: ...
+
+    async def open_encounters(
+        self, branch_id: str
+    ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+        """The fights being played turn by turn on the branch (D-112): each start and its turns."""
+        ...
+
+    async def holdings(self, branch_id: str, owner_ref: str) -> list[dict[str, Any]]:
+        """What an actor holds (D-112): `{item_id, name, data}` per item, by id."""
+        ...
+
+    async def actor_spec(self, branch_id: str, actor_id: str) -> tuple[dict[str, Any], str]:
+        """An actor's spec and threat word (D-112); ({}, "") for none."""
+        ...
+
+    async def inherited_ruleset_pin(self, branch_id: str) -> RulesetPin | None:
+        """The ruleset pin a fork carries from the story it came from (D-112), or None."""
+        ...
+
+    async def character_frozen(self, branch_id: str, actor_id: str) -> str | None:
+        """Why a PC's build can no longer change (D-112), or None while it can."""
+        ...
 
     async def get_item(self, branch_id: str, item_id: str) -> dict[str, Any] | None: ...
 

@@ -90,6 +90,20 @@ def _event_str_fields() -> dict[str, frozenset[str]]:
 _EVENT_STR_FIELDS = _event_str_fields()
 
 
+def _is_container(annotation: Any) -> bool:
+    """A list or dict type, also inside an Optional/Union (`dict[str, Any] | None`, D-112 review:
+    `CheckResolved.player_view`, `EncounterTurnTaken.chosen` slipped through as a Union)."""
+    if get_origin(annotation) in (Union, types.UnionType):
+        return any(_is_container(a) for a in get_args(annotation) if a is not type(None))
+    return get_origin(annotation) in (list, dict) or annotation in (list, dict)
+
+
+# Events the engine commits outside any reacted commit: a rule triggered on one would validate and
+# never fire (D-112 review). A player's rename (ActorRenamed) commits through amend_character, which
+# runs no reactions.
+_NEVER_REACTED = frozenset({"ActorRenamed"})
+
+
 def _event_container_fields() -> dict[str, frozenset[str]]:
     """Per event, the payload fields that hold a list or dict (`BeatResolved.threads`,
     `ClaimRecorded.subject_refs`, …). A `where` filter compares a field's string form with a
@@ -98,9 +112,7 @@ def _event_container_fields() -> dict[str, frozenset[str]]:
     for name, obj in vars(_events).items():
         if name.endswith("Payload") and isinstance(obj, type) and issubclass(obj, BaseModel):
             out[name[: -len("Payload")]] = frozenset(
-                f
-                for f, info in obj.model_fields.items()
-                if get_origin(info.annotation) in (list, dict) or info.annotation in (list, dict)
+                f for f, info in obj.model_fields.items() if _is_container(info.annotation)
             )
     out.setdefault("EdgeUpdated", out.get("EdgeAdded", frozenset()))
     return out
@@ -627,6 +639,11 @@ class Rule(BaseModel):
             raise ValueError(
                 f"rule {self.id!r}: trigger.event {ev!r} is not a known event type — it would "
                 f"validate but never fire. Known event types: {', '.join(sorted(_EVENT_FIELDS))}"
+            )
+        if ev in _NEVER_REACTED:
+            raise ValueError(
+                f"rule {self.id!r}: trigger.event {ev!r} is committed outside the reaction pass — "
+                "it would validate but never fire"
             )
         unknown = [k for k in self.trigger.where if k not in _EVENT_FIELDS[ev]]
         if unknown:

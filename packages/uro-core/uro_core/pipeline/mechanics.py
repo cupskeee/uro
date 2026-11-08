@@ -19,7 +19,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from uro_core.pipeline.plan import BeatPlan, PlanMechanic
-from uro_core.rulesets.base import CheckRequest, CheckResult, Ruleset
+from uro_core.rulesets.base import CheckRequest, CheckResult, Holding, Ruleset
 from uro_core.rulesets.rng import Rng
 
 
@@ -52,12 +52,14 @@ def resolve_mechanics(
     sheets: dict[str, dict[str, Any]],
     pc_actor_id: str,
     rng: Rng,
+    holdings: dict[str, list[Holding]] | None = None,
 ) -> MechanicsResult:
     """Resolve the plan's NON-encounter affordance checks. `sheets` maps actor_id → opaque sheet
     dict (not modified); a mechanic on an unsheeted actor is skipped (nothing to roll). A check
     that changed its actor's sheet is threaded into that actor's NEXT check — a second push sees
     the first one's strain. Deterministic: every draw is from `rng`, so the same seed + plan
-    reproduces the same results."""
+    reproduces the same results. `holdings` is what each actor holds (D-112), handed to the
+    ruleset on its check; a ruleset may ignore it."""
     aff_by_id = {a.id: a for a in ruleset.affordances()}
     current = dict(sheets)
     out = MechanicsResult()
@@ -69,7 +71,12 @@ def resolve_mechanics(
         sheet = current.get(actor_id)
         if sheet is None:
             continue  # unsheeted actor — no check to make
-        req = CheckRequest(sheet=sheet, stat=aff.stat, difficulty=aff.difficulty)
+        req = CheckRequest(
+            sheet=sheet,
+            stat=aff.stat,
+            difficulty=aff.difficulty,
+            holdings=(holdings or {}).get(actor_id, []),
+        )
         result = ruleset.resolve_check(req, rng)
         out.resolved.append(ResolvedCheck(actor_id=actor_id, affordance=aff.id, result=result))
         if result.sheet is not None and result.sheet != sheet:

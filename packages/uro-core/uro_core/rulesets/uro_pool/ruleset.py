@@ -34,12 +34,14 @@ from uro_core.rulesets.base import (
     Affordance,
     Award,
     CharSpec,
+    CharSpecError,
     CheckRequest,
     CheckResult,
     Effect,
     EncounterCtx,
     EncounterOutcome,
     EncounterState,
+    SpecProblem,
 )
 from uro_core.rulesets.base import Sheet as SheetDict
 from uro_core.rulesets.rng import Rng
@@ -73,6 +75,41 @@ class PoolConfig(BaseModel):
     rest_days: int = Field(
         1, ge=0, le=36500, description="days of downtime that clear strain (0: downtime never does)"
     )
+
+
+# What a threat hint (D-112) means here: trait dice (capped by `trait_cap`). A spec's own wins.
+_THREAT: dict[str, dict[str, int]] = {
+    "harmless": {"might": 1, "wits": 1, "nerve": 1},
+    "weak": {"might": 1, "wits": 2, "nerve": 1},
+    "average": {},
+    "strong": {"might": 3, "wits": 3, "nerve": 2},
+    "deadly": {"might": 4, "wits": 4, "nerve": 3},
+}
+
+
+class TraitDice(BaseModel):
+    """Dice for any of the three traits, from 1 (named fields, D-112 review); the cap is the
+    world's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    might: int | None = Field(default=None, ge=1)
+    wits: int | None = Field(default=None, ge=1)
+    nerve: int | None = Field(default=None, ge=1)
+
+
+class Spec(BaseModel):
+    """What Uro Pool's `new_character` takes (D-112): any of its three traits (1 die to the cap),
+    and starting wounds, strain and milestones. An unknown key is refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    traits: TraitDice = Field(
+        default_factory=lambda: TraitDice(), description="dice for any of the three traits, from 1"
+    )
+    wounds: int = Field(0, ge=0, le=_WOUNDS_DOWN - 1)
+    strain: int = Field(0, ge=0)
+    milestones: int = Field(0, ge=0)
 
 
 class Sheet(BaseModel):
@@ -139,15 +176,29 @@ class UroPool:
     def config_schema(self) -> dict[str, Any]:
         return PoolConfig.model_json_schema()
 
+    def spec_schema(self) -> dict[str, Any]:
+        return Spec.model_json_schema()
+
     # --- character model ---
 
     def new_character(self, spec: CharSpec, rng: Rng) -> SheetDict:
-        d = spec.data
+        d = Spec.model_validate(spec.data)
+        chosen = d.traits.model_dump(exclude_none=True)
+        over = [k for k, v in chosen.items() if v > self.config.trait_cap]
+        if over:
+            raise CharSpecError(
+                [
+                    SpecProblem(loc=["traits", k], message=f"at most {self.config.trait_cap} here")
+                    for k in over
+                ]
+            )
+        cap = self.config.trait_cap
+        hinted = {k: min(v, cap) for k, v in _THREAT.get(spec.threat, {}).items()}
         return Sheet(
-            traits={**_DEFAULT_TRAITS, **(d.get("traits") or {})},
-            wounds=int(d.get("wounds", 0)),
-            strain=int(d.get("strain", 0)),
-            milestones=int(d.get("milestones", 0)),
+            traits={**_DEFAULT_TRAITS, **hinted, **chosen},
+            wounds=d.wounds,
+            strain=d.strain,
+            milestones=d.milestones,
         ).model_dump()
 
     def progression(self, sheet: SheetDict, award: Award) -> SheetDict:
@@ -231,6 +282,14 @@ class UroPool:
             trace=trace,
             detail={"dice": dice, "target": target, "marks": marks, "pushed": pushed},
             sheet=after,
+            player_view={
+                "stat": trait,
+                "dice": sorted(dice),
+                "against": target,
+                "marks": marks,
+                "pushed": pushed,
+                "band": outcome,
+            },
         )
 
     # --- encounters: simultaneous exchanges ---

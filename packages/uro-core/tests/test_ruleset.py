@@ -6,6 +6,7 @@ port game-agnostic — sheets are opaque dicts, checks yield a graded `outcome`,
 is opaque — so these tests exercise uro_basic through the generalized port + its own `Sheet`.
 """
 
+import pytest
 from uro_core.rulesets.base import (
     Action,
     Award,
@@ -29,7 +30,12 @@ def _spec(abilities: dict[str, int] | None = None, tier: int = 1) -> CharSpec:
 
 
 def _sheet(abilities: dict[str, int], tier: int = 1) -> dict:
-    return RS.new_character(_spec(abilities, tier), Rng(0))
+    # a fixture sheet, built as the ruleset's own model: scores past what a player may build (30)
+    # force an outcome, and `new_character` would rightly refuse them (D-112)
+    base = RS.new_character(_spec({}, tier), Rng(0))
+    return Sheet.model_validate(
+        {**base, "abilities": {**base["abilities"], **abilities}}
+    ).model_dump()
 
 
 # --- seeded RNG determinism ---
@@ -73,15 +79,16 @@ def test_progression_levels_up_and_heals() -> None:
     assert capped.level == 5  # capped at level 5
 
 
-def test_new_character_clamps_to_level_cap() -> None:
-    # Uro Basic tops out at 5; a higher-level spec clamps rather than minting an off-spec sheet
-    # (the cap is Uro Basic's rule, NOT in the generic port — OQ-13/D-30).
-    sheet = Sheet.model_validate(RS.new_character(CharSpec(data={"level": 50}), Rng(0)))
+def test_new_character_refuses_a_level_past_the_cap() -> None:
+    # Uro Basic tops out at 5 (its rule, NOT the generic port's — OQ-13/D-30). A spec past it is
+    # refused with a located problem (D-112: a client needn't redo the cap), not clamped.
+    from uro_core.rulesets.base import CharSpecError, build_character
+
+    with pytest.raises(CharSpecError) as err:
+        build_character(RS, CharSpec(data={"level": 50}), Rng(0))
+    assert [p.loc for p in err.value.problems] == [["level"]]
+    sheet = Sheet.model_validate(RS.new_character(CharSpec(data={"level": 5}), Rng(0)))
     assert sheet.level == 5
-    assert (
-        sheet.max_hp
-        == Sheet.model_validate(RS.new_character(CharSpec(data={"level": 5}), Rng(0))).max_hp
-    )
 
 
 def test_progression_no_op_award_does_not_heal() -> None:

@@ -63,7 +63,7 @@ import logging
 import re
 from typing import Any, Literal, NamedTuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from uro_core.domain.events import (
     DomainEvent,
@@ -85,6 +85,7 @@ from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.providers.base import Message
+from uro_core.rulesets.base import THREAT_LEVELS
 from uro_core.timeline.models import ClaimView, ThreadView
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,15 @@ class ProposedActor(BaseModel):
     role: str = ""
     member_of: str = ""  # a faction this actor belongs to (D-50; cascade-created if it's new)
     located_in: str = ""  # a place this actor is at (D-50; cascade-created if it's new)
+    # D-112: how dangerous the prose shows a NEW person to be, in the engine's neutral words
+    # (rulesets.base.THREAT_LEVELS); the ruleset turns it into numbers if they ever fight. Any
+    # other word, or a non-string, is dropped — never the person (review).
+    threat: str = ""
+
+    @field_validator("threat", mode="before")
+    @classmethod
+    def _any_threat(cls, v: object) -> str:
+        return v if isinstance(v, str) else ""
 
 
 class ProposedPlace(BaseModel):
@@ -663,7 +673,7 @@ async def run_gauntlet(
             aff.setdefault(actor_id, {})[rel] = dst
 
     def resolve_actor(
-        name: str, *, role: str = "", member_of: str = "", located_in: str = ""
+        name: str, *, role: str = "", member_of: str = "", located_in: str = "", threat: str = ""
     ) -> str | None:
         key = canonical_name(name)
         if not key or _is_placeholder(name):
@@ -727,7 +737,12 @@ async def run_gauntlet(
         aid = f"a:{new_id()}"
         events.append(
             actor_created(
-                actor_id=aid, name=name.strip(), tier=1, role=role.strip(), provenance="emergent"
+                actor_id=aid,
+                name=name.strip(),
+                tier=1,
+                role=role.strip(),
+                provenance="emergent",
+                threat=threat.strip().lower() if threat.strip().lower() in THREAT_LEVELS else "",
             )
         )
         actors_by_key.setdefault(key, []).append(aid)
@@ -752,7 +767,13 @@ async def run_gauntlet(
         return _partial_match(_name_parts(name), actor_words)
 
     for pa in extraction.actors:
-        resolve_actor(pa.name, role=pa.role, member_of=pa.member_of, located_in=pa.located_in)
+        resolve_actor(
+            pa.name,
+            role=pa.role,
+            member_of=pa.member_of,
+            located_in=pa.located_in,
+            threat=pa.threat,
+        )
     for pp in extraction.places:
         resolve_place(pp.name, description=pp.description, parent=pp.parent)
     for pf in extraction.factions:

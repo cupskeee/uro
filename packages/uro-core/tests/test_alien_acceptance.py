@@ -29,7 +29,9 @@ D20 = UroBasic()
 
 
 def _pbta(forceful: int) -> dict:
-    return PBTA.new_character(CharSpec(data={"stats": {"forceful": forceful}}), Rng(0))
+    # a fixture: a stat past the cap (5) forces an outcome; new_character would refuse it (D-112)
+    sheet = PBTA.new_character(CharSpec(), Rng(0))
+    return {**sheet, "stats": {**sheet["stats"], "forceful": forceful}}
 
 
 def _d20(abilities: dict[str, int]) -> dict:

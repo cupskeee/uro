@@ -2704,7 +2704,9 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 64  # D-105: +3
+    assert (
+        len([op for ops in spec["paths"].values() for op in ops]) == 71
+    )  # D-112: +7 (encounter, character, previews, proposals)
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).
@@ -2926,6 +2928,44 @@ def test_beat_checks_arrive_before_the_narration() -> None:
     assert msgs[-1]["narration"] == "The diver staggers."
 
 
+def test_a_fight_turn_action_rides_an_intent_and_a_refusal_says_what_to_do() -> None:
+    # D-112: a fight played turn by turn takes the player's choice as the intent's `action`; one
+    # that can't be played is answered with the legal actions, settles the intent, and commits
+    # nothing (no beat_committed, no beat_failed)
+    from uro_core.pipeline.encounter import ChoiceRefused
+    from uro_core.rulesets.base import ActionSpec
+
+    deps = _fake_deps()
+    seen: list[Any] = []
+
+    async def run_beat(
+        campaign_id: str, participant: str, text: str, action: Any = None
+    ) -> AsyncIterator[Any]:
+        seen.append((text, action))
+        if action is None or action.get("kind") != "strike":
+            raise ChoiceRefused(
+                "your character is in a fight: choose one of its actions",
+                [ActionSpec(kind="strike", targets=["a:brute"]), ActionSpec(kind="flee")],
+            )
+        yield "Steel rings."
+
+    deps.run_beat = run_beat
+    with TestClient(create_app(deps)).websocket_connect("/campaigns/camp-1/play?token=tok-a") as ws:
+        ws.send_json({"type": "intent", "text": "I look around", "id": "i-1"})
+        refused = _recv_until(ws, "encounter_action_refused")[-1]
+        assert refused["intent_id"] == "i-1" and "fight" in refused["reason"]
+        assert refused["legal_actions"] == [
+            {"kind": "strike", "targets": ["a:brute"]},
+            {"kind": "flee", "targets": []},
+        ]
+        ws.send_json(
+            {"type": "intent", "action": {"kind": "strike", "target_id": "a:brute"}, "id": "i-2"}
+        )
+        committed = _recv_until(ws, "beat_committed")[-1]
+    assert committed["intent"] == "strike a:brute"  # words stand in for a text-less action
+    assert seen[-1] == ("strike a:brute", {"kind": "strike", "target_id": "a:brute"})
+
+
 def _handler_inputs() -> dict[tuple[str, str], tuple[set[str], set[str], bool]]:
     """Each route handler's (query params, body fields, takes a JSON body), read from its source,
     including the shared helpers that read for it (`_parse_limit`, `_call_scope`, `_effort_field`).
@@ -2940,6 +2980,8 @@ def _handler_inputs() -> dict[tuple[str, str], tuple[set[str], set[str], bool]]:
         "_parse_limit": ({"limit"}, set()),
         "_call_scope": ({"stage", "world", "campaign"}, set()),
         "_effort_field": (set(), {"reasoning_effort"}),
+        "_spec_field": (set(), {"spec"}),  # D-112 review: helpers that read the body
+        "_game_fields": (set(), {"ruleset", "ruleset_config"}),
         "_require": (set(), set()),  # its key is read below
     }
     out = {}

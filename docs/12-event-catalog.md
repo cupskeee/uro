@@ -43,13 +43,14 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Actors
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `ActorCreated` | actor entity, tier; `provenance` (D-108, as `PlaceCreated`) | X H A S | extractor creates at T1 max |
+| `ActorCreated` | actor entity, tier; `provenance` (D-108, as `PlaceCreated`); `spec`, `threat` (D-112: what its sheet is built from the first time one is needed) | X H A S | extractor creates at T1 max; it may set `threat` only |
+| `ActorRenamed` | actor_id, name | S | D-112: a player character's name, only while its build is open (before the first beat after it was bound) |
 | `ActorPromoted` | actor_id, from_tier, to_tier, reason | P S | reason `pinned` = manual (player/API) |
 | `ActorMoved` | actor_id, from_place, to_place | X A P | |
 | `ActorStateChanged` | actor_id, changes{} | X A H | status, occupation, condition flavor |
 | `ActorDamaged` | actor_id, amount, source, trace | — | **LEGACY (D-30):** the pre-Phase-6 d20 runner emitted this per hit (projector reduced hp); the current runner emits harm as the ruleset's opaque final `SheetUpdated` instead. No emitter now; the payload + a replay-compat projector handler are retained only so old d20 logs still rebuild by replay |
 | `ActorDied` | actor_id, cause | R H A E | ruleset-agnostic lifecycle trace → `proj_actors.status='dead'` (the authoritative death record; the projector does NOT touch the ruleset sheet, D-30) |
-| `CheckResolved` | actor_id, affordance, outcome, trace | R | a free-roam check's outcome in the RULESET's own band (`success`/`failure`, `miss`/`partial`/`full`, `fail`/`success`/`triumph`), one per resolved check, in the beat's commit (`caused_by.kind=ruleset`, `beat_id`), D-64. No projection; a reaction rule can trigger on it (`where: {outcome: …}`; add `per_event: true` to fire once per check rather than once per beat), as in a heat meter |
+| `CheckResolved` | actor_id, affordance, outcome, trace, player_view (D-112) | R | a free-roam check's outcome in the RULESET's own band (`success`/`failure`, `miss`/`partial`/`full`, `fail`/`success`/`triumph`), one per resolved check, in the beat's commit (`caused_by.kind=ruleset`, `beat_id`), D-64. No projection; a reaction rule can trigger on it (`where: {outcome: …}`; add `per_event: true` to fire once per check rather than once per beat), as in a heat meter |
 | `SheetUpdated` | actor_id, ruleset_id, sheet | R S | ruleset-owned OPAQUE character sheet; whole-sheet replace, not an incremental patch. The sole channel mechanical harm reaches projections (D-30) — an hp system, a harm clock, conditions, all the same event. Emitted at an encounter's end (`caused_by.kind=ruleset`, `encounter_id`; the ruleset's concluded sheets, advancement included, D-63), by a free-roam check that changed its actor's sheet (`kind=ruleset`, `beat_id`, D-61), and by downtime when a branch's time skips (`kind=ruleset`, no beat: Uro Pool rest, D-63) |
 | `PCBound` / `PCReleased` | actor_id, participant_id, campaign_id | S | adopt-as-PC at fork; release at campaign end (retired hero becomes NPC) |
 
@@ -76,7 +77,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Items
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `ItemCreated` | item entity | X H R S | |
+| `ItemCreated` | item entity; `data` (D-112: opaque, a pack's or a ruleset's; checks and fights see it) | X H R S | |
 | `ItemTransferred` | item_id, from_ref, to_ref, means | X R P E | |
 | `ItemStateChanged` | item_id, changes{} (incl. destroyed) | X R | |
 
@@ -95,7 +96,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Play & campaign
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `CampaignStarted` | campaign_id, branch_id, party[], ruleset_id, ruleset_version, seed | S | pins the governing ruleset id **and version** (D-30) so a later play/fork rebinds the same ruleset via the registry (`06`) |
+| `CampaignStarted` | campaign_id, branch_id, party[], ruleset_id, ruleset_version, seed, ruleset_config (D-112: the campaign's own settings or its story's, null = the world's), encounters (D-112: `auto`/`turns`) | S | pins the governing ruleset id **and version** (D-30) so a later play/fork rebinds the same ruleset via the registry (`06`) |
 | `CampaignEnded` | campaign_id, outcome, marker_ref | S | usually paired with a marker |
 | `SceneEntered` | place_id, present_actors[], mode | P | reserved: no producer exists (D-87 — recall's on-stage set is "named in the window", not presence) |
 | `ModeChanged` | from, to (`freeroam|encounter|downtime`), cause | P R | |
@@ -105,8 +106,8 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 ### Encounter (ruleset-driven)
 | event_type | payload | emit | notes |
 |---|---|---|---|
-| `EncounterStarted` | encounter_id, participants[] | R E | no `initiative` field (removed D-30 — turn ordering is ruleset-internal; d20 has initiative, PbtA does not). E: the parking handoff that opens an external-resolver-owned encounter (Uro decides *to* park via `ModeChanged` P/R; `EncounterStarted` marks the boundary where authority passes to E) |
-| `EncounterTurnTaken` | encounter_id, actor_id, action, result, trace | R | trace = human-readable roll math for narration; external resolvers report bundles, not turns |
+| `EncounterStarted` | encounter_id, participants[]; for a fight played turn by turn (D-112) `interactive`, `seed`, `combatants[]` (as they entered: sheets, holdings), what each turn replays from | R E | no `initiative` field (removed D-30 — turn ordering is ruleset-internal; d20 has initiative, PbtA does not). E: the parking handoff that opens an external-resolver-owned encounter (Uro decides *to* park via `ModeChanged` P/R; `EncounterStarted` marks the boundary where authority passes to E) |
+| `EncounterTurnTaken` | encounter_id, actor_id, action, result, trace; `chosen` (D-112: the player's action, so the turn replays; null for a ruleset-decided turn) | R | trace = human-readable roll math for narration; external resolvers report bundles, not turns |
 | `EncounterEnded` | encounter_id, outcome | R E | E: outcome bundle — participants, witnesses, casualties, notable feats |
 
 ### History
