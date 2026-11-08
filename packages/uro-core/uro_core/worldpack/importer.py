@@ -60,6 +60,8 @@ def pack_to_events(pack: WorldPack) -> list[DomainEvent]:
                 role=a.role,
                 aliases=a.aliases,
                 provenance=a.provenance,
+                spec=a.spec,
+                threat=a.threat,
             )
         )
         if a.faction:

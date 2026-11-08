@@ -12,6 +12,7 @@ from uro_core.errors import PackError
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
+from uro_core.rulesets.base import CharSpec, CharSpecError, build_character
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import World
 from uro_core.worldpack.backfill import backfill_gaps
@@ -37,11 +38,19 @@ def ruleset_problem(pack: WorldPack) -> str | None:
     refuses (D-62) — or None. Shared by validate and import, so both judge a pack the same way."""
     decl = pack.manifest.ruleset
     try:
-        registry.resolve(decl.id, decl.version, decl.config)
+        ruleset = registry.resolve(decl.id, decl.version, decl.config)
     except KeyError as exc:
         return str(exc.args[0])
     except ValueError as exc:
         return str(exc)
+    # every actor's spec builds under the pack's ruleset (D-112), so a typo fails here, loudly,
+    # instead of quietly falling back to a default sheet in the actor's first fight
+    for a in pack.actors:
+        if a.spec or a.threat:
+            try:
+                build_character(ruleset, CharSpec(data=a.spec, threat=a.threat), Rng(0))
+            except CharSpecError as exc:
+                return f"actor {a.id!r}: its spec doesn't build under {ruleset.id}: {exc}"
     return None
 
 
@@ -79,7 +88,9 @@ async def import_pack(
         rule_pack=pack.rule_pack.model_dump() if pack.rule_pack else {},
         clock=pack.manifest.clock.model_dump(exclude_defaults=True),
         pacing=pack.manifest.pacing.model_dump(exclude_defaults=True),
-        starting_gear=pack.manifest.starting_gear,
+        starting_gear=[
+            g if isinstance(g, str) else g.model_dump() for g in pack.manifest.starting_gear
+        ],
         description=pack.manifest.description,
         # only a declaration the pack made (its `[content]` table), never the defaults (D-104)
         content=(

@@ -31,6 +31,7 @@ from uro_core.domain.events import (
     adaptation_applied,
     campaign_ended,
     campaign_started,
+    gear_item,
     history_cause,
     item_created,
     pc_bound,
@@ -349,7 +350,7 @@ class PostgresEventStore:
         ruleset_config: dict[str, Any] | None = None,
         clock: dict[str, Any] | None = None,
         pacing: dict[str, Any] | None = None,
-        starting_gear: list[str] | None = None,
+        starting_gear: list[str | dict[str, Any]] | None = None,
         description: str = "",
         content: dict[str, Any] | None = None,
         manifest: dict[str, Any] | None = None,
@@ -745,7 +746,7 @@ class PostgresEventStore:
         new_pc_name: str | None = None,
         new_pc_id: str | None = None,
         pc_sheet: dict[str, Any] | None = None,
-        starting_items: list[str] | None = None,
+        starting_items: list[str | dict[str, Any]] | None = None,
         ruleset_id: str = "",
         ruleset_version: str = "",
         seed: int = 0,
@@ -788,8 +789,11 @@ class PostgresEventStore:
                 sheet_updated(actor_id=pc_actor_id, sheet=pc_sheet, ruleset_id=ruleset_id)
             )
         # Starting equipment (docs/02) — so items exist in play and a lost fight can loot them.
-        for name in starting_items or []:
-            events.append(item_created(item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id))
+        for entry in starting_items or []:
+            name, data = gear_item(entry)
+            events.append(
+                item_created(item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id, data=data)
+            )
         async with self.pool.acquire() as conn, conn.transaction():
             branch = await conn.fetchrow(
                 "SELECT world_id FROM branches WHERE branch_id = $1", branch_id
@@ -1077,7 +1081,7 @@ class PostgresEventStore:
         new_pc_name: str | None = None,
         new_pc_id: str | None = None,
         pc_sheet: dict[str, Any] | None = None,
-        starting_items: list[str] | None = None,
+        starting_items: list[str | dict[str, Any]] | None = None,
         ruleset_id: str = "",
     ) -> str:
         """Seat an ADDITIONAL participant's PC on a LIVE campaign (docs/08, OQ-7) — the party-join
@@ -1113,8 +1117,11 @@ class PostgresEventStore:
                     ruleset_id=ruleset_id or campaign.ruleset_id,
                 )
             )
-        for name in starting_items or []:
-            events.append(item_created(item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id))
+        for entry in starting_items or []:
+            name, data = gear_item(entry)
+            events.append(
+                item_created(item_id=f"i:{new_id()}", name=name, owner_ref=pc_actor_id, data=data)
+            )
         async with self.pool.acquire() as conn, conn.transaction():
             if adopt_actor_id is not None:
                 known = await conn.fetchval(
@@ -2300,7 +2307,7 @@ class PostgresEventStore:
             )
         return (row["payload"].get("clock") or {}) if row is not None else {}
 
-    async def world_starting_gear(self, branch_id: str) -> list[str]:
+    async def world_starting_gear(self, branch_id: str) -> list[str | dict[str, Any]]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT e.payload FROM events e "

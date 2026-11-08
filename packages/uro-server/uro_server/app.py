@@ -2748,7 +2748,7 @@ def _beat_details(result: BeatResult) -> dict[str, object]:
     player's suggestions, the beat's mode, the in-fiction day after it, and the entities it made
     (no claims: their truth is operator-only, D-45)."""
     return {
-        "checks": [c.model_dump() for c in result.outcomes],
+        "checks": [c.model_dump(exclude_none=True) for c in result.outcomes],
         "suggestions": list(result.suggestions),
         "mode": result.mode,
         "world_day": result.world_day,
@@ -2817,7 +2817,7 @@ async def _run_and_broadcast(
                         "participant_id": participant,
                         "intent": text,
                         "mode": chunk.mode,
-                        "checks": [c.model_dump() for c in chunk.outcomes],
+                        "checks": [c.model_dump(exclude_none=True) for c in chunk.outcomes],
                         **echo,
                     },
                 )

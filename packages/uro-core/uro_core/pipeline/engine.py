@@ -80,9 +80,12 @@ from uro_core.providers.base import Message
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets.base import (
     CharSpec,
+    CharSpecError,
     Combatant,
     EncounterOutcome,
+    Holding,
     Ruleset,
+    build_character,
     ruleset_contract_problem,
 )
 from uro_core.rulesets.rng import Rng
@@ -148,6 +151,9 @@ class CheckOutcome(BaseModel):
     actor_id: str
     affordance: str
     outcome: str  # the ruleset's grade ("success", "partial", "miss", …), opaque to the engine
+    # D-112: what the ruleset says a player may see of the roll (the actor's own dice, modifier,
+    # band). Only for the ACTING player's own character: an NPC's numbers are hidden values.
+    player_view: dict[str, Any] | None = None
 
 
 class BeatMechanics(BaseModel):
@@ -174,7 +180,12 @@ _CREATED_KINDS = {
 
 def _outcomes(ctx: _Context) -> list[CheckOutcome]:
     return [
-        CheckOutcome(actor_id=c.actor_id, affordance=c.affordance, outcome=c.result.outcome)
+        CheckOutcome(
+            actor_id=c.actor_id,
+            affordance=c.affordance,
+            outcome=c.result.outcome,
+            player_view=c.result.player_view if c.actor_id == ctx.pc_actor_id else None,
+        )
         for c in ctx.checks
     ]
 
@@ -1197,6 +1208,7 @@ class Engine:
                 affordance=c.affordance,
                 outcome=c.result.outcome,
                 trace=c.result.trace,
+                player_view=c.result.player_view,
                 caused_by=ruleset_cause,
             )
             for c in ctx.checks
@@ -1299,14 +1311,20 @@ class Engine:
             sheet_dict = ctx.check_sheets.get(actor_id) or await self._store.get_sheet(
                 branch, actor_id
             )
-            if sheet_dict is None:  # a known-but-unsheeted combatant gets a default sheet, logged
-                sheet_dict = self._ruleset.new_character(CharSpec(), Rng(0))
+            if sheet_dict is None:  # a known-but-unsheeted combatant: built from its spec (D-112)
+                sheet_dict = await self._first_sheet(branch, actor_id)
                 setup.append(
                     sheet_updated(actor_id=actor_id, sheet=sheet_dict, ruleset_id=self._ruleset.id)
                 )
             is_pc = await self._store.is_pc(branch, actor_id)
             combatants.append(
-                Combatant(actor_id=actor_id, team=team, sheet=sheet_dict, is_pc=is_pc)
+                Combatant(
+                    actor_id=actor_id,
+                    team=team,
+                    sheet=sheet_dict,
+                    is_pc=is_pc,
+                    holdings=await self._holdings(branch, actor_id),
+                )
             )
 
         encounter_id = f"e:{new_id()}"
@@ -1434,13 +1452,31 @@ class Engine:
             # A ruleset-bound beat whose PC has no sheet resolves 0 checks — surface it rather
             # than silently skip. (world new / campaign new sheet the PC; this is an edge.)
             logger.warning("ruleset-bound beat: PC %r has no sheet; checks skipped", pc_actor_id)
+        held = {aid: await self._holdings(campaign.branch_id, aid) for aid in sheets}
         rng = await self._beat_rng(campaign)
-        gate = resolve_mechanics(self._ruleset, plan, sheets, pc_actor_id, rng)
+        gate = resolve_mechanics(self._ruleset, plan, sheets, pc_actor_id, rng, holdings=held)
         # Only the ACTING PC's sheet takes a check's consequences (strain, XP). An NPC's check rolls
         # and is reported (CheckResolved), but costs and advancement are a player character's, as
         # in a fight (D-63).
         gate.sheets = {k: v for k, v in gate.sheets.items() if k == pc_actor_id}
         return gate
+
+    async def _holdings(self, branch_id: str, actor_id: str) -> list[Holding]:
+        """What an actor holds, as a check or a fight sees it (D-112)."""
+        return [Holding(**h) for h in await self._store.holdings(branch_id, actor_id)]
+
+    async def _first_sheet(self, branch_id: str, actor_id: str) -> dict[str, Any]:
+        """The sheet an unsheeted actor gets the first time one is needed (D-112): built by the
+        ruleset from the spec and threat word the actor carries, else its default. A spec the
+        world's ruleset can't build (a pack written for another game) falls back to the default,
+        logged, rather than failing the beat."""
+        assert self._ruleset is not None
+        data, threat = await self._store.actor_spec(branch_id, actor_id)
+        try:
+            return build_character(self._ruleset, CharSpec(data=data, threat=threat), Rng(0))
+        except CharSpecError as exc:
+            logger.warning("actor %r: its spec doesn't build (%s); default sheet", actor_id, exc)
+            return build_character(self._ruleset, CharSpec(), Rng(0))
 
     async def _beat_rng(self, campaign: Campaign) -> Rng:
         """A per-beat seeded Rng from the campaign SEED + the commit DEPTH it builds on (G-3).

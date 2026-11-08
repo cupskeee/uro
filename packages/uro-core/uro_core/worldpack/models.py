@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from uro_core.pipeline.pacing import PacingSettings
+from uro_core.rulesets.base import THREAT_LEVELS
 from uro_core.worldpack.rules import RulePack
 
 Rating = Literal["none", "mild", "mature", "explicit"]
@@ -87,6 +88,15 @@ class HistoryDecl(BaseModel):
     vocabulary: HistoryVocabulary | None = None  # none → the world can't be seeded (D-97)
 
 
+class GearItem(BaseModel):
+    """A starting item with data (D-112): its name, and opaque data checks and fights see."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class WorldManifest(BaseModel):
     name: str
     tone: list[str] = Field(default_factory=list)
@@ -94,8 +104,9 @@ class WorldManifest(BaseModel):
     # (an authoring step, D-108) reads it to ground what it invents.
     description: str = ""
     generate_population: bool = False  # the "generate freely" flag (docs/09 sufficiency)
-    # `[world] starting_gear` (D-97): items a fresh PC carries in this world; none by default
-    starting_gear: list[str] = Field(default_factory=list)
+    # `[world] starting_gear` (D-97): items a fresh PC carries in this world; none by default.
+    # An entry is a name, or a `{name, data}` table whose opaque data a ruleset may read (D-112).
+    starting_gear: list[str | GearItem] = Field(default_factory=list)
     content: ContentDecl = Field(default_factory=ContentDecl)
     calendar: CalendarDecl = Field(default_factory=CalendarDecl)
     clock: ClockDecl = Field(default_factory=ClockDecl)
@@ -144,6 +155,18 @@ class ActorSeed(BaseModel):
     # both ways, which is the only relation rumors spread along (engines/actor.propagate_belief).
     knows: list[str] = Field(default_factory=list)
     provenance: str = "author"  # "ai_backfill" for machine-generated seeds (D-108)
+    # D-112: what its sheet is built from the first time one is needed — the ruleset's own spec
+    # (checked against the pack's ruleset at validate and import), and/or the engine's neutral
+    # danger word (one of rulesets.base.THREAT_LEVELS)
+    spec: dict[str, Any] = Field(default_factory=dict)
+    threat: str = ""
+
+    @field_validator("threat")
+    @classmethod
+    def _threat_word(cls, v: str) -> str:
+        if v and v not in THREAT_LEVELS:
+            raise ValueError(f"threat is one of {', '.join(THREAT_LEVELS)}")
+        return v
 
 
 class ThreadSeed(BaseModel):

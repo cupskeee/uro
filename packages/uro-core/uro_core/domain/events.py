@@ -79,8 +79,9 @@ class WorldGenesisPayload(BaseModel):
     # The pack's `[pacing]` settings (D-95): when the engine names a quiet plot to the narrator.
     # {} = the defaults (`pipeline/pacing.py`).
     pacing: dict[str, Any] = Field(default_factory=dict)
-    # A fresh PC's starting gear in this world (D-97): item names, the game's own. [] = none.
-    starting_gear: list[str] = Field(default_factory=list)
+    # A fresh PC's starting gear in this world (D-97): item names, the game's own, or
+    # `{name, data}` with opaque data a ruleset may read (D-112). [] = none.
+    starting_gear: list[str | dict[str, Any]] = Field(default_factory=list)
     # What a platform lists the world by (D-104): the pack's pitch and its `[content]` declaration
     # ({} = none declared), and the whole parsed manifest, so a later step that reads the manifest
     # (History seeding) works from the world alone. {} for a world made without a pack.
@@ -118,7 +119,7 @@ def world_genesis(
     rule_pack: dict[str, Any] | None = None,
     clock: dict[str, Any] | None = None,
     pacing: dict[str, Any] | None = None,
-    starting_gear: list[str] | None = None,
+    starting_gear: list[str | dict[str, Any]] | None = None,
     description: str = "",
     content: dict[str, Any] | None = None,
     manifest: dict[str, Any] | None = None,
@@ -686,6 +687,16 @@ class CheckResolvedPayload(BaseModel):
     affordance: str
     outcome: str
     trace: str = ""
+    # D-112: the part of the check the ruleset says a player may see (the acting character's own
+    # dice and band); None when it declares none. Sent to players only for their own PC's checks.
+    player_view: dict[str, Any] | None = None
+
+
+def gear_item(entry: str | dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """A starting-gear entry (D-97, D-112) as (name, data): a bare name, or `{name, data}`."""
+    if isinstance(entry, str):
+        return entry, {}
+    return str(entry.get("name", "")), dict(entry.get("data") or {})
 
 
 def check_resolved(
@@ -694,6 +705,7 @@ def check_resolved(
     affordance: str,
     outcome: str,
     trace: str = "",
+    player_view: dict[str, Any] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -701,7 +713,11 @@ def check_resolved(
         entity_refs=[actor_id],
         caused_by=_default_cause(caused_by),
         payload=CheckResolvedPayload(
-            actor_id=actor_id, affordance=affordance, outcome=outcome, trace=trace
+            actor_id=actor_id,
+            affordance=affordance,
+            outcome=outcome,
+            trace=trace,
+            player_view=player_view,
         ).model_dump(),
     )
 
