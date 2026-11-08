@@ -18,6 +18,7 @@ import asyncpg
 import httpx
 
 from uro_core.errors import ProviderError
+from uro_core.metering import describe_failure
 from uro_core.ports.model_registry import ROLES, ModelConnection, ModelRegistry, RoleBinding
 from uro_core.providers import codex_auth
 from uro_core.providers.adapters.anthropic import AnthropicProvider
@@ -468,10 +469,8 @@ async def probe_connection(
         failed = f"{conn.provider}:{probe_model} failed"
         if conn.provider in _DIAGNOSABLE and isinstance(exc, ProviderError):
             return {"ok": False, "model": probe_model, "detail": f"{failed} — {exc}"}
-        reason = exc.detail if isinstance(exc, ProviderError) else None
-        return {
-            "ok": False,
-            "model": probe_model,
-            "detail": f"{failed} ({type(exc).__name__})" + (f" — {reason}" if reason else ""),
-        }
+        # The same safe chain a failed call records (`describe_failure`): exception types, an HTTP
+        # status, the adapter's safe detail — so a dropped connection reads `ConnectError`, not a
+        # bare `ProviderError` (D-110, found live).
+        return {"ok": False, "model": probe_model, "detail": f"{failed}: {describe_failure(exc)}"}
     return {"ok": True, "model": probe_model, "detail": f"{conn.provider}:{probe_model} responded"}
