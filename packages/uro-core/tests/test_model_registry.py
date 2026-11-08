@@ -386,3 +386,30 @@ async def test_a_failed_probe_says_why_and_which_model(
         "HTTP 401 authentication_error: invalid x-api-key"
     )
     assert "sk-ant" not in out["detail"]
+
+
+def test_an_unbound_probe_takes_a_cheap_model_not_the_list_head() -> None:
+    # Uro Loom request 10: Anthropic lists Haiku 4.5 by its dated id and sorts Fable first, so an
+    # unbound connection was probed on Claude Fable 5. The pinned default now matches its dated id,
+    # and with nothing pinned listed a cheap tier beats list order.
+    from uro_core.providers.registry import default_probe_model
+
+    listed = ["claude-fable-5", "claude-haiku-4-5-20251001", "claude-opus-5-5", "claude-sonnet-5-5"]
+    ant = ModelConnection(
+        id="a", name="a", provider="anthropic", cached_models=[{"id": m} for m in listed]
+    )
+    assert default_probe_model(ant) == "claude-haiku-4-5-20251001"  # the id the connection lists
+    no_45 = ant.model_copy(
+        update={
+            "cached_models": [{"id": m} for m in listed if "4-5" not in m]
+            + [{"id": "claude-haiku-5-5"}]
+        }
+    )
+    assert default_probe_model(no_45) == "claude-haiku-5-5"  # a cheap tier, not claude-fable-5
+    compat = ModelConnection(
+        id="c",
+        name="c",
+        provider="openai_compat",
+        cached_models=[{"id": "big-model-70b"}, {"id": "qwen-mini"}, {"id": "geminist"}],
+    )
+    assert default_probe_model(compat) == "qwen-mini"

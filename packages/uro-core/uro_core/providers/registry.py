@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from typing import Any
 
 import asyncpg
@@ -373,17 +374,25 @@ _DEFAULT_PROBE_MODEL = {
 }
 
 
+# Name parts of a provider's cheap chat tier, cheapest-sounding first (Uro Loom request 10).
+_CHEAP_TIERS = ("haiku", "nano", "mini", "flash", "lite", "small")
+
+
 def default_probe_model(conn: ModelConnection, bindings: list[RoleBinding] | None = None) -> str:
     """Pick the model a connection-level probe calls when the caller names none (D-110): a test
     should say whether the connection works with the models it will be USED with.
 
     1. The model bound to the `default` role, if that binding is on this connection; else the
        model of any other chat role bound to it (narrator first, then by role name).
-    2. The pinned known-good chat default, if the connection's discovered models include it (or
-       none were discovered).
-    3. The connection's first discovered CHAT model — except on `openai`, whose discovered list
-       mixes in models the chat probe can't call that `classify_modality` can't tell apart (it
-       leads, sorted, with the legacy base-completion `babbage-002`: the reported bug).
+    2. The pinned known-good chat default, if the connection lists it — by its exact id or as a
+       dated id of it (`claude-haiku-4-5` ↔ `claude-haiku-4-5-20251001`, the form Anthropic
+       lists), calling the id the connection lists — or if none were discovered.
+    3. A discovered chat model of a CHEAP tier (`haiku`, `nano`, `mini`, `flash`, `lite`,
+       `small`, in that order), else the first discovered chat model (Uro Loom request 10): a
+       liveness check should cost next to nothing, and providers list newest or most capable
+       first (Anthropic's leads with Fable). Not on `openai`, whose discovered list mixes in
+       models the chat probe can't call that `classify_modality` can't tell apart (it leads,
+       sorted, with the legacy base-completion `babbage-002`: the reported bug).
     4. The pinned default.
     """
     mine = [b for b in bindings or [] if b.connection_id == conn.id and b.model]
@@ -393,12 +402,20 @@ def default_probe_model(conn: ModelConnection, bindings: list[RoleBinding] | Non
             return b.model
     pinned = _DEFAULT_PROBE_MODEL.get(conn.provider, "")
     cached = [str(m["id"]) for m in conn.cached_models or [] if m.get("id")]
-    if pinned and (not cached or pinned in cached):
+    if pinned and not cached:
         return pinned
-    if conn.provider != "openai":
+    if pinned:
         for mid in cached:
-            if classify_modality(conn.provider, mid) == "chat":
+            if mid == pinned or re.fullmatch(re.escape(pinned) + r"-\d{8}", mid):
                 return mid
+    if conn.provider != "openai":
+        chat = [m for m in cached if classify_modality(conn.provider, m) == "chat"]
+        for tier in _CHEAP_TIERS:
+            for mid in chat:
+                if re.search(rf"(^|[-_/.:]){tier}($|[-_/.:\d])", mid.lower()):
+                    return mid
+        if chat:
+            return chat[0]
     return pinned
 
 
