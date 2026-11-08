@@ -18,7 +18,7 @@ import asyncpg
 import httpx
 
 from uro_core.errors import ProviderError
-from uro_core.ports.model_registry import ROLES, ModelConnection, ModelRegistry
+from uro_core.ports.model_registry import ROLES, ModelConnection, ModelRegistry, RoleBinding
 from uro_core.providers import codex_auth
 from uro_core.providers.adapters.anthropic import AnthropicProvider
 from uro_core.providers.adapters.cli import ClaudeCliProvider, CodexCliProvider
@@ -67,13 +67,14 @@ def check_reasoning_effort(conn: ModelConnection, effort: str | None) -> str | N
         raise ValueError(f"reasoning effort must be one of {', '.join(REASONING_EFFORTS)}")
     if conn.provider not in EFFORT_KINDS:
         raise ValueError(f"a {conn.provider!r} connection takes no reasoning effort")
-    if conn.provider == "claude_cli" and effort not in _CLAUDE_CLI_EFFORTS:
-        # `claude --effort` takes only these; anything else would fail every call (review)
-        raise ValueError(f"a claude_cli effort must be one of {', '.join(_CLAUDE_CLI_EFFORTS)}")
+    if conn.provider in ("claude_cli", "anthropic") and effort not in _CLAUDE_EFFORTS:
+        # `claude --effort` and Anthropic's `output_config.effort` take only these; anything else
+        # would fail every call (review)
+        raise ValueError(f"a {conn.provider} effort must be one of {', '.join(_CLAUDE_EFFORTS)}")
     return effort
 
 
-_CLAUDE_CLI_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+_CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # The executable a CLI connection may run (D-72): base_url picks WHICH install, never what program.
 _CLI_EXECUTABLES = {"claude_cli": "claude", "codex_cli": "codex"}
 
@@ -134,6 +135,7 @@ def provider_from_connection(
             model=model,
             api_key=access_token or "",
             base_url=conn.base_url or "https://api.anthropic.com",
+            reasoning_effort=reasoning_effort,
         )
     if kind in ("claude_cli", "codex_cli"):
         # A locally installed, logged-in CLI run headlessly (D-72): the CLI's own login is the
@@ -350,17 +352,18 @@ async def discover_models(
 
 
 # The `test`-probe output ceiling. Small enough to be ~free on a chat model (it stops after a
-# one-word reply anyway) but large enough that an o-series reasoning model — which spends the budget
-# on hidden reasoning tokens BEFORE any output — clears its minimum and can 200 rather than failing
-# the very probe this is meant to make pass.
-_PROBE_MAX_TOKENS = 256
+# one-word reply anyway) but large enough that a reasoning model — an o-series model, or a Claude
+# model whose adaptive thinking is on by default (D-110) — which spends the budget on hidden
+# reasoning BEFORE any output, still gets to answer rather than failing the very probe this is
+# meant to make pass.
+_PROBE_MAX_TOKENS = 1024
 
-# A known-good CHAT model to probe when `test` is called without one (D-47 slice 3). See
-# `_default_probe_model` — for local/openai_compat the connection's own discovered models are a
-# better canary than any pinned default.
+# A known-good CHAT model to probe when `test` is called without one and the connection gives no
+# better answer (see `default_probe_model`). Pinned names go stale as providers retire models, so
+# they are the last resort, not the first.
 _DEFAULT_PROBE_MODEL = {
     "openai": "gpt-4o-mini",
-    "anthropic": "claude-sonnet-5",
+    "anthropic": "claude-haiku-4-5",
     "local": "llama3.1",
     "stub": "stub-chat",
     "codex": "gpt-5",  # fallback if a codex connection's models weren't discovered (review)
@@ -369,22 +372,33 @@ _DEFAULT_PROBE_MODEL = {
 }
 
 
-def default_probe_model(conn: ModelConnection) -> str:
-    """Pick a canary model for a connection-level liveness probe when the caller passes none.
+def default_probe_model(conn: ModelConnection, bindings: list[RoleBinding] | None = None) -> str:
+    """Pick the model a connection-level probe calls when the caller names none (D-110): a test
+    should say whether the connection works with the models it will be USED with.
 
-    Prefer the provider's known-good chat default — NOT `cached_models[0]`: `discover_models`
-    returns the list SORTED, so OpenAI's leads with `babbage-002`, a legacy base-completion model
-    the chat-probe can't call → a false ✗ (the reported bug). For `local`/`openai_compat` (where
-    there is no reliable pinned chat default — the local one may not even be pulled) fall back to
-    the connection's OWN first discovered model, which `classify_modality` then routes correctly to
-    embed-vs-complete. A precise per-MODEL check lives on each role binding instead.
+    1. The model bound to the `default` role, if that binding is on this connection; else the
+       model of any other chat role bound to it (narrator first, then by role name).
+    2. The pinned known-good chat default, if the connection's discovered models include it (or
+       none were discovered).
+    3. The connection's first discovered CHAT model — except on `openai`, whose discovered list
+       mixes in models the chat probe can't call that `classify_modality` can't tell apart (it
+       leads, sorted, with the legacy base-completion `babbage-002`: the reported bug).
+    4. The pinned default.
     """
-    if conn.provider in ("local", "openai_compat", "codex"):
-        for m in conn.cached_models or []:
-            mid = m.get("id")
-            if mid:
-                return str(mid)
-    return _DEFAULT_PROBE_MODEL.get(conn.provider, "")
+    mine = [b for b in bindings or [] if b.connection_id == conn.id and b.model]
+    order = {"default": 0, "narrator": 1}
+    for b in sorted(mine, key=lambda b: (order.get(b.role, 2), b.role)):
+        if b.role != "embedder" and classify_modality(conn.provider, b.model) == "chat":
+            return b.model
+    pinned = _DEFAULT_PROBE_MODEL.get(conn.provider, "")
+    cached = [str(m["id"]) for m in conn.cached_models or [] if m.get("id")]
+    if pinned and (not cached or pinned in cached):
+        return pinned
+    if conn.provider != "openai":
+        for mid in cached:
+            if classify_modality(conn.provider, mid) == "chat":
+                return mid
+    return pinned
 
 
 async def refresh_connection_models(
@@ -401,7 +415,8 @@ async def refresh_connection_models(
     return models
 
 
-# Kinds whose ProviderError text is safe to show (built without any credential in it).
+# Kinds whose ProviderError text is safe to show (built without any credential in it). Every other
+# kind shows only `ProviderError.detail`, which its adapter builds safe (D-110).
 _DIAGNOSABLE = frozenset({"codex", "claude_cli", "codex_cli"})
 
 
@@ -413,7 +428,9 @@ async def probe_connection(
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """A 1-call liveness probe of a connection (D-47 slice 3) — `POST /providers/{id}/test` and
-    `uro provider test`. Returns `{ok, detail}`: a provider failure is `ok: False`, not an error.
+    `uro provider test`. Returns `{ok, model, detail}` — `model` is the one actually probed
+    (`default_probe_model` when the caller names none, D-110): a provider failure is `ok: False`
+    with the safe reason in `detail`, not an error.
     KeyError if the connection doesn't exist; ValueError for an effort the connection can't take.
     With `reasoning_effort` (D-71) the probe sends it, so a model that rejects it fails here rather
     than on every call of the role it's bound to. Metered (stage `test`, D-66) when it can be."""
@@ -422,7 +439,7 @@ async def probe_connection(
     conn = await store.get_connection(connection_id)
     if conn is None:
         raise KeyError(connection_id)
-    probe_model = model or default_probe_model(conn)
+    probe_model = model or default_probe_model(conn, await store.list_role_bindings())
     effort = check_reasoning_effort(conn, reasoning_effort)
     provider = provider_from_connection(
         conn, probe_model, await _access_token(store, conn), reasoning_effort=effort
@@ -448,10 +465,13 @@ async def probe_connection(
         # backend's error body), and the CLI kinds, whose errors are redacted (D-72) — so a
         # rejected call, or a CLI that isn't installed or logged in, is diagnosable.
         logger.warning("provider test failed for %s: %s", conn.provider, type(exc).__name__)
+        failed = f"{conn.provider}:{probe_model} failed"
         if conn.provider in _DIAGNOSABLE and isinstance(exc, ProviderError):
-            return {"ok": False, "detail": f"{conn.provider}:{probe_model} failed — {exc}"}
+            return {"ok": False, "model": probe_model, "detail": f"{failed} — {exc}"}
+        reason = exc.detail if isinstance(exc, ProviderError) else None
         return {
             "ok": False,
-            "detail": f"{conn.provider}:{probe_model} failed ({type(exc).__name__})",
+            "model": probe_model,
+            "detail": f"{failed} ({type(exc).__name__})" + (f" — {reason}" if reason else ""),
         }
-    return {"ok": True, "detail": f"{conn.provider}:{probe_model} responded"}
+    return {"ok": True, "model": probe_model, "detail": f"{conn.provider}:{probe_model} responded"}

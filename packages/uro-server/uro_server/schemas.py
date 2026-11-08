@@ -198,6 +198,7 @@ class Models(Out):
 
 class ProbeOutcome(Out):
     ok: bool
+    model: str = ""  # the model actually probed (D-110); "" from an older engine
     detail: str
 
 

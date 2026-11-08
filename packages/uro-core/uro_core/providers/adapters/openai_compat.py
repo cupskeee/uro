@@ -15,6 +15,7 @@ import httpx
 
 from uro_core.errors import ProviderError
 from uro_core.providers.base import CompletionRequest, report_usage
+from uro_core.providers.http_errors import http_failure_detail
 
 # OpenAI o-series reasoning models (o1 / o3 / o3-mini / o4-mini / …) speak a slightly different
 # Chat Completions dialect: they REJECT `max_tokens` (require `max_completion_tokens` instead) and
@@ -107,6 +108,8 @@ class OpenAICompatProvider:
                     "POST", f"{self._base_url}/chat/completions", headers=headers, json=body
                 ) as resp,
             ):
+                if resp.is_error:
+                    await resp.aread()  # so the error body can say why (D-110)
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
@@ -133,7 +136,13 @@ class OpenAICompatProvider:
                     if piece:
                         yield piece
         except httpx.HTTPError as exc:
-            raise ProviderError(f"provider request failed: {exc}") from exc
+            raise self._failed("provider request", exc) from exc
+
+    def _failed(self, what: str, exc: httpx.HTTPError) -> ProviderError:
+        detail = http_failure_detail(exc, secrets=(self._api_key,))
+        # Only the exception type and the safe detail — never `exc`'s own text (D-110).
+        msg = f"{what} failed ({type(exc).__name__})"
+        return ProviderError(f"{msg}: {detail}" if detail else msg, detail=detail)
 
     async def complete(self, req: CompletionRequest) -> str:
         headers = {"Content-Type": "application/json"}
@@ -158,7 +167,7 @@ class OpenAICompatProvider:
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPError as exc:
-            raise ProviderError(f"provider request failed: {exc}") from exc
+            raise self._failed("provider request", exc) from exc
         except (ValueError, TypeError) as exc:  # a 200 with a non-JSON body
             raise ProviderError(f"provider returned an unparseable body: {exc}") from exc
         _report_openai_usage(data.get("usage") if isinstance(data, dict) else None)
@@ -183,7 +192,7 @@ class OpenAICompatProvider:
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPError as exc:
-            raise ProviderError(f"embedding request failed: {exc}") from exc
+            raise self._failed("embedding request", exc) from exc
         _report_openai_usage(data.get("usage"))
         rows = data.get("data") or []
         return [row["embedding"] for row in rows]

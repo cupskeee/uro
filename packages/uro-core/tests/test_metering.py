@@ -134,7 +134,7 @@ async def test_anthropic_reports_usage_for_complete_and_stream() -> None:
     assert (calls[0].tokens_in, calls[0].tokens_out) == (40, 6)  # the cumulative output, once
 
     truncated = AnthropicProvider(
-        model="claude-x",
+        model="claude-haiku-4-5",  # a model that still takes the "{" prefill (D-110)
         api_key="k",
         transport=_json(
             {
@@ -379,3 +379,15 @@ async def test_a_codex_http_error_records_its_status() -> None:
     with pytest.raises(ProviderError):
         await router.complete("planner", MSG)
     assert calls[0].error == "ProviderError ← HTTPStatusError (HTTP 429)"
+
+
+def test_a_failure_carries_the_adapter_s_safe_detail() -> None:
+    # D-110 (Uro Loom request 9): an adapter's `detail` (status + the provider's own error) says
+    # why, so a refused parameter and a bad key no longer read the same.
+    exc = ProviderError(
+        "anthropic request failed (HTTPStatusError)",
+        detail="HTTP 400 invalid_request_error: temperature is not supported",
+    )
+    assert describe_failure(exc) == (
+        "ProviderError — HTTP 400 invalid_request_error: temperature is not supported"
+    )

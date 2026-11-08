@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from uro_core.domain.ids import new_id
+from uro_core.errors import ProviderError
 
 if TYPE_CHECKING:
     from uro_core.providers.base import Message
@@ -29,14 +30,18 @@ RESPONSE_CAP = 64_000
 def describe_failure(exc: BaseException) -> str:
     """Why a call failed, safe to store: the exception's type and its causes' types, plus an HTTP
     status where one is known — e.g. `ProviderError ← HTTPStatusError (HTTP 429)`. Never the
-    exception TEXT: an httpx header error can embed the Authorization value (D-47 review)."""
+    exception TEXT: an httpx header error can embed the Authorization value (D-47 review). A
+    `ProviderError.detail` — built safe by the adapter: the status and the provider's own error
+    type and message (D-110) — is appended, so a refused parameter or a bad key reads as such."""
     parts: list[str] = []
     link: BaseException | None = exc
     while link is not None and len(parts) < 3:
         status = getattr(getattr(link, "response", None), "status_code", None)
         parts.append(type(link).__name__ + (f" (HTTP {status})" if status else ""))
         link = link.__cause__ or (None if link.__suppress_context__ else link.__context__)
-    return " ← ".join(parts)
+    text = " ← ".join(parts)
+    detail = getattr(exc, "detail", None) if isinstance(exc, ProviderError) else None
+    return f"{text} — {detail}" if detail else text
 
 
 def prompt_hash(messages: list[Message]) -> str:

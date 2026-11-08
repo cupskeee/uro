@@ -237,8 +237,8 @@ def test_reasoning_effort_is_checked_and_sent() -> None:
     assert check_reasoning_effort(codex, "") is None
     with pytest.raises(ValueError, match="one of"):
         check_reasoning_effort(codex, "turbo")
-    with pytest.raises(ValueError, match="anthropic"):
-        check_reasoning_effort(ModelConnection(id="a", name="a", provider="anthropic"), "low")
+    with pytest.raises(ValueError, match="stub"):  # a kind whose adapter sends none
+        check_reasoning_effort(ModelConnection(id="s", name="s", provider="stub"), "low")
 
     async def token(force: bool) -> str:
         return "t"
@@ -314,3 +314,75 @@ async def test_a_connection_test_can_send_an_effort(
     finally:
         await store.delete_connection(oai)
         await store.delete_connection(stub)
+
+
+def test_a_probe_picks_a_model_the_connection_is_used_with() -> None:
+    # D-110 (Uro Loom request 8): the bound model first, then the pinned default if the connection
+    # has it, then a discovered chat model — the pinned name only as the last resort.
+    from uro_core.ports.model_registry import RoleBinding
+    from uro_core.providers.registry import default_probe_model
+
+    ant = ModelConnection(
+        id="a",
+        name="a",
+        provider="anthropic",
+        cached_models=[{"id": "claude-opus-5-5"}, {"id": "claude-sonnet-5-5"}],
+    )
+    bound = [
+        RoleBinding(role="extractor", connection_id="a", model="claude-haiku-5-5"),
+        RoleBinding(role="default", connection_id="a", model="claude-sonnet-5-5"),
+        RoleBinding(role="narrator", connection_id="other", model="gpt-5"),
+    ]
+    assert default_probe_model(ant, bound) == "claude-sonnet-5-5"  # default role wins
+    assert default_probe_model(ant, bound[:1]) == "claude-haiku-5-5"  # else any bound chat role
+    assert default_probe_model(ant, bound[2:]) == "claude-opus-5-5"  # another connection's: no
+    assert default_probe_model(ant.model_copy(update={"cached_models": []})) == "claude-haiku-4-5"
+    oai = ModelConnection(
+        id="o",
+        name="o",
+        provider="openai",
+        cached_models=[{"id": "babbage-002"}, {"id": "gpt-4o-mini"}, {"id": "text-embedding-3"}],
+    )
+    assert default_probe_model(oai) == "gpt-4o-mini"  # the pinned default it has, not babbage
+
+
+def test_an_anthropic_connection_takes_an_effort() -> None:
+    from uro_core.providers.registry import check_reasoning_effort
+
+    ant = ModelConnection(id="a", name="a", provider="anthropic")
+    assert check_reasoning_effort(ant, "low") == "low"
+    with pytest.raises(ValueError, match="anthropic effort"):
+        check_reasoning_effort(ant, "minimal")
+
+
+async def test_a_failed_probe_says_why_and_which_model(
+    store: PostgresEventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D-110 (request 9): the status and the provider's own error reach the reply, never the key.
+    import httpx
+    from uro_core.domain.ids import new_id
+    from uro_core.providers import registry as reg
+    from uro_core.providers.adapters.anthropic import AnthropicProvider
+    from uro_core.providers.registry import probe_connection
+
+    body = {"error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+
+    def refusing(conn, model, token, *, reasoning_effort=None):  # type: ignore[no-untyped-def]
+        return AnthropicProvider(
+            model=model,
+            api_key="sk-ant-0123456789",
+            transport=httpx.MockTransport(lambda request: httpx.Response(401, json=body)),
+        )
+
+    monkeypatch.setattr(reg, "provider_from_connection", refusing)
+    ant = await store.add_connection(name=f"a-{new_id()}", provider="anthropic")
+    try:
+        out = await probe_connection(store, ant, "claude-opus-5-5")
+    finally:
+        await store.delete_connection(ant)
+    assert out["ok"] is False and out["model"] == "claude-opus-5-5"
+    assert out["detail"] == (
+        "anthropic:claude-opus-5-5 failed (ProviderError) — "
+        "HTTP 401 authentication_error: invalid x-api-key"
+    )
+    assert "sk-ant" not in out["detail"]

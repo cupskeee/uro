@@ -13,11 +13,16 @@ class UroError(Exception):
 class ProviderError(UroError):
     """An LLM provider failed — transport error, non-200, or an in-band error frame. A failure that
     still produced text (output truncated at max_tokens) carries it as `partial_response`, so the
-    metering router can store it (D-66 review)."""
+    metering router can store it (D-66 review). `detail` is a reason SAFE to show an operator or
+    store: an HTTP status and the provider's own error type and message, never the exception text
+    or a request header (D-110). None when the adapter had nothing safe to say."""
 
-    def __init__(self, *args: object, partial_response: str | None = None) -> None:
+    def __init__(
+        self, *args: object, partial_response: str | None = None, detail: str | None = None
+    ) -> None:
         super().__init__(*args)
         self.partial_response = partial_response
+        self.detail = detail
 
 
 class EmptyNarrationError(UroError):

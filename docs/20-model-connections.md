@@ -93,7 +93,7 @@ allows dangling `auth_id`s and orphaned live secrets.
 | `role`          | `TEXT` | PK                | `default` \| `narrator` \| `extractor` \| `planner` \| `embedder` \| `dialogue` \| `judge` |
 | `connection_id` | `TEXT` | NOT NULL, FK → `model_connections(id)` **ON DELETE CASCADE** | |
 | `model`         | `TEXT` | NOT NULL          | one of the connection's `cached_models` ids |
-| `reasoning_effort` | `TEXT` | NULL          | how hard a reasoning model thinks (`none`…`xhigh`, D-71, migration 026); NULL = the provider's default. Sent by the codex and OpenAI-style adapters only |
+| `reasoning_effort` | `TEXT` | NULL          | how hard a reasoning model thinks (`none`…`xhigh`, D-71, migration 026); NULL = the provider's default. Sent by the codex, OpenAI-style and Anthropic adapters (Anthropic: `output_config.effort`, `low`…`max`, D-110) |
 | `updated_at`    | `timestamptz` | | |
 
 This is the piece the two catalog tables don't cover: the engine resolves providers **by role**
@@ -155,7 +155,7 @@ up (on stub) with no config. Adding the first connection via CLI/API takes over.
   `GET/PUT /providers/roles` (bindings), `POST /providers/{id}/refresh`, `POST /providers/{id}/test`.
 - **`uro-cli` (direct-DB, like `uro world`; operator with DB access):** `uro provider
   add|list|rm|enable|disable`, `uro provider bind <role> <connection> <model> [--reasoning-effort low]` / `unbind <role>`,
-  `uro provider refresh|test <connection>` (`test --reasoning-effort <level>` checks a model accepts that effort, D-71), `uro provider link <connection> <credential>` / `unlink`,
+  `uro provider refresh|test <connection>` (`test --reasoning-effort <level>` checks a model accepts that effort, D-71; with no model the test probes the one bound to `default` on that connection, else another bound chat model, else a pinned or discovered one, names it in the reply as `model`, and a failure gives the HTTP status and the provider's own error message, never the key, D-110), `uro provider link <connection> <credential>` / `unlink`,
   `uro provider codex-login`, and `uro provider credential add|rotate|rm` (`rotate` replaces a key in
   place, so every connection linked to it uses the new one; `rm` refuses a credential a connection still uses unless `--force`, which unlinks those
   connections; deleting a connection keeps its credential, since one may back several). Refresh
