@@ -242,6 +242,7 @@ def open_fight(
         interactive=True,
         seed=rng.seed,
         combatants=[c.model_dump() for c in combatants],
+        ruleset_id=ruleset.id,
         caused_by=cause,
     )
     return _step(ruleset, state, rng, combatants, [started], encounter_id=encounter_id, cause=cause)

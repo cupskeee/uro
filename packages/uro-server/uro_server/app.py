@@ -342,7 +342,7 @@ class ServerDeps:
     # restart. All do provider/live work, so they're composed here (not store-backed). None → 501.
     refresh_models: Callable[[str], Awaitable[list[dict[str, str]]]] | None = None
     # D-112: the fight on a campaign waiting on a player's choice, or None
-    fight_status: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None
+    fight_status: Callable[[str, str | None], Awaitable[dict[str, Any] | None]] | None = None
     # D-112: propose a character build from a description through the bound model:
     # (branch_id, campaign_id or None, ruleset or None, ruleset_config or None, description)
     propose_character: (
@@ -391,8 +391,11 @@ def engine_deps(
         return engine_for_pin(await campaign_pin(store, campaign), campaign.campaign_id)
 
     async def engine_for_branch(branch_id: str) -> Engine:
-        """The engine for a branch's world ruleset — a time-skip with no campaign (a fork)."""
-        return engine_for_pin(await store.world_ruleset(branch_id), f"branch {branch_id}")
+        """The engine for the game a branch plays — a time-skip with no campaign (a fork): its
+        story's own pin when it chose one (D-112 review), else its world's."""
+        from uro_core.rulesets.registry import branch_pin
+
+        return engine_for_pin(await branch_pin(store, branch_id), f"branch {branch_id}")
 
     async def time_engine(pick: Callable[[], Awaitable[Engine]], where: str) -> Engine:
         """The engine a time-skip runs on. A world whose ruleset this server can't build still gets
@@ -583,11 +586,11 @@ def engine_deps(
 
         return await _seed_world(store, world, pack, seed)
 
-    async def fight_status(campaign_id: str) -> dict[str, Any] | None:
+    async def fight_status(campaign_id: str, participant: str | None) -> dict[str, Any] | None:
         campaign = await store.get_campaign(campaign_id)
         if campaign is None:
             raise KeyError(campaign_id)
-        wait = await (await engine_for(campaign)).fight_status(campaign)
+        wait = await (await engine_for(campaign)).fight_status(campaign, participant)
         return wait.model_dump() if wait is not None else None
 
     async def propose_character(
@@ -2339,9 +2342,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such campaign")
         from uro_core.characters import preview_character
 
-        preview = await preview_character(
-            store, branch_id=campaign.branch_id, spec=_spec_field(body), campaign=campaign
-        )
+        try:
+            preview = await preview_character(
+                store, branch_id=campaign.branch_id, spec=_spec_field(body), campaign=campaign
+            )
+        except (ValueError, KeyError) as exc:  # the campaign's ruleset can't be built here
+            raise HTTPException(
+                status_code=400, detail=str(exc.args[0] if exc.args else exc)
+            ) from exc
         return preview.model_dump()
 
     async def _propose(
@@ -2405,13 +2413,20 @@ def create_app(
     async def campaign_encounter(campaign_id: str, request: Request) -> dict[str, Any]:
         """The fight waiting on a player's choice, in a campaign that plays fights turn by turn
         (D-112): whose turn it is and the legal actions (kind and targets) to send as an intent's
-        `action`. `{encounter: null}` when none is. Any-authed, within a minted token's campaign."""
+        `action`. A player sees the fight their own character is in; an operator, any
+        participant's (`?participant=`) or the campaign's first. `{encounter: null}` when none."""
         _auth(request)
         _reject_foreign_scope(request, campaign_id)
         if deps.fight_status is None:
             raise HTTPException(status_code=501, detail="encounters not enabled")
+        _, caller, admin = _scope(request)
+        who = request.query_params.get("participant") if admin else caller
+        from uro_core.pipeline.encounter import ChoiceRefused as _Refused
+
         try:
-            return {"encounter": await deps.fight_status(campaign_id)}
+            return {"encounter": await deps.fight_status(campaign_id, who)}
+        except _Refused as exc:  # a fight begun under another ruleset
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="no such campaign") from exc
 
@@ -2463,6 +2478,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        except ValueError as exc:  # the campaign's ruleset can't be built here (review)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return view.model_dump()
 
     @app.get("/campaigns/{campaign_id}/roster", **_out(S.Roster))
@@ -2500,7 +2517,12 @@ def create_app(
             across = await store.query_across([c.branch_id], sections)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"branch_id": c.branch_id, "state": across.get(c.branch_id, {})}
+        state = across.get(c.branch_id, {})
+        if not admin:  # an NPC's build and danger word are hidden values (D-46, D-112 review)
+            for row in state.get("actors", []):
+                row.pop("spec", None)
+                row.pop("threat", None)
+        return {"branch_id": c.branch_id, "state": state}
 
     @app.delete("/campaigns/{campaign_id}", **_out(S.Removed))
     async def delete_campaign_endpoint(campaign_id: str, request: Request) -> dict[str, Any]:
@@ -2609,13 +2631,16 @@ def create_app(
         intent = str(_require(body, "intent"))
         if not intent.strip():
             raise HTTPException(status_code=400, detail="intent must be non-empty")
-        _, participant, _ = _scope(request)  # token → acting participant (non-None past _auth)
+        _, participant, admin = _scope(request)  # token → acting participant (non-None)
         try:
             events = await deps.preview_beat(campaign_id, participant or "", intent)
         except (ValueError, KeyError) as exc:
             # ValueError: a ruleset this build doesn't have. KeyError: an unbound router
             # role (a residual incomplete-registry gap) → clean 400, not a raw 500.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not admin and deps.store is not None:
+            mine = await deps.store.pc_for_participant(campaign_id, participant or "")
+            events = _redact_for_player(events, mine)
         return {"events": events}
 
     @app.get("/campaigns/{campaign_id}/consistency", **_out(S.Consistency))
@@ -2858,6 +2883,23 @@ async def _forward(ws: WebSocket, queue: asyncio.Queue[dict[str, object]]) -> No
         await ws.send_json(message)
 
 
+def _redact_for_player(events: list[dict[str, Any]], own_pc: str | None) -> list[dict[str, Any]]:
+    """A dry-run's would-be events as a player may see them (D-46, D-112 review): another actor's
+    sheet, a check's player-safe numbers for anyone but the player's own character, and a fight's
+    recorded combatants (every sheet and holding) are the operator log's, not the player's."""
+    out: list[dict[str, Any]] = []
+    for e in events:
+        kind, payload = e.get("event_type"), dict(e.get("payload") or {})
+        if kind == "SheetUpdated" and payload.get("actor_id") != own_pc:
+            continue
+        if kind == "CheckResolved" and payload.get("actor_id") != own_pc:
+            payload.pop("player_view", None)
+        if kind == "EncounterStarted":
+            payload.pop("combatants", None)
+        out.append({**e, "payload": payload})
+    return out
+
+
 def _action_text(action: Any) -> str:
     """The words a fight-turn action stands for, when a client sends no text with it (D-112)."""
     if not isinstance(action, dict) or not action.get("kind"):
@@ -2942,12 +2984,14 @@ async def _run_and_broadcast(
     )
     chunks: list[str] = []
     result: BeatResult | None = None
-    beat = (
-        deps.run_beat(campaign_id, participant, text)
-        if action is None
-        else deps.run_beat(campaign_id, participant, text, action)  # type: ignore[call-arg]
-    )
     try:
+        # an action rides only to a run_beat that takes one; a 3-argument run_beat (the declared
+        # type, an embedder's) raises TypeError here, inside the try, as a failed beat (review)
+        beat = (
+            deps.run_beat(campaign_id, participant, text)
+            if action is None
+            else deps.run_beat(campaign_id, participant, text, action)  # type: ignore[call-arg]
+        )
         async for chunk in beat:
             if isinstance(chunk, BeatResult):  # the committed beat (D-98), after the narration
                 result = chunk

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.base import (
     RULESET_API_VERSION,
@@ -87,28 +87,29 @@ _THREAT: dict[str, dict[str, int]] = {
 }
 
 
+class TraitDice(BaseModel):
+    """Dice for any of the three traits, from 1 (named fields, D-112 review); the cap is the
+    world's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    might: int | None = Field(default=None, ge=1)
+    wits: int | None = Field(default=None, ge=1)
+    nerve: int | None = Field(default=None, ge=1)
+
+
 class Spec(BaseModel):
     """What Uro Pool's `new_character` takes (D-112): any of its three traits (1 die to the cap),
     and starting wounds, strain and milestones. An unknown key is refused."""
 
     model_config = ConfigDict(extra="forbid")
 
-    traits: dict[str, int] = Field(
-        default_factory=dict, description="dice for any of might wits nerve, from 1"
+    traits: TraitDice = Field(
+        default_factory=lambda: TraitDice(), description="dice for any of the three traits, from 1"
     )
     wounds: int = Field(0, ge=0, le=_WOUNDS_DOWN - 1)
     strain: int = Field(0, ge=0)
     milestones: int = Field(0, ge=0)
-
-    @field_validator("traits")
-    @classmethod
-    def _known_traits(cls, v: dict[str, int]) -> dict[str, int]:
-        for name, dice in v.items():
-            if name not in TRAITS:
-                raise ValueError(f"unknown trait {name!r}; one of {', '.join(TRAITS)}")
-            if dice < 1:
-                raise ValueError(f"{name} needs at least 1 die, not {dice}")
-        return v
 
 
 class Sheet(BaseModel):
@@ -182,7 +183,8 @@ class UroPool:
 
     def new_character(self, spec: CharSpec, rng: Rng) -> SheetDict:
         d = Spec.model_validate(spec.data)
-        over = [k for k, v in d.traits.items() if v > self.config.trait_cap]
+        chosen = d.traits.model_dump(exclude_none=True)
+        over = [k for k, v in chosen.items() if v > self.config.trait_cap]
         if over:
             raise CharSpecError(
                 [
@@ -193,7 +195,7 @@ class UroPool:
         cap = self.config.trait_cap
         hinted = {k: min(v, cap) for k, v in _THREAT.get(spec.threat, {}).items()}
         return Sheet(
-            traits={**_DEFAULT_TRAITS, **hinted, **d.traits},
+            traits={**_DEFAULT_TRAITS, **hinted, **chosen},
             wounds=d.wounds,
             strain=d.strain,
             milestones=d.milestones,

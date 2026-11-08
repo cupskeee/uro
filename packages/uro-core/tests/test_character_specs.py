@@ -28,12 +28,12 @@ def test_an_empty_spec_always_builds(rid: str) -> None:
 @pytest.mark.parametrize(
     ("rid", "data", "loc"),
     [
-        ("uro-basic", {"abilities": {"LUCK": 3}}, ["abilities"]),
+        ("uro-basic", {"abilities": {"LUCK": 3}}, ["abilities", "LUCK"]),
         ("uro-basic", {"level": 9}, ["level"]),
         ("uro-basic", {"mana": 1}, ["mana"]),
         ("uro-pbta", {"stats": {"forceful": 7}}, ["stats", "forceful"]),
         ("uro-pbta", {"playbook": "x"}, ["playbook"]),
-        ("uro-pool", {"traits": {"might": 0}}, ["traits"]),
+        ("uro-pool", {"traits": {"might": 0}}, ["traits", "might"]),
         ("uro-pool", {"traits": {"might": 9}}, ["traits", "might"]),
     ],
 )

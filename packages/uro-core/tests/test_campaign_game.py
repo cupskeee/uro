@@ -158,7 +158,7 @@ async def test_a_pc_is_built_from_its_spec_or_refused(store: PostgresEventStore)
             new_pc_name="Bryn",
             spec={"abilities": {"STR": 40}},
         )
-    assert err.value.problems[0].loc == ["abilities"]
+    assert err.value.problems[0].loc == ["abilities", "STR"]
     # a join is built the same way, under the campaign's game
     actor = await join_campaign(store, c, participant_id="q", new_pc_name="Bryn", spec={"level": 3})
     assert (await store.get_sheet(world.main_branch_id, actor))["level"] == 3  # type: ignore[index]

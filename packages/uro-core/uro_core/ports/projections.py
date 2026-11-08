@@ -145,10 +145,10 @@ class ProjectionQueries(Protocol):
 
     async def items_owned_by(self, branch_id: str, owner_ref: str) -> list[str]: ...
 
-    async def open_encounter(
+    async def open_encounters(
         self, branch_id: str
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
-        """The fight being played turn by turn on the branch (D-112): its start and its turns."""
+    ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+        """The fights being played turn by turn on the branch (D-112): each start and its turns."""
         ...
 
     async def holdings(self, branch_id: str, owner_ref: str) -> list[dict[str, Any]]:

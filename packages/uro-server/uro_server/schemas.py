@@ -360,8 +360,10 @@ class ActorRow(Out):
     aliases: list[str]
     status: str
     provenance: str  # D-108: "author" | "ai_backfill"; "" = not recorded (see D-108's correction)
-    spec: dict[str, Any]  # D-112: what its sheet is built from when one is first needed
-    threat: str  # D-112: the engine's neutral danger word, "" = none
+    # D-112: what its sheet is built from when one is first needed, and the engine's neutral danger
+    # word ("" = none). Hidden values: an operator's read only, absent from a player's
+    spec: dict[str, Any] | None = None
+    threat: str | None = None
 
 
 class ClaimRow(Out):

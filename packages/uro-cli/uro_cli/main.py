@@ -1098,7 +1098,8 @@ def connect(
                             typer.echo(
                                 f"\n  ✗ beat failed ({msg.get('intent', '')!r}): {msg['error']}"
                             )
-                        elif kind == "encounter_action_refused":
+                        elif kind == "encounter_action_refused" and ours:
+                            # every seat hears it; only the player who acted is shown it (review)
                             for line in refusal_lines(
                                 msg["reason"], msg.get("legal_actions") or []
                             ):
@@ -1134,6 +1135,9 @@ def connect(
                             rid = uuid.uuid4().hex
                             settled = asyncio.Event()
                             act = parse_act(intent)  # D-112: `/act <kind> [target]`, a fight turn
+                            if act is None and intent.split()[0] == "/act":
+                                typer.echo("usage: /act <action> [target]")
+                                continue
                             text = intent[4:].strip() if act is not None else intent
                             pending[rid] = (text, settled)
                             frame: dict[str, Any] = {"type": "intent", "text": text, "id": rid}
@@ -1804,10 +1808,15 @@ def ruleset_list() -> None:
             rs = registry.resolve(rid)
             sheet = ", ".join(rs.sheet_schema().get("properties", {}))
             settings = rs.config_schema().get("properties", {})
+            from uro_core.rulesets.base import spec_schema_of
+
+            spec_keys = ", ".join(spec_schema_of(rs).get("properties", {}))
         except Exception as exc:
             typer.echo(f"{rid}  (can't list with default settings: {exc})")
             continue
         typer.echo(f"{rs.id}@{rs.version}  sheet: {sheet}")
+        if spec_keys:  # what `--spec` may hold (D-112)
+            typer.echo(f"    spec: {spec_keys}")
         for key, spec in settings.items():
             what = spec.get("description", "")
             typer.echo(f"    {key:<24} default {spec.get('default')!s:<5} {what}")
@@ -2166,6 +2175,41 @@ def campaign_new(
     _run_async(_run)
 
 
+@campaign_app.command("encounter")
+def campaign_encounter(
+    campaign_id: str,
+    participant: str = typer.Option(None, "--participant", help="whose fight (default: any)"),
+) -> None:
+    """The fight waiting on a player's choice in a campaign that plays fights turn by turn
+    (D-112): whose turn it is and the actions to send (`/act` in `uro play`/`uro connect`)."""
+
+    async def _run() -> None:
+        store = build_store()
+        await connect_store(store)
+        try:
+            c = await _campaign_or_exit(store, campaign_id)
+            engine = Engine(
+                store,
+                build_router("stub", None),
+                ruleset=await registry.resolve_for_campaign(store, c),
+            )
+            try:
+                wait = await engine.fight_status(c, participant)
+            except ChoiceRefused as exc:
+                typer.echo(f"error: {exc}", err=True)
+                raise typer.Exit(1) from exc
+        finally:
+            await store.close()
+        if wait is None:
+            typer.echo("(no fight is waiting on a choice)")
+            return
+        typer.echo(f"the fight {wait.encounter_id} waits on {wait.actor_id}:")
+        for line in refusal_lines("", [a.model_dump() for a in wait.legal_actions])[1:]:
+            typer.echo(line)
+
+    _run_async(_run)
+
+
 @campaign_app.command("time-skip")
 def campaign_time_skip(
     campaign_id: str,
@@ -2403,6 +2447,9 @@ def character_propose(
     model: str = typer.Option(None, help="model id for the worldsmith role"),
     branch: str = typer.Option("main", "--branch", help="for a world: the branch to start on"),
     ruleset_id: str = typer.Option(None, "--ruleset", help="for a world: a campaign's own ruleset"),
+    ruleset_config: str = typer.Option(
+        None, "--ruleset-config", help="for a world: a campaign's own settings as JSON"
+    ),
 ) -> None:
     """Propose a build from a description through the model, checked like a preview (D-112). Saves
     nothing: pass the printed spec to `campaign new|join --spec`."""
@@ -2434,6 +2481,7 @@ def character_propose(
                     description=description,
                     campaign=campaign,
                     ruleset_id=ruleset_id,
+                    ruleset_config=_json_option(ruleset_config, "--ruleset-config"),
                 )
             except (ProviderError, ValueError, KeyError) as exc:
                 _echo_refused(exc)

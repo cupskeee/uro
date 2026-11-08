@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.base import (
     RULESET_API_VERSION,
@@ -70,28 +70,29 @@ _THREAT: dict[str, dict[str, int]] = {
 }
 
 
+class StatSpread(BaseModel):
+    """Any of the four stats, from -3 (named fields, D-112 review); the cap is the world's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    forceful: int | None = Field(default=None, ge=-3)
+    clever: int | None = Field(default=None, ge=-3)
+    quick: int | None = Field(default=None, ge=-3)
+    steady: int | None = Field(default=None, ge=-3)
+
+
 class Spec(BaseModel):
     """What Uro PbtA's `new_character` takes (D-112): any of its four stats (-3 to the cap), and a
     starting harm, conditions and XP. An unknown key is refused."""
 
     model_config = ConfigDict(extra="forbid")
 
-    stats: dict[str, int] = Field(
-        default_factory=dict, description="any of forceful clever quick steady, from -3"
+    stats: StatSpread = Field(
+        default_factory=lambda: StatSpread(), description="any of the four stats, from -3"
     )
     harm: int = Field(0, ge=0, le=_HARM_MAX - 1)
     conditions: list[str] = Field(default_factory=list)
     xp: int = Field(0, ge=0)
-
-    @field_validator("stats")
-    @classmethod
-    def _known_stats(cls, v: dict[str, int]) -> dict[str, int]:
-        for name, value in v.items():
-            if name not in STATS:
-                raise ValueError(f"unknown stat {name!r}; one of {', '.join(STATS)}")
-            if value < -3:
-                raise ValueError(f"{name} must be at least -3, not {value}")
-        return v
 
 
 class Sheet(BaseModel):
@@ -147,7 +148,8 @@ class UroPbtA:
 
     def new_character(self, spec: CharSpec, rng: Rng) -> SheetDict:
         d = Spec.model_validate(spec.data)
-        over = [k for k, v in d.stats.items() if v > self.config.stat_cap]
+        chosen = d.stats.model_dump(exclude_none=True)
+        over = [k for k, v in chosen.items() if v > self.config.stat_cap]
         if over:
             raise CharSpecError(
                 [
@@ -156,7 +158,7 @@ class UroPbtA:
                 ]
             )
         hinted = {k: min(v, self.config.stat_cap) for k, v in _THREAT.get(spec.threat, {}).items()}
-        stats = {**_DEFAULT_STATS, **hinted, **d.stats}
+        stats = {**_DEFAULT_STATS, **hinted, **chosen}
         return Sheet(stats=stats, harm=d.harm, conditions=list(d.conditions), xp=d.xp).model_dump()
 
     def progression(self, sheet: SheetDict, award: Award) -> SheetDict:

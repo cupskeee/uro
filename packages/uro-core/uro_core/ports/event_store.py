@@ -150,8 +150,14 @@ class EventStore(Protocol):
         """Append one beat commit to the branch head and advance it — one transaction."""
         ...
 
+    async def append_fight_beat(
+        self, branch_id: str, encounter_id: str, turns_seen: int, events: list[DomainEvent]
+    ) -> Commit:
+        """Commit a fight turn's beat if the fight still has `turns_seen` turns (D-112)."""
+        ...
+
     async def amend_character(
-        self, branch_id: str, actor_id: str, events: list[DomainEvent]
+        self, branch_id: str, actor_id: str, events: list[DomainEvent], *, renames: bool = False
     ) -> Commit:
         """Commit a change to a PC's build while it is open (D-112); `ValueError` names why not."""
         ...

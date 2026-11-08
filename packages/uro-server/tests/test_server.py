@@ -2704,7 +2704,9 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 71  # D-112: +7
+    assert (
+        len([op for ops in spec["paths"].values() for op in ops]) == 71
+    )  # D-112: +7 (encounter, character, previews, proposals)
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).
@@ -2978,6 +2980,8 @@ def _handler_inputs() -> dict[tuple[str, str], tuple[set[str], set[str], bool]]:
         "_parse_limit": ({"limit"}, set()),
         "_call_scope": ({"stage", "world", "campaign"}, set()),
         "_effort_field": (set(), {"reasoning_effort"}),
+        "_spec_field": (set(), {"spec"}),  # D-112 review: helpers that read the body
+        "_game_fields": (set(), {"ruleset", "ruleset_config"}),
         "_require": (set(), set()),  # its key is read below
     }
     out = {}

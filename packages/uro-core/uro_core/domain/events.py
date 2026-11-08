@@ -809,6 +809,7 @@ class EncounterStartedPayload(BaseModel):
     interactive: bool = False
     seed: int | None = None
     combatants: list[dict[str, Any]] = Field(default_factory=list)
+    ruleset_id: str = ""  # the ruleset that must replay it (a turn-by-turn fight only)
 
 
 class EncounterTurnTakenPayload(BaseModel):
@@ -907,6 +908,7 @@ def encounter_started(
     interactive: bool = False,
     seed: int | None = None,
     combatants: list[dict[str, Any]] | None = None,
+    ruleset_id: str = "",
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -919,6 +921,7 @@ def encounter_started(
             interactive=interactive,
             seed=seed,
             combatants=combatants or [],
+            ruleset_id=ruleset_id,
         ).model_dump(),
     )
 

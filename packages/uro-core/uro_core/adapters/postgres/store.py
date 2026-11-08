@@ -242,7 +242,9 @@ def _world(row: dict[str, Any], genesis: dict[str, Any] | None) -> World:
     )
 
 
-async def _character_frozen(conn: asyncpg.Connection, branch_id: str, actor_id: str) -> str | None:
+async def _character_frozen(
+    conn: asyncpg.Connection, branch_id: str, actor_id: str, *, renames: bool = False
+) -> str | None:
     rows = await conn.fetch(
         """
         WITH RECURSIVE chain AS (
@@ -255,7 +257,7 @@ async def _character_frozen(conn: asyncpg.Connection, branch_id: str, actor_id: 
         )
         SELECT e.event_type, e.payload->>'actor_id' AS actor, ch.depth, e.seq
         FROM events e JOIN chain ch ON e.commit_id = ch.commit_id
-        WHERE e.event_type IN ('PCBound', 'BeatResolved', 'SheetUpdated')
+        WHERE e.event_type IN ('PCBound', 'BeatResolved', 'SheetUpdated', 'ActorCreated')
         ORDER BY ch.depth, e.seq
         """,
         branch_id,
@@ -271,7 +273,49 @@ async def _character_frozen(conn: asyncpg.Connection, branch_id: str, actor_id: 
             return "the story has started: after the first turn only play changes a character"
         if r["event_type"] == "SheetUpdated" and r["actor"] == actor_id and r["depth"] < bound[0]:
             return "an adopted character keeps the sheet it already had"
+    # Only a character its own binding created may be renamed: an adopted actor's name is the
+    # story's, and a rename would rewrite every past mention (D-112 review)
+    created_here = any(
+        r["event_type"] == "ActorCreated" and r["actor"] == actor_id and r["depth"] == bound[0]
+        for r in rows
+    )
+    if renames and not created_here:
+        return "an adopted character keeps its name"
     return None
+
+
+async def _open_encounters(
+    conn: asyncpg.Connection, branch_id: str
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    rows = await conn.fetch(
+        """
+        WITH RECURSIVE chain AS (
+            SELECT c.commit_id, c.parent_id, c.depth
+            FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+            WHERE b.branch_id = $1
+            UNION ALL
+            SELECT c.commit_id, c.parent_id, c.depth
+            FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+        )
+        SELECT e.event_type, e.payload FROM events e JOIN chain ch ON e.commit_id = ch.commit_id
+        WHERE e.event_type IN ('EncounterStarted', 'EncounterTurnTaken', 'EncounterEnded')
+        ORDER BY ch.depth, e.seq
+        """,
+        branch_id,
+    )
+    open_: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    for r in rows:
+        p = r["payload"]
+        eid = p.get("encounter_id")
+        if r["event_type"] == "EncounterStarted" and p.get("interactive"):
+            open_[eid] = (p, [])
+        elif eid not in open_:
+            continue
+        elif r["event_type"] == "EncounterTurnTaken":
+            open_[eid][1].append(p)
+        elif r["event_type"] == "EncounterEnded":
+            del open_[eid]
+    return list(open_.values())
 
 
 class PostgresEventStore:
@@ -2373,9 +2417,10 @@ class PostgresEventStore:
 
     async def inherited_ruleset_pin(self, branch_id: str) -> RulesetPin | None:
         """The ruleset a fork carries from the story it came from (D-112): the pin of the latest
-        campaign that chose or inherited its own, among the commits up to the branch's fork point.
-        None on a root branch, or when that story played its world's ruleset. A campaign started
-        on the branch itself after the fork doesn't count: the story a fork came from is older."""
+        campaign started among the commits up to the branch's fork point, when it chose or
+        inherited its own. None on a root branch, or when that story played its world's ruleset.
+        A campaign started on the branch after the fork doesn't count: the story it came from is
+        older."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -2389,12 +2434,13 @@ class PostgresEventStore:
                 )
                 SELECT e.payload FROM events e JOIN chain ch ON e.commit_id = ch.commit_id
                 WHERE e.event_type = 'CampaignStarted'
-                  AND jsonb_typeof(e.payload->'ruleset_config') = 'object'
                 ORDER BY ch.depth DESC, e.seq DESC LIMIT 1
                 """,
                 branch_id,
             )
-        if row is None:
+        # the LATEST story before the fork is the one it came from: if that one played its world's
+        # game, so does the fork, even when an older story had chosen its own (D-112 review)
+        if row is None or not isinstance(row["payload"].get("ruleset_config"), dict):
             return None
         p = row["payload"]
         return RulesetPin(
@@ -2412,55 +2458,41 @@ class PostgresEventStore:
             return await _character_frozen(conn, branch_id, actor_id)
 
     async def amend_character(
-        self, branch_id: str, actor_id: str, events: list[DomainEvent]
+        self, branch_id: str, actor_id: str, events: list[DomainEvent], *, renames: bool = False
     ) -> Commit:
         """Commit a change to a player character's build (D-112) while it is still open: the branch
         is locked, the freeze checked and the events appended in one transaction, so a beat can't
         commit between the check and the change. A `ValueError` names why it's frozen."""
         async with self.pool.acquire() as conn, conn.transaction():
             await conn.execute("SELECT 1 FROM branches WHERE branch_id = $1 FOR UPDATE", branch_id)
-            reason = await _character_frozen(conn, branch_id, actor_id)
+            reason = await _character_frozen(conn, branch_id, actor_id, renames=renames)
             if reason is not None:
                 raise ValueError(reason)
             return await self._append(conn, branch_id, events)
 
-    async def open_encounter(
+    async def open_encounters(
         self, branch_id: str
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
-        """The fight still being played turn by turn on this branch (D-112): its EncounterStarted
-        payload and the payloads of the turns taken since, in order; None when none is open. On the
-        branch's lineage, so a fork taken mid-fight carries the fight."""
+    ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+        """The fights still being played turn by turn on this branch (D-112), oldest first: each
+        one's EncounterStarted payload and the payloads of its turns so far. On the branch's
+        lineage, so a fork taken mid-fight carries them. Each fight is its own: one opening never
+        hides another."""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                WITH RECURSIVE chain AS (
-                    SELECT c.commit_id, c.parent_id, c.depth
-                    FROM branches b JOIN commits c ON c.commit_id = b.head_commit
-                    WHERE b.branch_id = $1
-                    UNION ALL
-                    SELECT c.commit_id, c.parent_id, c.depth
-                    FROM commits c JOIN chain ON c.commit_id = chain.parent_id
-                )
-                SELECT e.event_type, e.payload FROM events e JOIN chain ch
-                  ON e.commit_id = ch.commit_id
-                WHERE e.event_type IN ('EncounterStarted', 'EncounterTurnTaken', 'EncounterEnded')
-                ORDER BY ch.depth, e.seq
-                """,
-                branch_id,
-            )
-        started: dict[str, Any] | None = None
-        turns: list[dict[str, Any]] = []
-        for r in rows:
-            p = r["payload"]
-            if r["event_type"] == "EncounterStarted" and p.get("interactive"):
-                started, turns = p, []
-            elif started is None or p.get("encounter_id") != started["encounter_id"]:
-                continue
-            elif r["event_type"] == "EncounterTurnTaken":
-                turns.append(p)
-            elif r["event_type"] == "EncounterEnded":
-                started, turns = None, []
-        return (started, turns) if started is not None else None
+            return await _open_encounters(conn, branch_id)
+
+    async def append_fight_beat(
+        self, branch_id: str, encounter_id: str, turns_seen: int, events: list[DomainEvent]
+    ) -> Commit:
+        """Commit a fight turn's beat only if the fight is still open and still has exactly the
+        `turns_seen` turns the beat played from (D-112 review): the branch is locked, the fight
+        re-read and the events appended in one transaction, so two concurrent turns for one
+        character can't both commit. A `ValueError` says the fight moved on."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            await conn.execute("SELECT 1 FROM branches WHERE branch_id = $1 FOR UPDATE", branch_id)
+            fights = {s["encounter_id"]: t for s, t in await _open_encounters(conn, branch_id)}
+            if encounter_id not in fights or len(fights[encounter_id]) != turns_seen:
+                raise ValueError("the fight moved on while the turn was played; choose again")
+            return await self._append(conn, branch_id, events)
 
     async def holdings(self, branch_id: str, owner_ref: str) -> list[dict[str, Any]]:
         """What an actor holds (D-112): each item's id, name and opaque data, by id."""

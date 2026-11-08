@@ -144,7 +144,7 @@ class CampaignIn(In):
     encounters: Literal["auto", "turns"] = Field(
         default="auto",
         description="How fights play (D-112): resolved in one beat, or the player picks each of "
-        "their character's actions (`encounter_action`).",
+        "their character's actions (an intent's `action`).",
     )
     seed: int = 0
     own_branch: bool = Field(default=False, description="Fork a playthrough of its own (D-100).")
@@ -317,6 +317,9 @@ QUERY: dict[tuple[str, str], list[Query]] = {
         )
     ],
     ("GET", "/campaigns/{campaign_id}/chronicle"): [_LIMIT[20]],
+    ("GET", "/campaigns/{campaign_id}/encounter"): [
+        Query("participant", "An operator's choice of whose fight. A player sees their own.")
+    ],
     ("GET", "/campaigns/{campaign_id}/character"): [
         Query(
             "participant", "Whose character (an operator may read anyone's). Absent = the caller."

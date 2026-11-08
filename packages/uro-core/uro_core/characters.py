@@ -140,6 +140,25 @@ async def _adopted_sheeted(store: EngineStore, branch_id: str, adopt_actor_id: s
     )
 
 
+async def _pc_sheet(
+    store: EngineStore,
+    branch_id: str,
+    ruleset: Ruleset,
+    spec: dict[str, Any] | None,
+    adopt_actor_id: str | None,
+) -> Sheet:
+    """A new PC's sheet: from the player's spec; for an adopted actor with none given, from the
+    spec and danger word the actor carries (a pack's authored build, D-112 review), falling back
+    to the ruleset's default if that doesn't build under this game."""
+    if spec is not None or adopt_actor_id is None:
+        return character_sheet(ruleset, spec)
+    data, threat = await store.actor_spec(branch_id, adopt_actor_id)
+    try:
+        return build_character(ruleset, CharSpec(data=data, threat=threat), Rng(0))
+    except CharSpecError:
+        return build_character(ruleset, CharSpec(threat=threat), Rng(0))
+
+
 def _no_spec_for_a_sheeted_actor() -> CharSpecError:
     return CharSpecError(
         [SpecProblem(message="an adopted character keeps the sheet it already has")]
@@ -171,7 +190,9 @@ async def start_campaign(
     sheeted = await _adopted_sheeted(store, branch_id, adopt_actor_id)
     if spec is not None and sheeted:
         raise _no_spec_for_a_sheeted_actor()
-    pc_sheet = None if sheeted else character_sheet(game.ruleset, spec)
+    pc_sheet = (
+        None if sheeted else await _pc_sheet(store, branch_id, game.ruleset, spec, adopt_actor_id)
+    )
     return await store.start_campaign(
         world_id,
         branch_id,
@@ -204,7 +225,13 @@ async def join_campaign(
         raise _no_spec_for_a_sheeted_actor()
     pc_sheet = None
     if not sheeted:
-        pc_sheet = character_sheet(await resolve_for_campaign(store, campaign), spec)
+        pc_sheet = await _pc_sheet(
+            store,
+            campaign.branch_id,
+            await resolve_for_campaign(store, campaign),
+            spec,
+            adopt_actor_id,
+        )
     return await store.bind_pc(
         campaign.campaign_id,
         participant_id,
@@ -277,7 +304,7 @@ async def rebuild_character(
     if name is not None:
         events.append(actor_renamed(actor_id=actor_id, name=name.strip(), caused_by=cause))
     try:
-        await store.amend_character(campaign.branch_id, actor_id, events)
+        await store.amend_character(campaign.branch_id, actor_id, events, renames=name is not None)
     except ValueError as exc:
         raise CharacterFrozen(str(exc)) from exc
     return await own_character(store, campaign, participant_id)
@@ -344,6 +371,23 @@ class Proposal(BaseModel):
     problems: list[SpecProblem] = Field(default_factory=list)
 
 
+def _strict_expressible(node: Any) -> bool:
+    """Whether a schema survives structured outputs' closed objects (D-112 review): an object with
+    no named properties but open extra keys (a `dict[str, int]` map) would close to `{}`, so the
+    model could fill none of it. Such a schema rides in the prompt only."""
+    if isinstance(node, dict):
+        if (
+            node.get("type") == "object"
+            and not node.get("properties")
+            and node.get("additionalProperties") not in (None, False)
+        ):
+            return False
+        return all(_strict_expressible(v) for v in node.values())
+    if isinstance(node, list):
+        return all(_strict_expressible(v) for v in node)
+    return True
+
+
 def _with_defs_hoisted(spec_schema: dict[str, Any]) -> dict[str, Any]:
     """The reply's schema: {name, spec} with the spec schema nested and its `$defs` at the top, so
     its `#/$defs/…` references still resolve."""
@@ -392,7 +436,11 @@ async def propose_character(
         PROPOSAL_ROLE,
         [Message(role="system", content=system), Message(role="user", content=description)],
         json_mode=True,
-        json_schema=_with_defs_hoisted(schema) if schema.get("type") == "object" else None,
+        json_schema=(
+            _with_defs_hoisted(schema)
+            if schema.get("type") == "object" and _strict_expressible(schema)
+            else None
+        ),
         temperature=0.7,
         branch_id=branch_id,
     )

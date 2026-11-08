@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from uro_core.rulesets.base import (
     RULESET_API_VERSION,
@@ -72,27 +72,35 @@ _THREAT: dict[str, tuple[int, dict[str, int], int]] = {
 }
 
 
+def _score() -> Any:
+    return Field(default=None, ge=1, le=20)
+
+
+class AbilityScores(BaseModel):
+    """Any of the six scores, 1-20 each (named fields, so a form and a strict structured-output
+    schema can see them, D-112 review)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    STR: int | None = _score()
+    DEX: int | None = _score()
+    CON: int | None = _score()
+    INT: int | None = _score()
+    WIS: int | None = _score()
+    CHA: int | None = _score()
+
+
 class Spec(BaseModel):
     """What Uro Basic's `new_character` takes (D-112): any of a level, ability scores and a weapon
     tier; the rest is defaulted. A score is 1-20; an unknown key is refused."""
 
     model_config = ConfigDict(extra="forbid")
 
-    level: int | None = Field(None, ge=1, le=20, description="the starting level")
-    abilities: dict[str, int] = Field(
-        default_factory=dict, description="scores (1-20) for any of STR DEX CON INT WIS CHA"
+    level: int | None = Field(default=None, ge=1, le=20, description="the starting level")
+    abilities: AbilityScores = Field(
+        default_factory=AbilityScores, description="scores (1-20) for any of the six abilities"
     )
-    weapon_tier: int | None = Field(None, ge=1, le=3, description="1 → d6, 2 → d8, 3 → d10")
-
-    @field_validator("abilities")
-    @classmethod
-    def _known_scores(cls, v: dict[str, int]) -> dict[str, int]:
-        for name, score in v.items():
-            if name not in ABILITIES:
-                raise ValueError(f"unknown ability {name!r}; one of {', '.join(ABILITIES)}")
-            if not 1 <= score <= 20:
-                raise ValueError(f"{name} must be 1-20, not {score}")
-        return v
+    weapon_tier: int | None = Field(default=None, ge=1, le=3, description="1 → d6, 2 → d8, 3 → d10")
 
 
 class Sheet(BaseModel):
@@ -172,7 +180,11 @@ class UroBasic:
                 [SpecProblem(loc=["level"], message=f"at most {self.config.max_level} here")]
             )
         level = d.level if d.level is not None else min(self.config.max_level, t_level)
-        abilities = {**_DEFAULT_ABILITIES, **t_abilities, **d.abilities}
+        abilities = {
+            **_DEFAULT_ABILITIES,
+            **t_abilities,
+            **d.abilities.model_dump(exclude_none=True),
+        }
         con_mod = (abilities.get("CON", 10) - 10) // 2
         dex_mod = (abilities.get("DEX", 10) - 10) // 2
         max_hp = _hp_for_level(con_mod, level)

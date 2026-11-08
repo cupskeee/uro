@@ -141,9 +141,16 @@ def resolve(
     return ruleset
 
 
+async def branch_pin(store: EngineStore, branch_id: str) -> RulesetPin:
+    """The game a branch plays with no campaign to ask (a fork's time-skip): the pin of the story
+    it was forked from when that story chose its own (D-112), else its world's."""
+    inherited = await store.inherited_ruleset_pin(branch_id)
+    return inherited if inherited is not None else await store.world_ruleset(branch_id)
+
+
 async def resolve_for_branch(store: EngineStore, branch_id: str) -> Ruleset:
-    """The ruleset a branch's world declares, built with the world's settings."""
-    pin = await store.world_ruleset(branch_id)
+    """The ruleset a branch plays (`branch_pin`), built with its settings."""
+    pin = await branch_pin(store, branch_id)
     return resolve(pin.id, pin.version, pin.config)
 
 

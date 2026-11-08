@@ -59,7 +59,11 @@ async def test_characters_over_rest(store: PostgresEventStore) -> None:
             json={"spec": {"traits": {"luck": 1}}, "ruleset": "uro-pool"},
         )
         body = r.json()
-        assert r.status_code == 200 and not body["ok"] and body["problems"][0]["loc"] == ["traits"]
+        assert (
+            r.status_code == 200
+            and not body["ok"]
+            and body["problems"][0]["loc"] == ["traits", "luck"]
+        )
 
         # start with the campaign's own game; a bad spec is a 400 with problems, nothing made
         r = await client.post(

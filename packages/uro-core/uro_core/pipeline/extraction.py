@@ -63,7 +63,7 @@ import logging
 import re
 from typing import Any, Literal, NamedTuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from uro_core.domain.events import (
     DomainEvent,
@@ -100,8 +100,13 @@ class ProposedActor(BaseModel):
     located_in: str = ""  # a place this actor is at (D-50; cascade-created if it's new)
     # D-112: how dangerous the prose shows a NEW person to be, in the engine's neutral words
     # (rulesets.base.THREAT_LEVELS); the ruleset turns it into numbers if they ever fight. Any
-    # other word is dropped.
+    # other word, or a non-string, is dropped — never the person (review).
     threat: str = ""
+
+    @field_validator("threat", mode="before")
+    @classmethod
+    def _any_threat(cls, v: object) -> str:
+        return v if isinstance(v, str) else ""
 
 
 class ProposedPlace(BaseModel):
