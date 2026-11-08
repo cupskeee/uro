@@ -9,6 +9,28 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+Upgrading: no migration.
+
+### Added
+
+- Anthropic structured outputs (D-111): the planner and extractor send their JSON Schema, and the
+  Anthropic adapter passes it as `output_config.format` to the models that take it. A schema the
+  API refuses falls back once to plain JSON mode, and that connection stops sending one. For
+  embedders: `CompletionRequest.json_schema` and `ProviderRouter.complete(json_schema=)`.
+- `/openapi.json` declares every route's query parameters, JSON request bodies and the two token
+  schemes (bearer header or `?token=`), so a generated client gets typed inputs (D-111).
+- Every `branch` input takes a branch name or a branch id (`/log`, `/events`, `/state`, `/diff`,
+  `/chronicle`, markers, campaigns, branch removal); `/log` replies with `branch_id` (D-111).
+
+### Changed
+
+- Anthropic models that think by default (every 5.x) get 12,000 more `max_tokens` on each call,
+  so thinking can't truncate a stage's answer (D-111). Only tokens produced are billed.
+- Places, actors and factions the extractor makes in play have `provenance: "emergent"`, like its
+  threads (D-111). Rows made before stay `""`.
+- `uro serve` no longer prints its tokens: each startup line shows a masked token and marks
+  operator tokens (D-111).
+
 ## [0.20.0] - 2026-11-08
 
 Upgrading: no migration. Current Anthropic models (Opus 4.7 and later, Sonnet 5 and 5.5, Haiku

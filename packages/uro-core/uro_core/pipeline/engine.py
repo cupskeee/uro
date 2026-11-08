@@ -42,6 +42,7 @@ from uro_core.errors import (
 )
 from uro_core.pipeline.encounter import run_encounter
 from uro_core.pipeline.extraction import (
+    Extraction,
     build_extractor_messages,
     parse_extraction,
     run_gauntlet,
@@ -91,6 +92,10 @@ from uro_core.worldpack.rules import RulePack
 
 logger = logging.getLogger(__name__)
 
+# The shapes the planner and extractor must return, for a provider that can enforce a schema
+# (Anthropic structured outputs). `parse_plan`/`parse_extraction` still validate every reply.
+_PLAN_SCHEMA = BeatPlan.model_json_schema()
+_EXTRACTION_SCHEMA = Extraction.model_json_schema()
 _EXCERPT = 500  # chars of an unusable LLM response kept in the warning log, for diagnosis
 _MAX_CASCADE_HOPS = 3  # C6 (D-54): extra reaction hops a counter change may set off, per pass
 
@@ -1385,6 +1390,7 @@ class Engine:
                 "planner",
                 messages,
                 json_mode=True,
+                json_schema=_PLAN_SCHEMA,
                 temperature=0.2,
                 max_tokens=1024,
                 branch_id=campaign.branch_id,
@@ -1526,6 +1532,7 @@ class Engine:
                     "extractor",
                     messages,
                     json_mode=True,
+                    json_schema=_EXTRACTION_SCHEMA,
                     temperature=0.1,
                     max_tokens=4096,
                     branch_id=branch_id,

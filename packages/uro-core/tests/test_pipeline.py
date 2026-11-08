@@ -381,6 +381,13 @@ async def test_relational_actor_cascades_faction_and_place(store: PostgresEventS
     }
     assert (aid, "member_of", fid) in edges  # the Order + the Hollow were cascade-created + wired
     assert (aid, "located_in", pid) in edges
+    # all three were made in play, and say so on the event and on the committed row
+    for kind in ("ActorCreated", "FactionCreated", "PlaceCreated"):
+        assert _of_type(events, kind)[0].payload["provenance"] == "emergent"
+    await store.append_beat(branch, events)
+    state = (await store.query_across([branch], ["actors", "factions", "places"]))[branch]
+    rows = {r["name"]: r["provenance"] for sec in state.values() for r in sec}
+    assert rows["Ser Alden"] == rows["Iron Order"] == rows["Alder Hollow"] == "emergent"
 
 
 async def test_same_name_actors_of_different_houses_stay_distinct(

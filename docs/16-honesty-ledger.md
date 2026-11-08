@@ -690,3 +690,14 @@ wick-cages at dusk…"); the ask now wants a one-to-three-word label, and the re
 "first lamplighter", "bottle-sealer", "lake scavenger". One model, two packs: **live-validated
 once**, not a measure of quality across models.
 
+
+## Post-PoC — Anthropic structured outputs, room to think, inputs in the OpenAPI (2026-11-08, D-111)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| The planner's and extractor's schemas reach Anthropic as `output_config.format` | **stub-only** | `test_anthropic.py` (mock transport): sent only to the listed models, in strict form, never with a prefill, beside an effort; both engine schemas convert. Not yet sent to the real API, so whether it compiles them and whether replies improve is unmeasured. |
+| A refused schema falls back, once | **proven (mock)** | a 400 then a success → the answer, and no schema afterwards; a 400 twice → an error and the schema kept; a 529 → no retry. |
+| Thinking can't truncate a stage's answer | **stub-only** | 5.x models get 12,000 more `max_tokens` (asserted on the request body). Whether 12,000 is enough at high effort is unmeasured. |
+| `/openapi.json` declares every input | **proven (structural)** | `test_openapi_describes_every_input` parses every handler (and the helpers that read for them) and fails on an undeclared query parameter or body field, a JSON body without a model, or a declaration for a route that doesn't exist. The declarations' types are read from the handlers by hand, not checked by the test. |
+| Every `branch` input takes a name or an id | **proven** | one `_branch_ref` on every route; `test_world_log_takes_a_branch_id_as_well_as_a_name` (and a foreign world's id is a 404). |
+| Play-made places, people and factions say `emergent` | **proven** | `test_relational_actor_cascades_faction_and_place`: on the events and on the committed rows. |

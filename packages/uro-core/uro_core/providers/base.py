@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -38,6 +38,10 @@ class CompletionRequest(BaseModel):
     temperature: float = 0.9
     max_tokens: int | None = None
     json_mode: bool = False  # request a JSON object response (planner/extractor, docs/13)
+    # The JSON Schema the response must match, for a provider that can enforce one (Anthropic's
+    # structured outputs). Advisory: an adapter that can't enforce it ignores it, and the caller
+    # still validates what comes back (the prompt asks for the same shape).
+    json_schema: dict[str, Any] | None = None
 
 
 class LLMProvider(Protocol):

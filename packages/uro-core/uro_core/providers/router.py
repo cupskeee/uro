@@ -11,6 +11,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any
 
 from uro_core.metering import RESPONSE_CAP, LLMCall, describe_failure, prompt_hash
 from uro_core.providers.base import CompletionRequest, LLMProvider, Message, Usage, collect_usage
@@ -103,6 +104,7 @@ class ProviderRouter:
         messages: list[Message],
         *,
         json_mode: bool = False,
+        json_schema: dict[str, Any] | None = None,
         temperature: float = 0.2,
         max_tokens: int | None = None,
         branch_id: str | None = None,
@@ -115,6 +117,7 @@ class ProviderRouter:
             temperature=temperature,
             max_tokens=max_tokens,
             json_mode=json_mode,
+            json_schema=json_schema,
         )
         started = time.perf_counter()
         raw: str | None = None

@@ -333,6 +333,7 @@ class Forked(Branch):
 
 class Log(Out):
     branch: str
+    branch_id: str
     head_depth: int
     entries: list[LineageEntry]
 

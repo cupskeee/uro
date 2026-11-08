@@ -642,10 +642,17 @@ class _FakeTimelineStore:
         return World(world_id=world_id, name="Ashfall", main_branch_id="b:main")
 
     async def get_branch_by_name(self, world_id: str, name: str) -> BranchInfo | None:
-        if not self._branch_exists:
+        if not self._branch_exists or name.startswith("b:"):  # an id is no branch's name
             return None
         return BranchInfo(
             branch_id="b:main", world_id=world_id, name=name, head_commit="c:7", head_depth=3
+        )
+
+    async def get_branch(self, branch_id: str) -> BranchInfo | None:
+        if not self._branch_exists or branch_id != "b:main":
+            return None
+        return BranchInfo(
+            branch_id="b:main", world_id="w:1", name="main", head_commit="c:7", head_depth=3
         )
 
     async def fork_branch(self, world_id: str, from_ref: str, name: str) -> Branch:
@@ -794,6 +801,16 @@ def test_world_log_is_a_plain_read_open_to_any_token() -> None:
     assert body["entries"][0]["markers"] == ["pre-strike"]
 
 
+def test_world_log_takes_a_branch_id_as_well_as_a_name() -> None:
+    client = TestClient(create_app(_operator_deps(_FakeTimelineStore())))
+    by_id = client.get("/worlds/w:1/log?token=tok-b&branch=b:main").json()
+    assert by_id["branch"] == "main" and by_id["branch_id"] == "b:main"
+    assert by_id == client.get("/worlds/w:1/log?token=tok-b&branch=main").json()
+    # an id from another world, or no branch's id, is no such branch
+    assert client.get("/worlds/w:2/log?token=tok-b&branch=b:main").status_code == 404
+    assert client.get("/worlds/w:1/log?token=tok-b&branch=b:other").status_code == 404
+
+
 def test_world_log_404_for_an_unknown_branch() -> None:
     resp = TestClient(create_app(_operator_deps(_FakeTimelineStore(branch_exists=False)))).get(
         "/worlds/w:1/log?token=tok-a&branch=ghost"
@@ -826,6 +843,9 @@ class _FakeEventStore:
         return BranchInfo(
             branch_id="b:main", world_id=world_id, name=name, head_commit="c:7", head_depth=3
         )
+
+    async def get_branch(self, branch_id: str) -> BranchInfo | None:
+        return None
 
     async def branch_events(
         self,
@@ -1389,6 +1409,9 @@ class _FakeUsageStore:
         return BranchInfo(
             branch_id="b:what-if", world_id=world_id, name=name, head_commit="c:9", head_depth=4
         )
+
+    async def get_branch(self, branch_id: str) -> BranchInfo | None:
+        return None
 
     async def days_since_last_beat(self, branch_id: str) -> int:
         return 0
@@ -2901,3 +2924,113 @@ def test_beat_checks_arrive_before_the_narration() -> None:
     assert checks["mode"] == "encounter" and checks["intent_id"] == "i-1"
     assert checks["checks"] == [{"actor_id": "a:sam", "affordance": "shove", "outcome": "partial"}]
     assert msgs[-1]["narration"] == "The diver staggers."
+
+
+def _handler_inputs() -> dict[tuple[str, str], tuple[set[str], set[str], bool]]:
+    """Each route handler's (query params, body fields, takes a JSON body), read from its source,
+    including the shared helpers that read for it (`_parse_limit`, `_call_scope`, `_effort_field`).
+    """
+    import ast
+    import inspect
+
+    import uro_server.app as app_module
+
+    tree = ast.parse(inspect.getsource(app_module))
+    helpers = {
+        "_parse_limit": ({"limit"}, set()),
+        "_call_scope": ({"stage", "world", "campaign"}, set()),
+        "_effort_field": (set(), {"reasoning_effort"}),
+        "_require": (set(), set()),  # its key is read below
+    }
+    out = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.AsyncFunctionDef):
+            continue
+        route = None
+        for d in fn.decorator_list:
+            if (
+                isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Attribute)
+                and d.func.attr in ("get", "post", "patch", "put", "delete")
+            ):
+                route = (d.func.attr.upper(), d.args[0].value)
+        if route is None:
+            continue
+        query, body = set(), set()
+        body_names = (
+            {
+                a.arg
+                for a, default in zip(
+                    fn.args.args[-len(fn.args.defaults) :], fn.args.defaults, strict=True
+                )
+                if isinstance(default, ast.Call) and getattr(default.func, "id", "") == "Body"
+            }
+            if fn.args.defaults
+            else set()
+        )
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Call):
+                f = n.func
+                const = n.args[0].value if n.args and isinstance(n.args[0], ast.Constant) else None
+                if isinstance(f, ast.Attribute) and f.attr == "get" and const is not None:
+                    if isinstance(f.value, ast.Attribute) and f.value.attr == "query_params":
+                        query.add(const)
+                    elif isinstance(f.value, ast.Name) and f.value.id in body_names:
+                        body.add(const)
+                if isinstance(f, ast.Name) and f.id in helpers:
+                    q, b = helpers[f.id]
+                    query |= q
+                    body |= b
+                    if f.id == "_require" and isinstance(n.args[1], ast.Constant):
+                        body.add(n.args[1].value)
+            if (
+                isinstance(n, ast.Compare)
+                and isinstance(n.left, ast.Constant)
+                and any(isinstance(c, ast.Name) and c.id in body_names for c in n.comparators)
+            ):
+                body.add(n.left.value)
+            if (
+                isinstance(n, ast.Subscript)
+                and isinstance(n.value, ast.Attribute)
+                and n.value.attr == "query_params"
+                and isinstance(n.slice, ast.Constant)
+            ):
+                query.add(n.slice.value)
+        query.discard("token")  # a token is the security scheme's, on every route
+        out[route] = (query, body, bool(body_names))
+    return out
+
+
+def test_openapi_describes_every_input() -> None:
+    # A client generating its types from /openapi.json gets the inputs too: every query parameter
+    # and body field a handler reads is declared (`uro_server.inputs`), and nothing is declared for
+    # a route that doesn't exist.
+    from uro_server.inputs import BODIES, QUERY
+
+    found = _handler_inputs()
+    assert set(QUERY) <= set(found) and set(BODIES) <= set(found)
+    missing = []
+    for route, (query, body, takes_body) in found.items():
+        declared_q = {q.name for q in QUERY.get(route, [])}
+        missing += [f"{route} ?{q}" for q in sorted(query - declared_q)]
+        if takes_body and route not in BODIES:
+            missing.append(f"{route} has a JSON body with no model")
+        if route in BODIES:
+            model = BODIES[route]
+            names = {f.alias or k for k, f in model.model_fields.items()}
+            missing += [f"{route} body.{b}" for b in sorted(body - names)]
+    assert not missing, missing
+
+    spec = TestClient(create_app(_fake_deps())).get("/openapi.json").json()
+    log = spec["paths"]["/worlds/{world_id}/log"]["get"]
+    assert {p["name"] for p in log["parameters"] if p["in"] == "query"} == {"branch", "limit"}
+    fork = spec["paths"]["/worlds/{world_id}/branches"]["post"]["requestBody"]
+    ref = fork["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+    assert set(spec["components"]["schemas"][ref]["required"]) == {"name", "from_ref"}
+    # a body a handler defaults to `{}` stays optional
+    test = spec["paths"]["/providers/{connection_id}/test"]["post"]["requestBody"]
+    assert test["required"] is False
+    # every route but the liveness probe says how to send a token
+    assert "security" not in spec["paths"]["/healthz"]["get"]
+    assert spec["paths"]["/version"]["get"]["security"] == [{"bearer": []}, {"token": []}]
+    assert set(spec["components"]["securitySchemes"]) == {"bearer", "token"}
