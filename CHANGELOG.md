@@ -15,8 +15,9 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
   prefill to models that refuse them (Opus 4.7 and later, Sonnet 5 and 5.5, Haiku 5.5, Fable;
   the prefill also on the 4.6 models). Older models still get both.
 - A connection test with no model probes a model the connection is used with (the one bound to
-  `default`, else another bound chat model, else one it lists) and says which in `model`
-  (D-110).
+  `default`, else another bound chat model, else a cheap model it lists, never simply the first
+  in its list) and says which in `model` (D-110). A test that fails without an HTTP response says
+  what failed (a dropped connection reads `ConnectError`).
 - A failed provider call says why (D-110): the test's `detail`, and a failed call's recorded
   error, carry the HTTP status and the provider's own error type and message, never the key.
 
