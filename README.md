@@ -135,3 +135,5 @@ The full proven / proxy / stub-only / deferred breakdown lives in [`docs/16-hone
 ## License
 
 [MIT](LICENSE) © 2026 cupskeee.
+
+Built by [Yusuf Ramadhan](https://yusuframadhan.com).
