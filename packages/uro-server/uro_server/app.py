@@ -1016,6 +1016,29 @@ def create_app(
         # installed plugins that can't be used, with the reason (D-65) — never silently missing
         return {"rulesets": deps.list_rulesets(), "unusable": registry.broken()}
 
+    @app.post("/rulesets/describe", **_out(S.RulesetInfo))
+    async def describe_ruleset(
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """One ruleset as it stands under given settings (D-114): its sheet, spec and settings
+        schemas and the checks it offers. `GET /rulesets` lists each under its defaults, which
+        says nothing of a game that lives in its settings. `{ruleset, ruleset_config?}`; settings
+        the ruleset refuses are a 400 with its reasons. Any-authed; nothing is saved."""
+        _auth(request)
+        rid, config = _game_fields(body)
+        if rid is None:
+            raise HTTPException(status_code=400, detail="ruleset must be a ruleset id")
+        from uro_core.characters import ruleset_info
+        from uro_core.rulesets import registry
+
+        try:
+            return ruleset_info(registry.resolve(rid, "", config))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # --- Model-connection registry (D-47, docs/20 — slice 2). The instance-level LLM provider
     # registry over HTTP, so any client configures it (uro-cli edits the DB directly).
     # ALL endpoints are OPERATOR-only (D-44 — provider config is a cost/structural concern), and no

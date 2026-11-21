@@ -2704,7 +2704,9 @@ def test_openapi_describes_every_response() -> None:
             if schema in ({}, {"type": "object"}) or schema.get("additionalProperties") is True:
                 untyped.append(f"{method.upper()} {path}")
     assert not untyped, untyped
-    assert len([op for ops in spec["paths"].values() for op in ops]) == 74  # D-114: +1 (abandon)
+    assert (
+        len([op for ops in spec["paths"].values() for op in ops]) == 75
+    )  # D-114: +2 (abandon, describe)
 
     # ...and every top-level response object is strict, so a hand-built one can't carry an
     # undeclared key (review: a reused core model dropped it silently).
@@ -3203,3 +3205,52 @@ def test_a_holder_whose_fight_waits_on_another_passes_the_tables_turn() -> None:
         b.send_json({"type": "intent", "text": "I press on"})
         assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"
     assert played == ["player-2"]
+
+
+# --- D-114: a ruleset described under given settings ---
+
+
+def test_a_ruleset_is_described_under_the_settings_it_is_given() -> None:
+    client = TestClient(create_app(_fake_deps()))
+    game = {
+        "definition": {
+            "ratings": [{"key": "anger", "label": "Anger"}, {"key": "joy", "label": "Joy"}],
+            "actions": [{"key": "sway", "uses": ["anger", "joy"], "triggers": ["coerce"]}],
+        },
+        "resolver": {"kind": "pool"},
+    }
+    resp = client.post(
+        "/rulesets/describe?token=tok-b",  # any player: capability info, nothing saved
+        json={"ruleset": "uro-composable", "ruleset_config": game},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [a["id"] for a in body["affordances"]] == ["sway.anger", "sway.joy"]
+    assert body["affordances"][0]["trigger_categories"] == ["coerce"]
+    assert set(body["spec_schema"]["properties"]["ratings"]["properties"]) == {"anger", "joy"}
+    assert set(body["sheet_schema"]["properties"]["ratings"]["properties"]) == {"anger", "joy"}
+    # under its defaults the same ruleset is a game with no checks
+    bare = client.post("/rulesets/describe?token=tok-b", json={"ruleset": "uro-composable"})
+    assert bare.json()["affordances"] == [] and bare.json()["spec_schema"]["properties"] == {}
+    # the other built-ins describe themselves the same way
+    basic = client.post("/rulesets/describe?token=tok-b", json={"ruleset": "uro-basic"})
+    assert "persuade" in [a["id"] for a in basic.json()["affordances"]]
+
+
+def test_describing_a_ruleset_refuses_what_the_ruleset_refuses() -> None:
+    client = TestClient(create_app(_fake_deps()))
+    url = "/rulesets/describe?token=tok-a"
+    bad = client.post(
+        url,
+        json={
+            "ruleset": "uro-composable",
+            "ruleset_config": {"definition": {"actions": [{"key": "x", "uses": ["nope"]}]}},
+        },
+    )
+    assert bad.status_code == 400 and "no rating 'nope'" in bad.json()["detail"]
+    assert client.post(url, json={"ruleset": "no-such-game"}).status_code == 404
+    assert client.post(url, json={}).status_code == 400
+    assert (
+        client.post("/rulesets/describe?token=nope", json={"ruleset": "uro-basic"}).status_code
+        == 401
+    )

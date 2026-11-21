@@ -1,0 +1,76 @@
+# A game definition for the built-in `uro-composable` ruleset (D-114): the settings of a world's
+# `[ruleset.config]` or a campaign's `ruleset_config`. Six abilities, hit points and experience,
+# played on a d20. Ability names from the System Reference Document 5.2 (CC BY 4.0); the wording
+# is this repository's.
+
+[resolver]
+kind = "d20"
+
+[definition]
+id = "classic-six"
+version = 1
+name = "Classic six"
+pitch = "Six abilities, hit points and levels: the classic fantasy shape."
+credits = ["Ability names from the System Reference Document 5.2 by Wizards of the Coast LLC, CC BY 4.0."]
+scale = { min = 0, max = 5, words = ["feeble", "weak", "average", "able", "strong", "heroic"] }
+
+ratings = [
+  { key = "str", label = "Strength", describes = "lifting, shoving, hitting hard" },
+  { key = "dex", label = "Dexterity", describes = "balance, aim, quiet movement" },
+  { key = "con", label = "Constitution", describes = "stamina, enduring pain and poison" },
+  { key = "int", label = "Intelligence", describes = "recall, reasoning, study" },
+  { key = "wis", label = "Wisdom", describes = "noticing, intuition, willpower" },
+  { key = "cha", label = "Charisma", describes = "persuading, deceiving, presence" },
+]
+
+tracks = [
+  { key = "hp", label = "Hit points", min = 0, max = { base = 6, per = { rating = "con", times = 2 } }, start = "max", renew = { downtime_days = 1 }, role = "harm", out_at = "min" },
+  { key = "xp", label = "Experience", min = 0, max = 3, start = 0, role = "advance" },
+]
+
+actions = [
+  { key = "persuade", label = "Persuade", uses = ["cha"], triggers = ["change_disposition"], describes = "win someone over" },
+  { key = "sneak", label = "Sneak", uses = ["dex"], triggers = ["stealth"], describes = "go unseen or unheard" },
+  { key = "notice", label = "Notice", uses = ["wis", "int"], triggers = ["search"], describes = "find what's hidden" },
+  { key = "brave", label = "Brave danger", uses = ["str", "dex", "con"], triggers = ["danger"], describes = "climb, leap, resist, endure" },
+  { key = "strike", label = "Strike", uses = ["str", "dex"], triggers = ["violence"], describes = "attack someone", harm = true, effects = { success = [{ adjust = "hp", by = "-1d8", who = "target" }], great = [{ adjust = "hp", by = "-2d8", who = "target" }] } },
+  { key = "retreat", label = "Retreat", uses = ["dex"], describes = "get out of a fight", effects = { success = [{ leave = true }], great = [{ leave = true }] } },
+]
+
+gear = [
+  { tag = "armor", modifier = { applies_to = ["strike"], side = "against", change = { step = -1 }, stack = "armor" } },
+  { tag = "shield", modifier = { applies_to = ["strike"], side = "against", change = { step = -1 }, stack = "shield" } },
+]
+
+encounter = { by = "dex", award = { adjust = "xp", by = 1 } }
+
+foes = [
+  { key = "minion", steps = 1, tracks = { hp = 4 }, threat = ["harmless", "weak"] },
+  { key = "brute", steps = 3, tracks = { hp = 14 }, threat = ["strong"] },
+  { key = "boss", steps = 4, tracks = { hp = 30 }, threat = ["deadly"] },
+]
+
+ready_made = [
+  { name = "The sellsword", line = "Paid to stand in front.", spec = { ratings = { str = 3, con = 3, dex = 2, wis = 2, cha = 1, int = 0 }, picks = { kits = ["soldier"] } } },
+]
+
+[definition.lists]
+kits = [
+  { key = "soldier", label = "Soldier's kit", holdings = [{ name = "sword" }, { name = "mail shirt", tags = ["armor"] }, { name = "shield", tags = ["shield"] }] },
+  { key = "wanderer", label = "Wanderer's kit", holdings = [{ name = "staff" }, { name = "bedroll" }, { name = "lantern" }] },
+]
+
+[[definition.creation]]
+choice = "array"
+steps = [3, 3, 2, 2, 1, 0]
+
+[[definition.creation]]
+choice = "pick"
+from = "kits"
+count = 1
+
+[definition.advancement]
+choice = "budget"
+points = 1
+caps = { max = 5 }
+then = { adjust = "xp", to = 0 }

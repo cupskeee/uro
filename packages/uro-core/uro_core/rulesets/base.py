@@ -195,6 +195,30 @@ def standing(ruleset: Any, state: EncounterState) -> frozenset[str] | None:
     return frozenset(fn(state)) if callable(fn) else None
 
 
+def creation_guidance(ruleset: Any, spec: CharSpec) -> dict[str, Any] | None:
+    """What a spec still wants before it is a finished character (D-114): points to spend, picks
+    to make, in the ruleset's own shape, through its optional `creation_guidance(spec)`. None for
+    a ruleset without the hook (or a spec it can't read at all)."""
+    fn = getattr(ruleset, "creation_guidance", None)
+    if not callable(fn):
+        return None
+    try:
+        guidance = fn(spec)
+    except (CharSpecError, ValidationError, ValueError, TypeError, KeyError):
+        return None
+    return dict(guidance) if guidance is not None else None
+
+
+def starting_holdings(ruleset: Any, spec: CharSpec) -> list[Holding]:
+    """The things a spec gives its character to hold from the start (D-114: a kit the player
+    picked), through the ruleset's optional `starting_holdings(spec)`. None for a ruleset without
+    the hook. The engine makes them items; holding stays world state."""
+    fn = getattr(ruleset, "starting_holdings", None)
+    if not callable(fn):
+        return []
+    return [h if isinstance(h, Holding) else Holding.model_validate(h) for h in fn(spec)]
+
+
 class Choice(BaseModel):
     """A choice a ruleset leaves for a player about their character (D-113): how it grows, what a
     setback costs. Ruleset-shaped and opaque to the engine: an id, the words to show, the options

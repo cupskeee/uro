@@ -5,7 +5,7 @@ know the concrete built-ins), so the import-linter contract permits it to import
 `uro_pbta`/`uro_pool` while the ring (`pipeline`/`domain`/…) still imports only `rulesets.base`. The
 composition roots (CLI wiring, server deps) call `resolve`; the pipeline never touches it.
 
-Rulesets come from three places: the three built-ins, PLUGINS — installed packages that declare an
+Rulesets come from three places: the four built-ins, PLUGINS — installed packages that declare an
 entry point in the `uro.rulesets` group (D-65) — and `register()` for an embedder's in-process one.
 An entry point's NAME is the ruleset id, and it points at a factory taking the world's settings
 (a ruleset class whose `__init__(config)` validates them works). Discovery runs once, lazily. A
@@ -27,6 +27,7 @@ from pydantic import ValidationError
 from uro_core.ports.projections import EngineStore
 from uro_core.rulesets.base import Ruleset, ruleset_contract_problem
 from uro_core.rulesets.uro_basic import UroBasic
+from uro_core.rulesets.uro_composable import UroComposable
 from uro_core.rulesets.uro_pbta import UroPbtA
 from uro_core.rulesets.uro_pool import UroPool
 from uro_core.timeline.models import Campaign, RulesetPin
@@ -43,6 +44,7 @@ _BUILTINS: dict[str, Factory] = {
     "uro-basic": UroBasic,
     "uro-pbta": UroPbtA,
     "uro-pool": UroPool,
+    "uro-composable": UroComposable,
 }
 _FACTORIES: dict[str, Factory] = dict(_BUILTINS)
 _BROKEN: dict[str, str] = {}  # plugin id → why it can't be used

@@ -215,6 +215,13 @@ class ChoiceAnswerIn(In):
     participant: str | None = Field(default=None, description="Absent = the caller.")
 
 
+class RulesetDescribeIn(In):
+    ruleset: str = Field(description="A ruleset id, as `GET /rulesets` lists them.")
+    ruleset_config: dict[str, Any] | None = Field(
+        default=None, description="The settings to describe it under. Absent = its defaults."
+    )
+
+
 class AbandonFightIn(In):
     participant: str | None = Field(
         default=None, description="Whose fight. Absent = the campaign's first open one."
@@ -292,6 +299,7 @@ BODIES: dict[tuple[str, str], type[BaseModel]] = {
     ("POST", "/campaigns/{campaign_id}/character/preview"): CampaignCharacterPreviewIn,
     ("PATCH", "/campaigns/{campaign_id}/character"): CharacterPatch,
     ("POST", "/campaigns/{campaign_id}/encounter/abandon"): AbandonFightIn,
+    ("POST", "/rulesets/describe"): RulesetDescribeIn,
     ("POST", "/campaigns/{campaign_id}/character/choices/{choice_id}"): ChoiceAnswerIn,
     ("POST", "/worlds/{world_id}/character-proposal"): WorldCharacterProposalIn,
     ("POST", "/campaigns/{campaign_id}/character/proposal"): CampaignCharacterProposalIn,

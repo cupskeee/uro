@@ -159,12 +159,23 @@ class LLMCalls(Out):
 # --- rulesets (D-30, D-65) ---
 
 
+class AffordanceOut(Out):
+    id: str
+    stat: str
+    difficulty: str
+    trigger_categories: list[str]
+    starts_encounter: bool
+    description: str
+
+
 class RulesetInfo(Out):
     id: str
     version: str | None = None
     sheet_schema: dict[str, Any] | None = None
     spec_schema: dict[str, Any] | None = None  # D-112: what a character spec may hold; {} = any
     config_schema: dict[str, Any] | None = None
+    # D-114: the checks it offers the planner, under the settings it was described with
+    affordances: list[AffordanceOut] | None = None
     error: str | None = None  # set instead of the schemas when it can't be listed
 
 
@@ -524,6 +535,9 @@ class CharacterPreview(Out):
     ruleset: str
     sheet: dict[str, Any] | None = None
     problems: list[SpecProblemOut]
+    # D-114: what the build still wants, in the ruleset's own shape (uro-composable:
+    # `{left: [{choice, ...}], complete}`); null when the ruleset doesn't say
+    guidance: dict[str, Any] | None = None
 
 
 class CharacterProposal(Out):

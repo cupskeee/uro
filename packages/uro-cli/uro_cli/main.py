@@ -1855,6 +1855,53 @@ def rules_validate(path: str) -> None:
     )
 
 
+@ruleset_app.command("describe")
+def ruleset_describe(
+    ruleset_id: str = typer.Argument(..., help="A ruleset id, as `uro ruleset list` shows them."),
+    config: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--config",
+        help="The settings to describe it under: a .toml or .json file (what a world's "
+        "`[ruleset.config]` or a campaign's settings would hold). Default: its defaults.",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Everything, as JSON."),
+) -> None:
+    """One ruleset as it stands under given settings (D-114): the checks it offers and what a
+    character spec may say. For a ruleset whose game is its settings (uro-composable; examples in
+    examples/definitions/), this is how to read the game."""
+    import tomllib
+
+    from uro_core.characters import ruleset_info
+
+    settings: dict[str, Any] | None = None
+    if config is not None:
+        try:
+            text = config.read_text()
+            settings = tomllib.loads(text) if config.suffix == ".toml" else json.loads(text)
+        except (OSError, ValueError) as exc:
+            typer.echo(f"can't read {config}: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    try:
+        info = ruleset_info(registry.resolve(ruleset_id, "", settings))
+    except (KeyError, ValueError) as exc:
+        typer.echo(str(exc.args[0]) if exc.args else str(exc), err=True)
+        raise typer.Exit(1) from exc
+    if as_json:
+        typer.echo(json.dumps(info, indent=2))
+        return
+    typer.echo(f"{info['id']}@{info['version']}")
+    spec = info["spec_schema"]
+    closed = spec.get("additionalProperties") is False
+    keys = ", ".join(spec.get("properties", {})) or ("(nothing to choose)" if closed else "(any)")
+    typer.echo(f"  spec: {keys}")
+    if not info["affordances"]:
+        typer.echo("  no checks: every beat is narration")
+    for a in info["affordances"]:
+        triggers = f"  [{', '.join(a['trigger_categories'])}]" if a["trigger_categories"] else ""
+        fight = "  (starts a fight)" if a["starts_encounter"] else ""
+        typer.echo(f"  {a['id']}: {a['description']}{triggers}{fight}")
+
+
 @ruleset_app.command("list")
 def ruleset_list() -> None:
     """The rulesets a world can declare (`\\[ruleset] id` in world.toml): the built-ins and

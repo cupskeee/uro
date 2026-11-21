@@ -1,0 +1,47 @@
+# A game definition for the built-in `uro-composable` ruleset (D-114) with nothing of the classic
+# vocabulary: you act through what you feel, and Composure is all that holds you together. Played
+# on 2d6 here, and just as playable on a d20 or a pool (swap `[resolver]`). No gear, no fights, no
+# foes: what a character carries is only story, and violence is a run of Lash out checks.
+
+[resolver]
+kind = "2d6"
+
+[definition]
+id = "six-feelings"
+version = 1
+name = "Six feelings"
+pitch = "You act through what you feel. Composure is all that holds you together."
+scale = { min = 0, max = 5, words = ["numb", "faint", "felt", "strong", "fierce", "consuming"] }
+
+ratings = [
+  { key = "anger", label = "Anger", describes = "force, defiance, breaking through" },
+  { key = "fear", label = "Fear", describes = "fleeing, hiding, sensing danger" },
+  { key = "joy", label = "Joy", describes = "charming, inspiring, playing" },
+  { key = "sadness", label = "Sadness", describes = "empathy, patience, enduring loss" },
+  { key = "disgust", label = "Disgust", describes = "refusing, judging, seeing rot" },
+  { key = "surprise", label = "Surprise", describes = "improvising, noticing the odd" },
+]
+
+tracks = [
+  { key = "composure", label = "Composure", min = 0, max = 5, start = "max", renew = { downtime_days = 1 }, at_min = "overwhelmed", role = "harm", out_at = "min" },
+  { key = "growth", label = "Growth", min = 0, max = 5, start = 0, role = "advance" },
+]
+tags = [{ key = "overwhelmed", label = "Overwhelmed", describes = "every feeling at once" }]
+modifiers = [{ applies_to = "all", when = { has = ["overwhelmed"] }, change = { step = -1 } }]
+
+actions = [
+  { key = "lash_out", label = "Lash out", uses = ["anger"], triggers = ["violence", "coerce"], describes = "force your way through someone", effects = { fail = [{ adjust = "composure", by = -1 }, { adjust = "growth", by = 1 }], cost = [{ adjust = "composure", by = -1 }] } },
+  { key = "slip_away", label = "Slip away", uses = ["fear"], triggers = ["stealth", "danger"], describes = "get out, hide, or dodge the worst" },
+  { key = "win_over", label = "Win over", uses = ["joy", "sadness"], triggers = ["change_disposition"], describes = "bring someone round" },
+  { key = "see_through", label = "See through", uses = ["disgust", "surprise"], triggers = ["search"], describes = "spot what's wrong or hidden" },
+]
+
+[[definition.creation]]
+choice = "array"
+steps = [3, 2, 2, 1, 1, 0]
+
+[definition.advancement]
+choice = "budget"
+points = 1
+caps = { max = 5 }
+then = { adjust = "growth", to = 0 }
