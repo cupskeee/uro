@@ -9,6 +9,8 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-21
+
 Upgrading: migrations 029 and 030 (`uro db migrate`). For embedders: an `EventStore`/`EngineStore`
 of your own gains `inherited_ruleset_pin`, `character_frozen`, `amend_character`, `amend_sheet`,
 `append_fight_beat`, `holdings`, `actor_spec`, `open_encounters` and `world_characters`;
@@ -1312,7 +1314,10 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/cupskeee/uro/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/cupskeee/uro/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/cupskeee/uro/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/cupskeee/uro/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/cupskeee/uro/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/cupskeee/uro/compare/v0.15.0...v0.16.0
