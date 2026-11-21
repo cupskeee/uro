@@ -821,7 +821,8 @@ def beat_detail_lines(
             lines.append(f"  ? {c['id']}: {c['prompt']} — `uro character choose` or /choose")
     wait = details.get("encounter")  # D-112: the fight waits on a player's choice
     if wait:
-        lines.append(f"  · the fight waits on {wait['actor_id']}:")
+        who = f" (player {wait['participant_id']})" if wait.get("participant_id") else ""
+        lines.append(f"  · the fight waits on {wait['actor_id']}{who}:")
         lines += refusal_lines("", wait.get("legal_actions") or [])[1:]
     created = details.get("created") or []
     if created:
@@ -1142,6 +1143,10 @@ def connect(
                                 msg["reason"], msg.get("legal_actions") or []
                             ):
                                 typer.echo(line)
+                            if msg.get("waiting_on"):  # D-114: it is another character's move
+                                typer.echo(f"    (the fight waits on {msg['waiting_on']})")
+                        elif kind == "encounter_abandoned":  # D-114: the game closed the fight
+                            typer.echo("  · the fight was closed, undecided")
                         elif kind == "intent_rejected":
                             typer.echo(
                                 f"  ✗ [{msg['participant_id']}] intent rejected: {msg['text']!r}"
@@ -1855,6 +1860,53 @@ def rules_validate(path: str) -> None:
     )
 
 
+@ruleset_app.command("describe")
+def ruleset_describe(
+    ruleset_id: str = typer.Argument(..., help="A ruleset id, as `uro ruleset list` shows them."),
+    config: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--config",
+        help="The settings to describe it under: a .toml or .json file (what a world's "
+        "`[ruleset.config]` or a campaign's settings would hold). Default: its defaults.",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Everything, as JSON."),
+) -> None:
+    """One ruleset as it stands under given settings (D-114): the checks it offers and what a
+    character spec may say. For a ruleset whose game is its settings (uro-composable; examples in
+    examples/definitions/), this is how to read the game."""
+    import tomllib
+
+    from uro_core.characters import ruleset_info
+
+    settings: dict[str, Any] | None = None
+    if config is not None:
+        try:
+            text = config.read_text()
+            settings = tomllib.loads(text) if config.suffix == ".toml" else json.loads(text)
+        except (OSError, ValueError) as exc:
+            typer.echo(f"can't read {config}: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    try:
+        info = ruleset_info(registry.resolve(ruleset_id, "", settings))
+    except (KeyError, ValueError) as exc:
+        typer.echo(str(exc.args[0]) if exc.args else str(exc), err=True)
+        raise typer.Exit(1) from exc
+    if as_json:
+        typer.echo(json.dumps(info, indent=2))
+        return
+    typer.echo(f"{info['id']}@{info['version']}")
+    spec = info["spec_schema"]
+    closed = spec.get("additionalProperties") is False
+    keys = ", ".join(spec.get("properties", {})) or ("(nothing to choose)" if closed else "(any)")
+    typer.echo(f"  spec: {keys}")
+    if not info["affordances"]:
+        typer.echo("  no checks: every beat is narration")
+    for a in info["affordances"]:
+        triggers = f"  [{', '.join(a['trigger_categories'])}]" if a["trigger_categories"] else ""
+        fight = "  (starts a fight)" if a["starts_encounter"] else ""
+        typer.echo(f"  {a['id']}: {a['description']}{triggers}{fight}")
+
+
 @ruleset_app.command("list")
 def ruleset_list() -> None:
     """The rulesets a world can declare (`\\[ruleset] id` in world.toml): the built-ins and
@@ -2248,9 +2300,15 @@ def campaign_new(
 def campaign_encounter(
     campaign_id: str,
     participant: str = typer.Option(None, "--participant", help="whose fight (default: any)"),
+    abandon: bool = typer.Option(
+        False,
+        "--abandon",
+        help="end the fight without deciding it (D-114): sheets stay as they are",
+    ),
 ) -> None:
     """The fight waiting on a player's choice in a campaign that plays fights turn by turn
-    (D-112): whose turn it is and the actions to send (`/act` in `uro play`/`uro connect`)."""
+    (D-112): whose turn it is and the actions to send (`/act` in `uro play`/`uro connect`).
+    `--abandon` closes it undecided: nobody wins, is wounded or looted."""
 
     async def _run() -> None:
         store = build_store()
@@ -2263,6 +2321,10 @@ def campaign_encounter(
                 ruleset=await registry.resolve_for_campaign(store, c),
             )
             try:
+                if abandon:
+                    ended = await engine.abandon_fight(c, participant)
+                    typer.echo(f"abandoned {ended}" if ended else "(no fight was open)")
+                    return
                 wait = await engine.fight_status(c, participant)
             except ChoiceRefused as exc:
                 typer.echo(f"error: {exc}", err=True)
@@ -2538,11 +2600,16 @@ def character_preview(
                 raise typer.Exit(1) from exc
         finally:
             await store.close()
+        left = (preview.guidance or {}).get("left") or []
         if not preview.ok:
             _echo_refused(CharSpecError(preview.problems))
+            if left:  # D-114: the ruleset's own count of what the build still wants
+                typer.echo(f"still to do: {json.dumps(left)}", err=True)
             raise typer.Exit(1)
         typer.echo(f"ok ({preview.ruleset}):")
         typer.echo(json.dumps(preview.sheet, indent=2, sort_keys=True))
+        if left:
+            typer.echo(f"still to do: {json.dumps(left)}")
 
     _run_async(_run)
 

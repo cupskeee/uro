@@ -43,8 +43,10 @@ from uro_core.rulesets.base import (
     answer_choice,
     build_character,
     check_holdings,
+    creation_guidance,
     pending_choices,
     spec_schema_of,
+    starting_holdings,
 )
 from uro_core.rulesets.registry import DEFAULT_RULESET_ID, resolve, resolve_for_campaign
 from uro_core.rulesets.rng import Rng
@@ -92,6 +94,9 @@ class Preview(BaseModel):
     ruleset: str
     sheet: Sheet | None = None
     problems: list[SpecProblem] = Field(default_factory=list)
+    # D-114: what the build still wants (points to spend, picks to make), in the ruleset's own
+    # shape, when the ruleset says; None when it doesn't
+    guidance: dict[str, Any] | None = None
 
 
 class CharacterView(BaseModel):
@@ -180,6 +185,15 @@ async def _as_suggested(
 
 
 CHOSEN = "chosen"  # the item kind of a holding a player chose at start (D-113)
+GRANTED = "granted"  # the item kind of a holding the character's build gave it (D-114: a kit)
+
+
+def granted_holdings(ruleset: Ruleset, spec: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The things a spec gives its character to hold (D-114), as starting-item entries marked
+    `granted`: what the ruleset's optional `starting_holdings` names for it (a kit the player
+    picked). None for a ruleset without the hook."""
+    held = starting_holdings(ruleset, CharSpec(data=spec or {}))
+    return [{"name": h.name, "data": h.data, "kind": GRANTED} for h in held]
 
 
 def chosen_holdings(
@@ -290,7 +304,9 @@ async def start_campaign(
         adopt_actor_id=adopt_actor_id,
         pc_sheet=pc_sheet,
         starting_items=(
-            [*await starting_gear(store, branch_id), *chosen] if new_pc_name is not None else None
+            [*await starting_gear(store, branch_id), *granted_holdings(game.ruleset, spec), *chosen]
+            if new_pc_name is not None
+            else None
         ),
         ruleset_id=game.pin.id,
         ruleset_version=game.pin.version,
@@ -340,7 +356,11 @@ async def join_campaign(
         new_pc_name=new_pc_name,
         pc_sheet=pc_sheet,
         starting_items=(
-            [*await starting_gear(store, campaign.branch_id), *chosen]
+            [
+                *await starting_gear(store, campaign.branch_id),
+                *granted_holdings(ruleset, spec),
+                *chosen,
+            ]
             if new_pc_name is not None
             else None
         ),
@@ -366,11 +386,16 @@ async def preview_character(
             store, branch_id, ruleset_id=ruleset_id, ruleset_config=ruleset_config
         )
         ruleset = game.ruleset
+    guidance = (
+        creation_guidance(ruleset, CharSpec(data=spec or {}))
+        if spec is None or isinstance(spec, dict)
+        else None
+    )
     try:
         sheet = character_sheet(ruleset, spec)
     except CharSpecError as exc:
-        return Preview(ok=False, ruleset=ruleset.id, problems=exc.problems)
-    return Preview(ok=True, ruleset=ruleset.id, sheet=sheet)
+        return Preview(ok=False, ruleset=ruleset.id, problems=exc.problems, guidance=guidance)
+    return Preview(ok=True, ruleset=ruleset.id, sheet=sheet, guidance=guidance)
 
 
 async def _pc(store: EngineStore, campaign: Campaign, participant_id: str) -> str:
@@ -410,33 +435,44 @@ async def rebuild_character(
         )
     if name is not None:
         events.append(actor_renamed(actor_id=actor_id, name=name.strip(), caused_by=cause))
+    # what a build gave (a kit) follows the build; what the player chose follows `holdings`
+    replaced: dict[str, list[dict[str, Any]]] = {}
+    if spec is not None and callable(getattr(ruleset, "starting_holdings", None)):
+        granted = granted_holdings(ruleset, spec)
+        had = any(
+            h.get("kind") == GRANTED for h in await store.holdings(campaign.branch_id, actor_id)
+        )
+        if granted or had:  # a build that gives and gave nothing changes nothing held
+            replaced[GRANTED] = granted
     if holdings is not None:
-        chosen = chosen_holdings(ruleset, holdings)
+        replaced[CHOSEN] = chosen_holdings(ruleset, holdings)
+    if replaced:
         for old in await store.holdings(campaign.branch_id, actor_id):
-            if old.get("kind") == CHOSEN:  # put down what was chosen before: it leaves the world
+            if old.get("kind") in replaced:  # put down what was held before: it leaves the world
                 events.append(
                     item_transferred(
                         item_id=old["item_id"], from_ref=actor_id, to_ref="", caused_by=cause
                     )
                 )
-        for entry in chosen:
-            events.append(
-                item_created(
-                    item_id=f"i:{new_id()}",
-                    name=entry["name"],
-                    owner_ref=actor_id,
-                    data=entry["data"],
-                    kind=CHOSEN,
-                    caused_by=cause,
+        for kind, entries in replaced.items():
+            for entry in entries:
+                events.append(
+                    item_created(
+                        item_id=f"i:{new_id()}",
+                        name=entry["name"],
+                        owner_ref=actor_id,
+                        data=entry["data"],
+                        kind=kind,
+                        caused_by=cause,
+                    )
                 )
-            )
     try:
         # a name and chosen holdings are a new character's to change, never an adopted one's
         await store.amend_character(
             campaign.branch_id,
             actor_id,
             events,
-            renames=name is not None or holdings is not None,
+            renames=name is not None or bool(replaced),
         )
     except ValueError as exc:
         raise CharacterFrozen(str(exc)) from exc
@@ -512,6 +548,8 @@ def ruleset_info(ruleset: Ruleset) -> dict[str, Any]:
         "sheet_schema": ruleset.sheet_schema(),
         "spec_schema": spec_schema_of(ruleset),
         "config_schema": ruleset.config_schema(),
+        # D-114: the checks it offers the planner, as they stand under its settings
+        "affordances": [a.model_dump() for a in ruleset.affordances()],
     }
 
 

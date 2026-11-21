@@ -37,6 +37,7 @@ from uro_core.rulesets.base import (
     CharSpecError,
     CheckRequest,
     CheckResult,
+    Combatant,
     Effect,
     EncounterCtx,
     EncounterOutcome,
@@ -134,6 +135,11 @@ class _Fighter(BaseModel):
     actor_id: str
     team: str
     sheet: Sheet
+    fled: bool = False  # withdrew (D-114)
+
+    @property
+    def active(self) -> bool:
+        return self.sheet.in_fight and not self.fled
 
 
 class _Encounter(EncounterState):
@@ -311,9 +317,23 @@ class UroPool:
         st = _as_enc(state)
         if self.is_over(st) is not None:
             return None
-        return next(
-            (a for a in st.order if st.fighters[a].sheet.in_fight and a not in st.committed), None
+        return next((a for a in st.order if st.fighters[a].active and a not in st.committed), None)
+
+    def join_encounter(
+        self, state: EncounterState, combatant: Combatant, rng: Rng
+    ) -> EncounterState:
+        """A latecomer (D-114) commits in the round under way, after the others."""
+        st = _as_enc(state).model_copy(deep=True)
+        st.fighters[combatant.actor_id] = _Fighter(
+            actor_id=combatant.actor_id,
+            team=combatant.team,
+            sheet=Sheet.model_validate(combatant.sheet),
         )
+        st.order.append(combatant.actor_id)
+        return st
+
+    def standing(self, state: EncounterState) -> list[str]:
+        return sorted(a for a, f in _as_enc(state).fighters.items() if f.active)
 
     def sheets(self, state: EncounterState) -> dict[str, SheetDict]:
         return {a: f.sheet.model_dump() for a, f in _as_enc(state).fighters.items()}
@@ -321,7 +341,8 @@ class UroPool:
     def legal_actions(self, state: EncounterState, actor_id: str) -> list[ActionSpec]:
         foes = _foes(_as_enc(state), actor_id)
         specs = [ActionSpec(kind="strike", targets=foes)] if foes else []
-        return [*specs, ActionSpec(kind="brace")]
+        leave = [ActionSpec(kind="withdraw")] if foes else []  # D-114
+        return [*specs, ActionSpec(kind="brace"), *leave]
 
     def npc_action(self, state: EncounterState, actor_id: str, rng: Rng) -> Action:
         st = _as_enc(state)
@@ -337,7 +358,7 @@ class UroPool:
     ) -> tuple[EncounterState, list[Effect]]:
         st = _as_enc(state)
         committed = {**st.committed, action.actor_id: action}
-        standing = [a for a in st.order if st.fighters[a].sheet.in_fight]
+        standing = [a for a in st.order if st.fighters[a].active]
         if any(a not in committed for a in standing):  # the round isn't closed yet — no effects
             return st.model_copy(update={"committed": committed}), []
         return self._resolve_round(st, committed, rng)
@@ -377,6 +398,23 @@ class UroPool:
         for actor_id, dealt in wounds.items():  # simultaneous: applied only after every roll
             sheet = fighters[actor_id].sheet
             sheet.wounds = min(_WOUNDS_DOWN, sheet.wounds + dealt)
+        # Withdrawing (D-114) resolves with the round: the strikes aimed at you still land, then a
+        # wits pool decides whether you got away. Rolled in commit order, after every strike.
+        for actor_id in st.order:
+            act = committed.get(actor_id)
+            if act is None or act.kind != "withdraw" or not fighters[actor_id].sheet.in_fight:
+                continue
+            dice = [rng.die(6) for _ in range(st.fighters[actor_id].sheet.pool("wits"))]
+            away = _marks(dice, _STRIKE_TARGET) > 0
+            fighters[actor_id].fled = away
+            effects.append(
+                Effect(
+                    kind="fled" if away else "caught",
+                    actor_id=actor_id,
+                    trace=f"round {st.round}: {actor_id} withdraws {sorted(dice)} → "
+                    + ("away" if away else "cut off"),
+                )
+            )
         nxt = st.model_copy(update={"fighters": fighters, "committed": {}, "round": st.round + 1})
         return nxt, effects
 
@@ -401,18 +439,21 @@ class UroPool:
 
     def is_over(self, state: EncounterState) -> EncounterOutcome | None:
         st = _as_enc(state)
-        live_teams = {f.team for f in st.fighters.values() if f.sheet.in_fight}
+        live_teams = {f.team for f in st.fighters.values() if f.active}
         if len(live_teams) > 1:
             return None
-        survivors = sorted(a for a, f in st.fighters.items() if f.sheet.in_fight)
+        survivors = sorted(a for a, f in st.fighters.items() if f.active)
         out = sorted(a for a, f in st.fighters.items() if not f.sheet.in_fight)
         winner = next(iter(live_teams)) if live_teams else None
-        return EncounterOutcome(winner_team=winner, survivors=survivors, out_of_fight=out)
+        fled = sorted(a for a, f in st.fighters.items() if f.fled)
+        return EncounterOutcome(
+            winner_team=winner, survivors=survivors, out_of_fight=out, fled=fled
+        )
 
 
 def _foes(st: _Encounter, actor_id: str) -> list[str]:
     me = st.fighters[actor_id]
-    return sorted(a for a, f in st.fighters.items() if f.team != me.team and f.sheet.in_fight)
+    return sorted(a for a, f in st.fighters.items() if f.team != me.team and f.active)
 
 
 def _as_enc(state: EncounterState) -> _Encounter:

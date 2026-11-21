@@ -348,6 +348,8 @@ class ServerDeps:
     )
     # D-112: the fight on a campaign waiting on a player's choice, or None
     fight_status: Callable[[str, str | None], Awaitable[dict[str, Any] | None]] | None = None
+    # D-114: end a fight without deciding it → the encounter id, or None when there was none
+    abandon_fight: Callable[[str, str | None], Awaitable[str | None]] | None = None
     # D-112: propose a character build from a description through the bound model:
     # (branch_id, campaign_id or None, ruleset or None, ruleset_config or None, description)
     propose_character: (
@@ -609,6 +611,12 @@ def engine_deps(
         wait = await (await engine_for(campaign)).fight_status(campaign, participant)
         return wait.model_dump() if wait is not None else None
 
+    async def abandon_fight(campaign_id: str, participant: str | None) -> str | None:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise KeyError(campaign_id)
+        return await (await engine_for(campaign)).abandon_fight(campaign, participant)
+
     async def propose_character(
         branch_id: str,
         campaign_id: str | None,
@@ -754,6 +762,7 @@ def engine_deps(
         refresh_models=refresh_models,
         propose_character=propose_character,
         fight_status=fight_status,
+        abandon_fight=abandon_fight,
         answer_choice=answer_choice,
         test_connection=test_connection,
         reload_router=reload_router,
@@ -1006,6 +1015,29 @@ def create_app(
 
         # installed plugins that can't be used, with the reason (D-65) — never silently missing
         return {"rulesets": deps.list_rulesets(), "unusable": registry.broken()}
+
+    @app.post("/rulesets/describe", **_out(S.RulesetInfo))
+    async def describe_ruleset(
+        request: Request,
+        body: dict[str, Any] = Body(...),  # noqa: B008
+    ) -> dict[str, Any]:
+        """One ruleset as it stands under given settings (D-114): its sheet, spec and settings
+        schemas and the checks it offers. `GET /rulesets` lists each under its defaults, which
+        says nothing of a game that lives in its settings. `{ruleset, ruleset_config?}`; settings
+        the ruleset refuses are a 400 with its reasons. Any-authed; nothing is saved."""
+        _auth(request)
+        rid, config = _game_fields(body)
+        if rid is None:
+            raise HTTPException(status_code=400, detail="ruleset must be a ruleset id")
+        from uro_core.characters import ruleset_info
+        from uro_core.rulesets import registry
+
+        try:
+            return ruleset_info(registry.resolve(rid, "", config))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # --- Model-connection registry (D-47, docs/20 — slice 2). The instance-level LLM provider
     # registry over HTTP, so any client configures it (uro-cli edits the DB directly).
@@ -2497,6 +2529,37 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="no such campaign") from exc
 
+    @app.post("/campaigns/{campaign_id}/encounter/abandon", **_out(S.FightAbandoned))
+    async def abandon_campaign_encounter(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(default={}),  # noqa: B008
+    ) -> dict[str, Any]:
+        """End a fight played turn by turn without deciding it (D-114): the combatants keep their
+        sheets as the fight left them, nobody wins, is wounded or looted, and the world's rules
+        react. `{participant?}` picks whose fight (default: the campaign's first). OPERATOR-only:
+        closing a fight is the game's call (a client offers it to its player as it sees fit).
+        `{encounter_id: null}` when no fight was open."""
+        _require_operator(request)
+        if deps.abandon_fight is None:
+            raise HTTPException(status_code=501, detail="encounters not enabled")
+        who = body.get("participant")
+        if who is not None and not isinstance(who, str):
+            raise HTTPException(status_code=400, detail="participant must be a string")
+        from uro_core.pipeline.encounter import ChoiceRefused as _Refused
+
+        try:
+            encounter_id = await deps.abandon_fight(campaign_id, who)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such campaign") from exc
+        except _Refused as exc:  # a turn landed meanwhile, or another ruleset's fight
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if encounter_id is not None:
+            await hub.publish(
+                campaign_id, {"type": "encounter_abandoned", "encounter_id": encounter_id}
+            )
+        return {"encounter_id": encounter_id}
+
     @app.get("/campaigns/{campaign_id}/character", **_out(S.CharacterOut))
     async def campaign_character(campaign_id: str, request: Request) -> dict[str, Any]:
         """Your own character in this campaign (D-112): its sheet as the ruleset shapes it, what it
@@ -3067,6 +3130,18 @@ def _beat_details(result: BeatResult) -> dict[str, object]:
     }
 
 
+async def _fight_waits_on(deps: ServerDeps, campaign_id: str, participant: str) -> bool:
+    """Whether an open fight waits on this participant's own character (D-114)."""
+    if deps.fight_status is None:
+        return False
+    try:
+        wait = await deps.fight_status(campaign_id, participant)
+    except Exception:  # a fault here must not take the socket down: the table's answer stands
+        logger.warning("fight status failed for %s on %s", participant, campaign_id, exc_info=True)
+        return False
+    return wait is not None and wait.get("participant_id") == participant
+
+
 async def _run_and_broadcast(
     deps: ServerDeps,
     arbiter: TurnArbiter,
@@ -3085,6 +3160,16 @@ async def _run_and_broadcast(
         return
     echo = {"intent_id": intent_id[:64]} if isinstance(intent_id, str) and intent_id else {}
     decision = await arbiter.admit(campaign_id, participant, text)
+    # D-114: a fight has its own turn order. A player whose character the fight waits on plays
+    # that turn whoever holds the table's turn; the table's turn passes only when its holder acts.
+    holds_turn = decision == AdmitDecision.ADMITTED
+    if (
+        not holds_turn
+        and action is not None
+        and decision in (AdmitDecision.NOT_YOUR_TURN, AdmitDecision.QUEUED)
+        and await _fight_waits_on(deps, campaign_id, participant)
+    ):
+        decision = AdmitDecision.ADMITTED
     if decision == AdmitDecision.NOT_YOUR_TURN:
         # Valid intent, but another participant holds the turn (round-robin, OQ-7) — tell the
         # client to hold; it is NOT rejected, so a client may retry when the token rotates.
@@ -3109,6 +3194,26 @@ async def _run_and_broadcast(
             {"type": "intent_rejected", "participant_id": participant, "text": text, **echo},
         )
         return
+    async with hub.beat_lock(campaign_id):
+        await _play_beat(
+            deps, arbiter, hub, campaign_id, participant, text, action, echo, holds_turn
+        )
+
+
+async def _play_beat(
+    deps: ServerDeps,
+    arbiter: TurnArbiter,
+    hub: SessionHub,
+    campaign_id: str,
+    participant: str,
+    text: str,
+    action: dict[str, Any] | None,
+    echo: dict[str, Any],
+    holds_turn: bool,
+) -> None:
+    """An admitted intent's beat: run it and broadcast its frames. `holds_turn` says the sender
+    held the table's turn (a fight turn played out of the table's order did not), so only then
+    does the table's turn pass."""
     await hub.publish(
         campaign_id,
         {"type": "beat_started", "participant_id": participant, "intent": text, **echo},
@@ -3166,9 +3271,14 @@ async def _run_and_broadcast(
                 "participant_id": participant,
                 "reason": str(exc),
                 "legal_actions": [a.model_dump() for a in exc.legal_actions],
+                "waiting_on": exc.waiting_on,  # D-114: the character whose move it is, if another's
                 **echo,
             },
         )
+        # D-114, the one refusal that passes the table's turn: its holder is in a fight that
+        # waits on someone else, so holding the turn for them would stall everyone not in it.
+        if holds_turn and exc.waiting_on is not None:
+            await arbiter.beat_committed(campaign_id, participant, "")
         return
     except Exception:
         # A beat failure (e.g. a ruleset mismatch, a provider error) must NOT crash the WS
@@ -3190,8 +3300,10 @@ async def _run_and_broadcast(
         # A failed turn STILL yields the token (cross-phase review P7xP3): otherwise a
         # deterministically-failing holder (e.g. an unbound participant) would wedge the whole
         # party forever. The trade-off — a transient failure costs a turn — is acceptable; the
-        # player gets the token back next round.
-        await arbiter.beat_committed(campaign_id, participant, "")
+        # player gets the token back next round. (Only the holder's: a failed fight turn played
+        # out of the table's order never held it, D-114 review.)
+        if holds_turn:
+            await arbiter.beat_committed(campaign_id, participant, "")
         return
     commit_id = deps.last_commit(campaign_id) if deps.last_commit is not None else None
     deps.announced.add(commit_id, campaign_id)  # (engine_deps already did, at append time)
@@ -3208,4 +3320,6 @@ async def _run_and_broadcast(
         },
     )
     # The beat committed — let the arbiter rotate the turn token to the next participant (OQ-7).
-    await arbiter.beat_committed(campaign_id, participant, "")
+    # A fight turn played out of the table's order (D-114) leaves the token where it was.
+    if holds_turn:
+        await arbiter.beat_committed(campaign_id, participant, "")

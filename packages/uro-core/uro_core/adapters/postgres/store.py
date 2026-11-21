@@ -327,7 +327,8 @@ async def _open_encounters(
             FROM commits c JOIN chain ON c.commit_id = chain.parent_id
         )
         SELECT e.event_type, e.payload FROM events e JOIN chain ch ON e.commit_id = ch.commit_id
-        WHERE e.event_type IN ('EncounterStarted', 'EncounterTurnTaken', 'EncounterEnded')
+        WHERE e.event_type IN
+            ('EncounterStarted', 'EncounterTurnTaken', 'EncounterJoined', 'EncounterEnded')
         ORDER BY ch.depth, e.seq
         """,
         branch_id,
@@ -340,8 +341,8 @@ async def _open_encounters(
             open_[eid] = (p, [])
         elif eid not in open_:
             continue
-        elif r["event_type"] == "EncounterTurnTaken":
-            open_[eid][1].append(p)
+        elif r["event_type"] in ("EncounterTurnTaken", "EncounterJoined"):
+            open_[eid][1].append(p)  # one ordered log: a join replays in its place (D-114)
         elif r["event_type"] == "EncounterEnded":
             del open_[eid]
     return list(open_.values())
@@ -2523,9 +2524,10 @@ class PostgresEventStore:
         self, branch_id: str
     ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
         """The fights still being played turn by turn on this branch (D-112), oldest first: each
-        one's EncounterStarted payload and the payloads of its turns so far. On the branch's
-        lineage, so a fork taken mid-fight carries them. Each fight is its own: one opening never
-        hides another."""
+        one's EncounterStarted payload and its log so far, in order: the payloads of its turns and
+        of any combatant who joined later (an EncounterJoined payload carries `combatant`). On the
+        branch's lineage, so a fork taken mid-fight carries them. Each fight is its own: one
+        opening never hides another."""
         async with self.pool.acquire() as conn:
             return await _open_encounters(conn, branch_id)
 

@@ -109,7 +109,8 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 |---|---|---|---|
 | `EncounterStarted` | encounter_id, participants[]; for a fight played turn by turn (D-112) `interactive`, `seed`, `combatants[]` (as they entered: sheets, holdings), what each turn replays from | R E | no `initiative` field (removed D-30 — turn ordering is ruleset-internal; d20 has initiative, PbtA does not). E: the parking handoff that opens an external-resolver-owned encounter (Uro decides *to* park via `ModeChanged` P/R; `EncounterStarted` marks the boundary where authority passes to E) |
 | `EncounterTurnTaken` | encounter_id, actor_id, action, result, trace; `chosen` (D-112: the player's action, so the turn replays; null for a ruleset-decided turn) | R | trace = human-readable roll math for narration; external resolvers report bundles, not turns |
-| `EncounterEnded` | encounter_id, outcome | R E | E: outcome bundle — participants, witnesses, casualties, notable feats |
+| `EncounterJoined` | encounter_id, actor_id, team, combatant (as it entered: sheet, holdings) | R | D-114: a player character entered a fight played turn by turn after it began; part of the fight's ordered log with its turns, so the fight replays with the join in its place |
+| `EncounterEnded` | encounter_id, outcome (`fled[]` since D-114: who got away; `{abandoned: true}` when the game closed it undecided) | R E | E: outcome bundle — participants, witnesses, casualties, notable feats |
 
 ### History
 | event_type | payload | emit | notes |

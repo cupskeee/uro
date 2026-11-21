@@ -120,6 +120,13 @@ class SessionHub:
 
     def __init__(self) -> None:
         self._subs: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
+        self._beats: dict[str, asyncio.Lock] = {}
+
+    def beat_lock(self, campaign_id: str) -> asyncio.Lock:
+        """One beat at a time per campaign on this server (D-114): a fight turn played out of
+        the table's order waits for a beat in flight, so each beat's frames and commit id stay
+        its own. (Across processes the store's own locks and the fight's compare-and-set hold.)"""
+        return self._beats.setdefault(campaign_id, asyncio.Lock())
 
     def subscribe(self, campaign_id: str) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
