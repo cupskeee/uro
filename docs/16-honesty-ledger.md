@@ -724,6 +724,20 @@ once**, not a measure of quality across models.
 | A choice a ruleset leaves waits in the sheet, answered once | **proven** | Uro Basic's opt-in level-up choice: read on the character view and the beat result, a refused answer located, answered once (a second is "no such pending choice"), an answer from a stale sheet refused under the branch lock; REST and the socket frame tested. |
 | A pack suggests characters a campaign can begin as | **proven** | parsed from `entities/characters.yaml`, checked by the ruleset, kept through export/import, nothing in the world until a campaign begins as one, a given spec wins; `POST /worlds` refuses one that won't build. Backfill's suggestions: **stub-only** (a scripted reply; never run live). |
 
+## Post-PoC — fight exits, co-op fights, a game from data (2026-11-22, D-114)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| One who gets away is neither wounded nor looted | **proven** | `test_fight_exits.py`: every built-in lets a combatant leave; a `fled` outcome produces no fallout and the same outcome without it does (asserted on `_combat_consequences` directly, whatever the dice did). |
+| The game can close a fight undecided | **proven** | `abandon_fight`: `EncounterEnded {abandoned: true}`, no claims, no loot, play goes on; a second call finds nothing. |
+| A known NPC rolls its check on a first sheet | **proven** | built from its threat word, committed, kept; its numbers stay hidden from players. |
+| A second player's character joins a fight and it replays | **proven (deterministic)** | `test_coop_fights.py`: all three built-ins and uro-composable take a latecomer who then gets a turn; through the engine the join is one event in the fight's log, both players take turns to the end, and a fork taken after the join rolls the same dice. |
+| A character who leaves a fight that goes on plays on | **proven** | released in the beat it left with its sheet committed; free-roam beats run; it can't walk back in; the fight's end leaves its sheet alone. By the ruleset's `standing`; a ruleset without the hook holds everyone to the end. |
+| A fight turn is played whoever holds the table's turn | **proven against `PartyArbiter`, fake engine** | `test_server.py`: admitted out of the table's order only with an action on a fight that waits on that player; the table's turn stays; a holder whose fight waits on another passes it. The proposal and vote arbiters get the same bypass, untested. Never run live. |
+| A game that is its settings | **proven (deterministic); never run live** | `test_uro_composable.py`: two definitions with no word in common through one code path; settings that don't hold together refused with the reason; creation by array, budget, roll and pick with the ruleset's own count of what is left; effects, tags, modifiers, gear, costs, a paid push; growing through a pending choice; fights in order, simultaneous, with leaving and joining; a campaign from creation to a fight through the engine. Whether a model's planner picks well among a definition's affordances is unmeasured. |
+| The three resolvers are close at `normal` | **proven (exact odds)** | enumerated, not sampled: within 15 points of each other for steps 1 to 4, harder with each difficulty, never worse for a better rating. At step 0 and 5 they differ more (the pool rolls one die at step 0 and 1 alike; 2d6 tops out at +3). |
+| A ruleset described under given settings | **proven** | `POST /rulesets/describe` and `uro ruleset describe`: schemas and affordances for one ruleset and its settings; refused settings are a 400 with the reason. |
+
 ## Post-PoC — the D-111..D-113 live pass (2026-11-21, run by Claude on the owner's Anthropic connection)
 
 Scratch worlds in the test database; the provider built in-process from the registry's connection,

@@ -9,6 +9,34 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+For embedders: an `EventStore`/`EngineStore` of your own returns joins in `open_encounters`' log
+(an `EncounterJoined` payload among the turns). A ruleset plugin needs no change: the four new
+hooks are optional. Changed: in a campaign playing fights turn by turn, a second player attacking
+someone already in a fight now joins it (it used to play as free-roam), and a refused fight action
+passes the table's turn when its holder's fight waits on someone else.
+
+### Added (D-114; Uro Loom request 23)
+
+- **A way out of a fight.** Each built-in offers a leaving action that can fail (`flee`,
+  `get_clear`, `withdraw`), and one who gets away is neither wounded nor looted
+  (`EncounterOutcome.fled`). `defend` and `keep_cool` now do something. A game can close a fight
+  undecided: `Engine.abandon_fight`, `POST /campaigns/{c}/encounter/abandon` (operator),
+  `uro campaign encounter --abandon`, the `encounter_abandoned` frame.
+- **A known NPC without a sheet rolls its free-roam check** on a first sheet built from its hint
+  (it used to be skipped).
+- **More than one player character in a fight** played turn by turn: a player joins by attacking
+  someone in it (`EncounterJoined`); the fight says whose player it waits on
+  (`encounter.participant_id`), that player acts whoever holds the table's turn, and a character
+  who leaves a fight that goes on plays on. Optional ruleset hooks `join_encounter` and `standing`.
+- **`uro-composable`**, a fourth built-in ruleset whose whole game is its settings: a definition
+  (ratings on a step scale, tracks, tags, modifiers, actions, choices, gear, encounter, foes) and a
+  resolver (`d20`, `2d6` or `pool`). Examples in `examples/definitions/`; docs/06.
+- **A ruleset described under given settings:** `POST /rulesets/describe`, `uro ruleset describe`;
+  `GET /rulesets` entries list affordances.
+- **A character preview says what is left** (`guidance`), and a build can give its character
+  things to hold (a picked kit, kind `granted`). Optional ruleset hooks `creation_guidance` and
+  `starting_holdings`.
+
 ## [0.21.0] - 2026-11-21
 
 Upgrading: migrations 029 and 030 (`uro db migrate`). For embedders: an `EventStore`/`EngineStore`
