@@ -38,6 +38,15 @@ async def _actor_created(conn: asyncpg.Connection, branch_id: str, p: dict[str, 
     )
 
 
+async def _actor_threat_noted(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
+    await conn.execute(  # the first word stands: only an actor with none takes one
+        "UPDATE proj_actors SET threat = $3 WHERE branch_id = $1 AND actor_id = $2 AND threat = ''",
+        branch_id,
+        p["actor_id"],
+        p["threat"],
+    )
+
+
 async def _actor_renamed(conn: asyncpg.Connection, branch_id: str, p: dict[str, Any]) -> None:
     await conn.execute(
         "UPDATE proj_actors SET name = $3 WHERE branch_id = $1 AND actor_id = $2",
@@ -372,6 +381,7 @@ async def _counter_changed(conn: asyncpg.Connection, branch_id: str, p: dict[str
 _HANDLERS = {
     "ActorCreated": _actor_created,
     "ActorRenamed": _actor_renamed,
+    "ActorThreatNoted": _actor_threat_noted,
     "EntityAliasAdded": _entity_alias_added,
     "ActorPromoted": _actor_promoted,
     "ClaimRecorded": _claim_recorded,

@@ -723,3 +723,20 @@ once**, not a measure of quality across models.
 | A new character starts holding what its player chose | **proven** | `test_loom_requests_20_22.py`: beside the world's gear, marked `chosen`, replaced by a rebuild before the first beat and frozen after; malformed entries located; a ruleset's own check; an adopted actor chooses none. |
 | A choice a ruleset leaves waits in the sheet, answered once | **proven** | Uro Basic's opt-in level-up choice: read on the character view and the beat result, a refused answer located, answered once (a second is "no such pending choice"), an answer from a stale sheet refused under the branch lock; REST and the socket frame tested. |
 | A pack suggests characters a campaign can begin as | **proven** | parsed from `entities/characters.yaml`, checked by the ruleset, kept through export/import, nothing in the world until a campaign begins as one, a given spec wins; `POST /worlds` refuses one that won't build. Backfill's suggestions: **stub-only** (a scripted reply; never run live). |
+
+## Post-PoC — the D-111..D-113 live pass (2026-11-21, run by Claude on the owner's Anthropic connection)
+
+Scratch worlds in the test database; the provider built in-process from the registry's connection,
+no role binding touched. `claude-sonnet-5-5` throughout, plus two beats on `claude-haiku-5-5`.
+About 45 calls in all (the main pass ran twice: the first run's summary code failed after the
+calls), no call error and no re-ask.
+
+| Capability | Status now | What ran |
+|---|---|---|
+| Anthropic structured outputs (D-111) | **live-validated once** | the planner's and extractor's schemas were sent on every such call (Sonnet 5.5 and Haiku 5.5) and none was refused (`_format_refused` stayed false); every reply parsed first time. Not measured: whether replies are better than without a schema. |
+| Room to think (D-111) | **live-validated once, default effort** | 13,024 / 14,048 / 16,096 `max_tokens` on planner / narrator / extractor; no truncation in any call. High effort unmeasured. |
+| A check's player view (D-112) | **live-validated once** | `{stat, dice, modifier, total, against, band}` on the acting character's persuade and athletics checks. |
+| Fights turn by turn (D-112) | **live-validated once** | a planner-opened fight waited on the player, refused a free-text beat mid-fight, and ended on the fifth chosen action, each turn narrated from its traces. Solo, Uro Basic. |
+| A character proposed from a description (D-112) | **live-validated once** | all three built-ins: a build that fits the words and passes the ruleset (a quick sharp smuggler: DEX 16, CHA 16, STR 8; a huge dockhand: might 4, wits 1). Found: nulls for the fields left out, now stripped. A name is suggested only when the description gives one. |
+| Backfill's suggested characters (D-113) | **live-validated once** | three Ashfall characters, each with a line grounded in the pack's own conflict and a valid build. One pack, one model. |
+| The extractor's danger word (D-112) | **found and fixed; the fix is test-proven, not re-seen live** | the model wrote `threat: "strong"` for "the hulking veteran in battered plate", but one beat after it had named him bare, and a word for a known person was dropped. Now `ActorThreatNoted` records the first word shown for a known, untagged, non-player actor. The re-run's narration introduced no such person. |

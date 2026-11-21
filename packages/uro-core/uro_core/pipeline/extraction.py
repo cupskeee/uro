@@ -69,6 +69,7 @@ from uro_core.domain.events import (
     DomainEvent,
     Truth,
     actor_created,
+    actor_threat_noted,
     belief_changed,
     claim_recorded,
     claim_truth_changed,
@@ -592,6 +593,9 @@ async def run_gauntlet(
     faction_words = {f.faction_id: [_name_parts(f.name)] for f in factions}
     actor_words: dict[str, list[_Name]] = {}
     actors_by_key: dict[str, list[str]] = {}  # canonical name OR alias → actor ids (may be several)
+    # actors who may still take a danger word: known, not a player character, and with none yet
+    actor_rows = (await store.query_across([branch_id], ["actors"]))[branch_id]["actors"]
+    untagged = {r["actor_id"] for r in actor_rows if not r["threat"] and r["role"] != "pc"}
     for a in await store.list_actors(branch_id):
         # Index by name AND aliases — a pack-authored "Mera" [alias "the barkeep"] must resolve when
         # later mentioned only by the alias, or she'd split into a duplicate (review HIGH; the
@@ -666,6 +670,14 @@ async def run_gauntlet(
                 events.append(edge_added(src=pid, rel_type="located_in", dst=parent_id))
         return pid
 
+    def _note_threat(actor_id: str, threat: str) -> None:
+        # A known person described after they were named (live pass: "Halvard Brenn" one beat, "the
+        # hulking veteran in battered plate" the next): the first danger word shown is recorded.
+        word = threat.strip().lower()
+        if word in THREAT_LEVELS and actor_id in untagged and policy.extract_actors:
+            untagged.discard(actor_id)
+            events.append(actor_threat_noted(actor_id=actor_id, threat=word))
+
     def _enrich(actor_id: str, rel: str, dst: str | None) -> None:
         # Attach an affiliation the proposal states but the (linked) actor lacks — graph enrichment.
         if dst is not None and aff.get(actor_id, {}).get(rel) is None:
@@ -705,6 +717,7 @@ async def run_gauntlet(
             cand = (here or compatible)[0]
             _enrich(cand, "member_of", fid)
             _enrich(cand, "located_in", pid)
+            _note_threat(cand, threat)
             name_to_ref[key] = cand
             return cand
         # D-56: no actor has this exact name — a PARTIAL name ("Aldren", "Captain Tobin") links to
@@ -724,6 +737,7 @@ async def run_gauntlet(
                 actor_words[partial].append(_name_parts(name))
                 _enrich(partial, "member_of", fid)
                 _enrich(partial, "located_in", pid)
+                _note_threat(partial, threat)
                 name_to_ref[key] = partial
                 return partial
         if not policy.extract_actors:

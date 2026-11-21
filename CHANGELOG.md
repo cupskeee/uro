@@ -16,6 +16,12 @@ of your own gains `inherited_ruleset_pin`, `character_frozen`, `amend_character`
 Breaking: the built-in rulesets now refuse a character spec past a cap or with an unknown key
 (they used to clamp or ignore it).
 
+### Fixed
+
+- A danger word the narration shows for an already-known person is recorded (`ActorThreatNoted`);
+  before, only a brand-new person could take one, and people are usually named first (live pass).
+- A proposed character's spec no longer carries `null` for the fields the model left out.
+
 ### Added (D-113, Uro Loom requests 20–22)
 
 - Things a character holds from the start: `holdings` on campaign start and join (and a rebuild

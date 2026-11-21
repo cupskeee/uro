@@ -44,6 +44,7 @@ Emitters: **X** = extractor (LLM-proposed, validated) · **R** = ruleset effects
 | event_type | payload | emit | notes |
 |---|---|---|---|
 | `ActorCreated` | actor entity, tier; `provenance` (D-108, as `PlaceCreated`); `spec`, `threat` (D-112: what its sheet is built from the first time one is needed) | X H A S | extractor creates at T1 max; it may set `threat` only |
+| `ActorThreatNoted` | actor_id, threat | X | the first danger word the narration shows for a KNOWN actor with none (people are named before they are described); never a player character; the first word stands |
 | `ActorRenamed` | actor_id, name | S | D-112: a player character's name, only while its build is open (before the first beat after it was bound) |
 | `ActorPromoted` | actor_id, from_tier, to_tier, reason | P S | reason `pinned` = manual (player/API) |
 | `ActorMoved` | actor_id, from_place, to_place | X A P | |
