@@ -215,6 +215,16 @@ class ActorRenamedPayload(BaseModel):
     name: str
 
 
+class ActorThreatNotedPayload(BaseModel):
+    """The danger word for an actor who had none (D-112's live pass): people are usually named
+    before they are described, so the first word the narration shows for a known, untagged person
+    is recorded. The first one stands; it is only what the actor's first sheet is built from."""
+
+    v: int = 1
+    actor_id: str
+    threat: str
+
+
 class ActorPromotedPayload(BaseModel):
     v: int = 1
     actor_id: str
@@ -276,6 +286,17 @@ def actor_created(
             spec=spec or {},
             threat=threat,
         ).model_dump(),
+    )
+
+
+def actor_threat_noted(
+    *, actor_id: str, threat: str, caused_by: CausedBy | None = None
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="ActorThreatNoted",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=ActorThreatNotedPayload(actor_id=actor_id, threat=threat).model_dump(),
     )
 
 

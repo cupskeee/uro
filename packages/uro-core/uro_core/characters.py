@@ -542,6 +542,17 @@ class Proposal(BaseModel):
     problems: list[SpecProblem] = Field(default_factory=list)
 
 
+def _without_nulls(node: Any) -> Any:
+    """A proposed spec without its nulls and the objects they leave empty (live pass: under a
+    strict schema a model writes `"level": null` for a field it leaves to the default)."""
+    if isinstance(node, dict):
+        kept = {k: _without_nulls(v) for k, v in node.items() if v is not None}
+        return {k: v for k, v in kept.items() if v != {}}
+    if isinstance(node, list):
+        return [_without_nulls(v) for v in node]
+    return node
+
+
 def _strict_expressible(node: Any) -> bool:
     """Whether a schema survives structured outputs' closed objects (D-112 review): an object with
     no named properties but open extra keys (a `dict[str, int]` map) would close to `{}`, so the
@@ -627,6 +638,7 @@ async def propose_character(
             problems=[SpecProblem(message="the model's reply held no build; try again")],
         )
     name = reply.get("name") if isinstance(reply.get("name"), str) else ""
+    spec = _without_nulls(spec)  # a strict schema makes a model write null for what it leaves out
     try:
         sheet = character_sheet(ruleset, spec)
     except CharSpecError as exc:
