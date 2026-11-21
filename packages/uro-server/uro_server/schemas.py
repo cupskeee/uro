@@ -548,6 +548,10 @@ class EncounterWaitOut(Out):
     legal_actions: list[ActionSpecOut]
 
 
+class FightAbandoned(Out):
+    encounter_id: str | None  # the fight that was closed (D-114), or null when none was open
+
+
 class EncounterStatus(Out):
     """The fight waiting on a player's choice (D-112), or null."""
 

@@ -354,6 +354,9 @@ class EncounterOutcome(BaseModel):
     winner_team: str | None = None
     survivors: list[str] = Field(default_factory=list)
     out_of_fight: list[str] = Field(default_factory=list)
+    # combatants who got away (D-114): neither standing nor beaten — a ruleset whose actions let
+    # one leave lists them here, and the engine leaves them unwounded and unlooted
+    fled: list[str] = Field(default_factory=list)
     detail: dict[str, Any] = Field(default_factory=dict)
 
 

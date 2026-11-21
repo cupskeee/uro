@@ -215,6 +215,12 @@ class ChoiceAnswerIn(In):
     participant: str | None = Field(default=None, description="Absent = the caller.")
 
 
+class AbandonFightIn(In):
+    participant: str | None = Field(
+        default=None, description="Whose fight. Absent = the campaign's first open one."
+    )
+
+
 class CharacterPatch(In):
     spec: dict[str, Any] | None = _SPEC
     name: str | None = None
@@ -285,6 +291,7 @@ BODIES: dict[tuple[str, str], type[BaseModel]] = {
     ("POST", "/worlds/{world_id}/character-preview"): WorldCharacterPreviewIn,
     ("POST", "/campaigns/{campaign_id}/character/preview"): CampaignCharacterPreviewIn,
     ("PATCH", "/campaigns/{campaign_id}/character"): CharacterPatch,
+    ("POST", "/campaigns/{campaign_id}/encounter/abandon"): AbandonFightIn,
     ("POST", "/campaigns/{campaign_id}/character/choices/{choice_id}"): ChoiceAnswerIn,
     ("POST", "/worlds/{world_id}/character-proposal"): WorldCharacterProposalIn,
     ("POST", "/campaigns/{campaign_id}/character/proposal"): CampaignCharacterProposalIn,

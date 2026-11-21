@@ -2248,9 +2248,15 @@ def campaign_new(
 def campaign_encounter(
     campaign_id: str,
     participant: str = typer.Option(None, "--participant", help="whose fight (default: any)"),
+    abandon: bool = typer.Option(
+        False,
+        "--abandon",
+        help="end the fight without deciding it (D-114): sheets stay as they are",
+    ),
 ) -> None:
     """The fight waiting on a player's choice in a campaign that plays fights turn by turn
-    (D-112): whose turn it is and the actions to send (`/act` in `uro play`/`uro connect`)."""
+    (D-112): whose turn it is and the actions to send (`/act` in `uro play`/`uro connect`).
+    `--abandon` closes it undecided: nobody wins, is wounded or looted."""
 
     async def _run() -> None:
         store = build_store()
@@ -2263,6 +2269,10 @@ def campaign_encounter(
                 ruleset=await registry.resolve_for_campaign(store, c),
             )
             try:
+                if abandon:
+                    ended = await engine.abandon_fight(c, participant)
+                    typer.echo(f"abandoned {ended}" if ended else "(no fight was open)")
+                    return
                 wait = await engine.fight_status(c, participant)
             except ChoiceRefused as exc:
                 typer.echo(f"error: {exc}", err=True)

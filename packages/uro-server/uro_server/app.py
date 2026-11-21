@@ -348,6 +348,8 @@ class ServerDeps:
     )
     # D-112: the fight on a campaign waiting on a player's choice, or None
     fight_status: Callable[[str, str | None], Awaitable[dict[str, Any] | None]] | None = None
+    # D-114: end a fight without deciding it → the encounter id, or None when there was none
+    abandon_fight: Callable[[str, str | None], Awaitable[str | None]] | None = None
     # D-112: propose a character build from a description through the bound model:
     # (branch_id, campaign_id or None, ruleset or None, ruleset_config or None, description)
     propose_character: (
@@ -609,6 +611,12 @@ def engine_deps(
         wait = await (await engine_for(campaign)).fight_status(campaign, participant)
         return wait.model_dump() if wait is not None else None
 
+    async def abandon_fight(campaign_id: str, participant: str | None) -> str | None:
+        campaign = await store.get_campaign(campaign_id)
+        if campaign is None:
+            raise KeyError(campaign_id)
+        return await (await engine_for(campaign)).abandon_fight(campaign, participant)
+
     async def propose_character(
         branch_id: str,
         campaign_id: str | None,
@@ -754,6 +762,7 @@ def engine_deps(
         refresh_models=refresh_models,
         propose_character=propose_character,
         fight_status=fight_status,
+        abandon_fight=abandon_fight,
         answer_choice=answer_choice,
         test_connection=test_connection,
         reload_router=reload_router,
@@ -2496,6 +2505,37 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="no such campaign") from exc
+
+    @app.post("/campaigns/{campaign_id}/encounter/abandon", **_out(S.FightAbandoned))
+    async def abandon_campaign_encounter(
+        campaign_id: str,
+        request: Request,
+        body: dict[str, Any] = Body(default={}),  # noqa: B008
+    ) -> dict[str, Any]:
+        """End a fight played turn by turn without deciding it (D-114): the combatants keep their
+        sheets as the fight left them, nobody wins, is wounded or looted, and the world's rules
+        react. `{participant?}` picks whose fight (default: the campaign's first). OPERATOR-only:
+        closing a fight is the game's call (a client offers it to its player as it sees fit).
+        `{encounter_id: null}` when no fight was open."""
+        _require_operator(request)
+        if deps.abandon_fight is None:
+            raise HTTPException(status_code=501, detail="encounters not enabled")
+        who = body.get("participant")
+        if who is not None and not isinstance(who, str):
+            raise HTTPException(status_code=400, detail="participant must be a string")
+        from uro_core.pipeline.encounter import ChoiceRefused as _Refused
+
+        try:
+            encounter_id = await deps.abandon_fight(campaign_id, who)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="no such campaign") from exc
+        except _Refused as exc:  # a turn landed meanwhile, or another ruleset's fight
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if encounter_id is not None:
+            await hub.publish(
+                campaign_id, {"type": "encounter_abandoned", "encounter_id": encounter_id}
+            )
+        return {"encounter_id": encounter_id}
 
     @app.get("/campaigns/{campaign_id}/character", **_out(S.CharacterOut))
     async def campaign_character(campaign_id: str, request: Request) -> dict[str, Any]:

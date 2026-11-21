@@ -25,8 +25,10 @@ from uro_core.domain.events import (
     beat_resolved,
     check_resolved,
     claim_recorded,
+    encounter_ended,
     item_transferred,
     mode_changed,
+    ruleset_cause,
     sheet_updated,
     thread_state_changed,
     time_advanced,
@@ -236,6 +238,8 @@ class _Context(BaseModel):
     check_sheets: dict[str, dict[str, Any]] = Field(default_factory=dict)
     # this beat's resolved checks, committed as CheckResolved so reaction rules can answer (D-64)
     checks: list[ResolvedCheck] = Field(default_factory=list)
+    # actor_id → the first sheet built this beat for a known NPC whose check needed one (D-114)
+    first_sheets: dict[str, dict[str, Any]] = Field(default_factory=dict)
     directives: str = ""
     suggestions: list[str] = Field(default_factory=list)
     # The PC the ACTING participant drives this beat (OQ-7) — resolved once from participant_id and
@@ -711,6 +715,7 @@ class Engine:
             plan=plan,
             mechanics_traces=[c.trace for c in gate.checks],
             check_sheets=gate.sheets,
+            first_sheets=gate.built,
             checks=gate.resolved,
             directives=plan.narration_directives,
             suggestions=plan.suggestions,
@@ -747,6 +752,61 @@ class Engine:
                     actor_id=current,
                     legal_actions=self._ruleset.legal_actions(state, current),
                 )
+        return None
+
+    async def abandon_fight(
+        self, campaign: Campaign, participant_id: str | None = None
+    ) -> str | None:
+        """End a fight played turn by turn without deciding it (D-114): the game's way out of a
+        fight nobody wants to finish. The combatants keep their sheets as the fight left them (harm
+        taken stays; no winner, no wound claims, no loot, no advancement), the fight closes
+        (`EncounterEnded` with `abandoned`), and the world's rules react. With a participant, the
+        fight their character is in; without, the first one any of the campaign's characters is
+        in. Returns the encounter id, or None when there was no such fight. Not a beat."""
+        if self._ruleset is None:
+            return None
+        if participant_id is not None:
+            pc = await self._store.pc_for_participant(campaign.campaign_id, participant_id)
+            pcs = [pc] if pc else []
+        else:
+            pcs = list(await self._store.campaign_pcs(campaign.campaign_id))
+        for pc in pcs:
+            fight = await self._open_fight_of(campaign.branch_id, pc)
+            if fight is None:
+                continue
+            started, turns = fight
+            encounter_id = str(started["encounter_id"])
+            state, _, _ = replay_fight(self._ruleset, started, turns)
+            cause = ruleset_cause(encounter_id)
+            sheets = self._ruleset.sheets(state)
+            events: list[DomainEvent] = [
+                sheet_updated(
+                    actor_id=a, sheet=sheets[a], ruleset_id=self._ruleset.id, caused_by=cause
+                )
+                for a in sorted(sheets)
+            ]
+            events.append(
+                encounter_ended(
+                    encounter_id=encounter_id, outcome={"abandoned": True}, caused_by=cause
+                )
+            )
+            events.append(
+                mode_changed(
+                    from_mode="encounter",
+                    to_mode="freeroam",
+                    cause="fight abandoned",
+                    caused_by=CausedBy(kind="system"),
+                )
+            )
+            async with self._react_lock(campaign.branch_id):
+                try:
+                    commit = await self._store.append_fight_beat(
+                        campaign.branch_id, encounter_id, len(turns), events
+                    )
+                except ValueError as exc:  # a turn landed meanwhile: the caller may ask again
+                    raise ChoiceRefused(str(exc)) from exc
+                await self._react_pass(campaign.branch_id, commit.commit_id, events)
+            return encounter_id
         return None
 
     async def _open_fight_of(
@@ -1401,25 +1461,35 @@ class Engine:
         # What this beat's free-roam checks did to sheets (a push's strain, XP on a miss) — the
         # ruleset's own result, committed like an encounter's final sheets (D-61)
         ruleset_cause = CausedBy(kind="ruleset", beat_id=beat_id)
-        check_events = [
-            check_resolved(
-                actor_id=c.actor_id,
-                affordance=c.affordance,
-                outcome=c.result.outcome,
-                trace=c.result.trace,
-                player_view=c.result.player_view,
-                caused_by=ruleset_cause,
-            )
-            for c in ctx.checks
-        ] + [
+        first_sheet_events = [
             sheet_updated(
-                actor_id=actor_id,
-                sheet=sheet,
-                ruleset_id=self.ruleset_id,
-                caused_by=ruleset_cause,
+                actor_id=actor_id, sheet=sheet, ruleset_id=self.ruleset_id, caused_by=ruleset_cause
             )
-            for actor_id, sheet in sorted(ctx.check_sheets.items())
+            for actor_id, sheet in sorted(ctx.first_sheets.items())
         ]
+        check_events = (
+            first_sheet_events
+            + [
+                check_resolved(
+                    actor_id=c.actor_id,
+                    affordance=c.affordance,
+                    outcome=c.result.outcome,
+                    trace=c.result.trace,
+                    player_view=c.result.player_view,
+                    caused_by=ruleset_cause,
+                )
+                for c in ctx.checks
+            ]
+            + [
+                sheet_updated(
+                    actor_id=actor_id,
+                    sheet=sheet,
+                    ruleset_id=self.ruleset_id,
+                    caused_by=ruleset_cause,
+                )
+                for actor_id, sheet in sorted(ctx.check_sheets.items())
+            ]
+        )
         if encounter_events is not None:
             # Combat beat: the ruleset's mechanical events ARE the state (no extraction). Wrap
             # them with ModeChanged in/out and the narrating BeatResolved, all one commit.
@@ -1524,8 +1594,10 @@ class Engine:
             if await self._store.get_actor(branch, actor_id) is None:
                 return None  # a ref that is not a known actor → not a real fight
             # a check earlier in this beat may have changed it (a push's strain): fight from that
-            sheet_dict = ctx.check_sheets.get(actor_id) or await self._store.get_sheet(
-                branch, actor_id
+            sheet_dict = (
+                ctx.check_sheets.get(actor_id)
+                or ctx.first_sheets.get(actor_id)  # built for a check earlier in this beat
+                or await self._store.get_sheet(branch, actor_id)
             )
             if sheet_dict is None:  # a known-but-unsheeted combatant: built from its spec (D-112)
                 sheet_dict = await self._first_sheet(branch, actor_id)
@@ -1579,7 +1651,12 @@ class Engine:
             losers, victor = list(outcome.out_of_fight), None
         else:
             victors = [c.actor_id for c in combatants if c.team == outcome.winner_team]
-            losers = [c.actor_id for c in combatants if c.team != outcome.winner_team]
+            # one who got away (D-114) is neither wounded nor looted: they left before the end
+            losers = [
+                c.actor_id
+                for c in combatants
+                if c.team != outcome.winner_team and c.actor_id not in outcome.fled
+            ]
             if not victors or not losers:
                 return []
             victor = victors[0]
@@ -1661,6 +1738,7 @@ class Engine:
         actor_ids = {pc_actor_id} if pc_actor_id else set()
         actor_ids |= {m.actor for m in plan.mechanics if m.actor}
         sheets: dict[str, dict[str, Any]] = {}
+        built: dict[str, dict[str, Any]] = {}
         for aid in actor_ids:
             if aid != pc_actor_id and await self._store.is_pc(campaign.branch_id, aid):
                 # Another player's PC rolls in THEIR beats, never in this one (P7 x D-61 review,
@@ -1668,6 +1746,14 @@ class Engine:
                 logger.info("check on %r skipped: it is another participant's PC", aid)
                 continue
             sheet = await self._store.get_sheet(campaign.branch_id, aid)
+            if (
+                sheet is None
+                and aid != pc_actor_id
+                and await self._store.get_actor(campaign.branch_id, aid) is not None
+            ):
+                # A known NPC's first check is a time its sheet is needed (D-114): built from the
+                # spec and danger word it carries, and committed with the beat like a foe's.
+                sheet = built[aid] = await self._first_sheet(campaign.branch_id, aid)
             if sheet is not None:
                 sheets[aid] = sheet
         if pc_actor_id and pc_actor_id not in sheets:
@@ -1681,6 +1767,8 @@ class Engine:
         # and is reported (CheckResolved), but costs and advancement are a player character's, as
         # in a fight (D-63).
         gate.sheets = {k: v for k, v in gate.sheets.items() if k == pc_actor_id}
+        rolled = {r.actor_id for r in gate.resolved}
+        gate.built = {k: v for k, v in built.items() if k in rolled}  # only sheets a check used
         return gate
 
     async def _holdings(self, branch_id: str, actor_id: str) -> list[Holding]:

@@ -114,6 +114,11 @@ class _Fighter(BaseModel):
     actor_id: str
     team: str
     sheet: Sheet
+    fled: bool = False  # got clear (D-114)
+
+    @property
+    def active(self) -> bool:
+        return self.sheet.in_fight and not self.fled
 
 
 class _Encounter(EncounterState):
@@ -257,7 +262,7 @@ class UroPbtA:
             for c in ctx.combatants
         }
         order = [c.actor_id for c in ctx.combatants]
-        turn_index = next((i for i, a in enumerate(order) if fighters[a].sheet.in_fight), 0)
+        turn_index = next((i for i, a in enumerate(order) if fighters[a].active), 0)
         return _Encounter(
             encounter_id=ctx.encounter_id, fighters=fighters, order=order, turn_index=turn_index
         )
@@ -274,17 +279,19 @@ class UroPbtA:
     def legal_actions(self, state: EncounterState, actor_id: str) -> list[ActionSpec]:
         st = _as_enc(state)
         me = st.fighters[actor_id]
-        foes = sorted(a for a, f in st.fighters.items() if f.team != me.team and f.sheet.in_fight)
+        foes = sorted(a for a, f in st.fighters.items() if f.team != me.team and f.active)
         specs: list[ActionSpec] = []
         if foes:
             specs.append(ActionSpec(kind="seize_by_force", targets=foes))
         specs.append(ActionSpec(kind="keep_cool"))
+        if foes:
+            specs.append(ActionSpec(kind="get_clear"))
         return specs
 
     def npc_action(self, state: EncounterState, actor_id: str, rng: Rng) -> Action:
         st = _as_enc(state)
         me = st.fighters[actor_id]
-        foes = sorted(a for a, f in st.fighters.items() if f.team != me.team and f.sheet.in_fight)
+        foes = sorted(a for a, f in st.fighters.items() if f.team != me.team and f.active)
         if not foes:
             return Action(kind="keep_cool", actor_id=actor_id)
         # Press the foe closest to going out (most harm, then name) — deterministic.
@@ -342,7 +349,43 @@ class UroPbtA:
                         trace=f"seize 2d6({dice}){mod:+d}={total} → miss: take 2 harm",
                     )
                 )
-        # 'keep_cool' is a hold action with no mechanical effect in this minimal build.
+        elif action.kind == "keep_cool":  # D-114: steady yourself — shake off being Exposed
+            if _EXPOSED in actor.sheet.conditions:
+                actor.sheet.conditions.remove(_EXPOSED)
+                effects.append(
+                    Effect(
+                        kind="steadied",
+                        actor_id=actor.actor_id,
+                        trace=f"keeps cool: no longer {_EXPOSED}",
+                    )
+                )
+        elif action.kind == "get_clear":  # D-114: leave the fight, clean, at a cost, or not at all
+            mod = actor.sheet.stats.get("quick", 0)
+            dice = rng.roll(2, 6)
+            total = dice + mod
+            if total >= 7:
+                actor.fled = True
+                cost = 0 if total >= 10 else 1
+                actor.sheet.harm = min(_HARM_MAX, actor.sheet.harm + cost)
+                effects.append(
+                    Effect(
+                        kind="fled",
+                        actor_id=actor.actor_id,
+                        payload={"harm": cost},
+                        trace=f"get clear 2d6({dice}){mod:+d}={total} → away"
+                        + (", taking 1 harm on the way" if cost else ""),
+                    )
+                )
+            else:
+                actor.sheet.harm = min(_HARM_MAX, actor.sheet.harm + 1)
+                effects.append(
+                    Effect(
+                        kind="caught",
+                        actor_id=actor.actor_id,
+                        payload={"harm": 1},
+                        trace=f"get clear 2d6({dice}){mod:+d}={total} → cut off: take 1 harm",
+                    )
+                )
 
         advanced = self._advance_turn(
             st.model_copy(update={"fighters": fighters, "misses": misses})
@@ -367,13 +410,16 @@ class UroPbtA:
 
     def is_over(self, state: EncounterState) -> EncounterOutcome | None:
         st = _as_enc(state)
-        live_teams = {f.team for f in st.fighters.values() if f.sheet.in_fight}
+        live_teams = {f.team for f in st.fighters.values() if f.active}
         if len(live_teams) > 1:
             return None
-        survivors = sorted(a for a, f in st.fighters.items() if f.sheet.in_fight)
+        survivors = sorted(a for a, f in st.fighters.items() if f.active)
         out = sorted(a for a, f in st.fighters.items() if not f.sheet.in_fight)
         winner = next(iter(live_teams)) if live_teams else None
-        return EncounterOutcome(winner_team=winner, survivors=survivors, out_of_fight=out)
+        fled = sorted(a for a, f in st.fighters.items() if f.fled)
+        return EncounterOutcome(
+            winner_team=winner, survivors=survivors, out_of_fight=out, fled=fled
+        )
 
     def _advance_turn(self, st: _Encounter) -> _Encounter:
         if self.is_over(st) is not None:
@@ -382,7 +428,7 @@ class UroPbtA:
         idx = st.turn_index
         for _ in range(n):
             idx = (idx + 1) % n
-            if st.fighters[st.order[idx]].sheet.in_fight:
+            if st.fighters[st.order[idx]].active:
                 break
         return st.model_copy(update={"turn_index": idx})
 

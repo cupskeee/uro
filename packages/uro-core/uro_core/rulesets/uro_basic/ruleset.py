@@ -49,6 +49,7 @@ _DEFAULT_ABILITIES: dict[str, int] = {
     "CHA": 10,
 }
 _WEAPON_DIE: dict[int, int] = {1: 6, 2: 8, 3: 10}  # weapon_tier → damage die faces
+_GUARD_AC = 2  # what `defend` adds to AC until the defender's next turn
 
 
 class BasicConfig(BaseModel):
@@ -137,6 +138,12 @@ class _Fighter(BaseModel):
     team: str
     sheet: Sheet
     initiative: int = 0
+    fled: bool = False  # got away (D-114): out of the turn order, unharmed by what follows
+    guard: bool = False  # defending: harder to hit until its own next turn
+
+    @property
+    def active(self) -> bool:
+        return self.sheet.conscious and not self.fled
 
 
 class _Encounter(EncounterState):
@@ -347,7 +354,7 @@ class UroBasic:
         order = sorted(fighters, key=lambda a: (-fighters[a].initiative, a))
         # Seat the first turn on a conscious combatant (mirrors _advance_turn); one who enters
         # already downed never gets to act. Fallback 0 only in the degenerate all-downed case.
-        turn_index = next((i for i, a in enumerate(order) if fighters[a].sheet.conscious), 0)
+        turn_index = next((i for i, a in enumerate(order) if fighters[a].active), 0)
         return _Encounter(
             encounter_id=ctx.encounter_id, fighters=fighters, order=order, turn_index=turn_index
         )
@@ -364,7 +371,7 @@ class UroBasic:
     def legal_actions(self, state: EncounterState, actor_id: str) -> list[ActionSpec]:
         st = _as_enc(state)
         me = st.fighters[actor_id]
-        foes = sorted(a for a, f in st.fighters.items() if f.team != me.team and f.sheet.conscious)
+        foes = sorted(a for a, f in st.fighters.items() if f.team != me.team and f.active)
         specs: list[ActionSpec] = []
         if foes:
             specs.append(ActionSpec(kind="attack", targets=foes))
@@ -375,7 +382,7 @@ class UroBasic:
     def npc_action(self, state: EncounterState, actor_id: str, rng: Rng) -> Action:
         st = _as_enc(state)
         me = st.fighters[actor_id]
-        foes = sorted(a for a, f in st.fighters.items() if f.team != me.team and f.sheet.conscious)
+        foes = sorted(a for a, f in st.fighters.items() if f.team != me.team and f.active)
         if not foes:
             return Action(kind="defend", actor_id=actor_id)
         # Deterministic focus-fire: the weakest conscious foe (lowest hp, then actor_id).
@@ -389,11 +396,13 @@ class UroBasic:
         fighters = {k: v.model_copy(deep=True) for k, v in st.fighters.items()}
         effects: list[Effect] = []
         actor = fighters[action.actor_id]
+        actor.guard = False  # a guard lasts until the defender's own next turn
 
         if action.kind == "attack" and action.target_id is not None:
             target = fighters[action.target_id]
             atk = rng.d20() + actor.sheet.modifier("STR") + actor.sheet.proficiency
-            if atk >= target.sheet.ac:
+            ac = target.sheet.ac + (_GUARD_AC if target.guard else 0)
+            if atk >= ac:
                 dmg = max(
                     1, rng.die(_damage_die(actor.sheet.weapon_tier)) + actor.sheet.modifier("STR")
                 )
@@ -403,7 +412,7 @@ class UroBasic:
                         kind="hit",
                         actor_id=target.actor_id,
                         payload={"amount": dmg, "source": actor.actor_id},
-                        trace=f"attack {atk} vs AC {target.sheet.ac} → hit for {dmg}",
+                        trace=f"attack {atk} vs AC {ac} → hit for {dmg}",
                     )
                 )
                 if not target.sheet.conscious:
@@ -421,24 +430,49 @@ class UroBasic:
                         kind="miss",
                         actor_id=target.actor_id,
                         payload={"source": actor.actor_id},
-                        trace=f"attack {atk} vs AC {target.sheet.ac} → miss",
+                        trace=f"attack {atk} vs AC {ac} → miss",
                     )
                 )
-        # 'defend' and 'flee' produce no mechanical effect in this minimal ruleset; the narration
-        # handles their color, and 'flee' as a full disengage is future work.
+        elif action.kind == "defend":  # D-114: +2 AC until this fighter's next turn
+            actor.guard = True
+            effects.append(
+                Effect(kind="guard", actor_id=actor.actor_id, trace=f"on guard (+{_GUARD_AC} AC)")
+            )
+        elif action.kind == "flee":  # D-114: outrun the quickest foe still standing, or stay
+            foes = [f for f in fighters.values() if f.team != actor.team and f.active]
+            bar = 10 + max((f.sheet.modifier("DEX") for f in foes), default=0)
+            run = rng.d20() + actor.sheet.modifier("DEX")
+            if run >= bar:
+                actor.fled = True
+                effects.append(
+                    Effect(
+                        kind="fled", actor_id=actor.actor_id, trace=f"flee {run} vs {bar} → away"
+                    )
+                )
+            else:
+                effects.append(
+                    Effect(
+                        kind="caught",
+                        actor_id=actor.actor_id,
+                        trace=f"flee {run} vs {bar} → cut off",
+                    )
+                )
 
         advanced = self._advance_turn(st.model_copy(update={"fighters": fighters}))
         return advanced, effects
 
     def is_over(self, state: EncounterState) -> EncounterOutcome | None:
         st = _as_enc(state)
-        live_teams = {f.team for f in st.fighters.values() if f.sheet.conscious}
+        live_teams = {f.team for f in st.fighters.values() if f.active}
         if len(live_teams) > 1:
             return None
-        survivors = sorted(a for a, f in st.fighters.items() if f.sheet.conscious)
+        survivors = sorted(a for a, f in st.fighters.items() if f.active)
         out = sorted(a for a, f in st.fighters.items() if not f.sheet.conscious)
         winner = next(iter(live_teams)) if live_teams else None
-        return EncounterOutcome(winner_team=winner, survivors=survivors, out_of_fight=out)
+        fled = sorted(a for a, f in st.fighters.items() if f.fled)
+        return EncounterOutcome(
+            winner_team=winner, survivors=survivors, out_of_fight=out, fled=fled
+        )
 
     def conclude_encounter(
         self, state: EncounterState, outcome: EncounterOutcome, pcs: frozenset[str]
@@ -467,7 +501,7 @@ class UroBasic:
             idx += 1
             if idx >= n:
                 idx, rnd = 0, rnd + 1
-            if st.fighters[st.order[idx]].sheet.conscious:
+            if st.fighters[st.order[idx]].active:
                 break
         return st.model_copy(update={"turn_index": idx, "round": rnd})
 

@@ -33,6 +33,8 @@ class MechanicsResult(BaseModel):
     resolved: list[ResolvedCheck] = Field(default_factory=list)  # in plan order
     # actor_id → that actor's sheet after this beat's checks, for every actor a check changed
     sheets: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # actor_id → a first sheet the engine built for an NPC so its check could roll (D-114)
+    built: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @property
     def checks(self) -> list[CheckResult]:
