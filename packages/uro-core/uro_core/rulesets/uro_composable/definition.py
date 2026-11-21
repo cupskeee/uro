@@ -13,6 +13,7 @@ modifier reads), so a definition that validates can't fail on a missing name mid
 from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -146,7 +147,8 @@ class Tag(BaseModel):
     key: Key
     label: Text = ""
     describes: Text = ""
-    # until something removes it (the default), to the end of a fight, or this many days
+    # until something removes it (the default), to the end of a fight, or until a rest of at
+    # least this many days (one stretch of downtime; days of play don't add up)
     lasts: Literal["until_removed", "encounter"] | Annotated[int, Field(ge=1, le=36500)] = (
         "until_removed"
     )
@@ -258,7 +260,7 @@ class Action(BaseModel):
     cost: Cost | None = None
     harm: bool = False
     in_fight: bool = False
-    effects: dict[Band, list[Effect]] = Field(default_factory=dict)
+    effects: dict[Band, Annotated[list[Effect], Field(max_length=12)]] = Field(default_factory=dict)
 
     def ids(self) -> list[tuple[str, str]]:
         """(affordance id, rating) for each rating this action may roll."""
@@ -289,7 +291,8 @@ class Encounter(BaseModel):
 
 class FoeTier(BaseModel):
     """A ready level of foe: every rating at `steps`, the named tracks at these sizes. `threat`
-    lists the engine's danger words that pick this tier for an actor with no spec of its own."""
+    lists the engine's danger words that pick this tier (the only way to one: a spec can't ask
+    for a tier, or a player's could)."""
 
     model_config = _STRICT
 
@@ -429,7 +432,9 @@ class Definition(BaseModel):
     modifiers: list[Modifier] = Field(default_factory=list, max_length=_MAX_ITEMS)
     actions: list[Action] = Field(default_factory=list, max_length=_MAX_ITEMS)
     gear: list[GearRule] = Field(default_factory=list, max_length=_MAX_ITEMS)
-    lists: dict[Key, list[Option]] = Field(default_factory=dict)
+    lists: dict[Key, Annotated[list[Option], Field(max_length=_MAX_ITEMS)]] = Field(
+        default_factory=dict, max_length=_MAX_ITEMS
+    )
     creation: list[CreationChoice] = Field(default_factory=list, max_length=12)
     advancement: AdvanceChoice | None = None
     encounter: Encounter | None = None
@@ -473,7 +478,7 @@ class Definition(BaseModel):
         tracks = [t.key for t in self.tracks]
         tags = [t.key for t in self.tags]
         for kind, keys in (("rating", ratings), ("track", tracks), ("tag", tags)):
-            for dup in sorted({k for k in keys if keys.count(k) > 1}):
+            for dup in sorted(k for k, n in Counter(keys).items() if n > 1):
                 problems.append(f"{kind} {dup!r} is declared twice")
         for key in sorted(set(ratings) & set(ORDERS)):
             problems.append(f"rating {key!r}: that word is a turn order")
@@ -533,10 +538,8 @@ class Definition(BaseModel):
                     elif isinstance(eff, RemoveTag):
                         need(where, "tag", eff.untag, gset)
         for name, options in self.lists.items():
-            if len(options) > _MAX_ITEMS:
-                problems.append(f"list {name}: at most {_MAX_ITEMS} options")
             keys = [o.key for o in options]
-            for dup in sorted({k for k in keys if keys.count(k) > 1}):
+            for dup in sorted(k for k, n in Counter(keys).items() if n > 1):
                 problems.append(f"list {name}: option {dup!r} is declared twice")
             for o in options:
                 where = f"list {name}.{o.key}"
@@ -561,7 +564,7 @@ class Definition(BaseModel):
                 if isinstance(self.encounter.award.by, str):
                     problems.append("encounter.award: by is a number, not dice")
         tiers = [f.key for f in self.foes]
-        for dup in sorted({k for k in tiers if tiers.count(k) > 1}):
+        for dup in sorted(k for k, n in Counter(tiers).items() if n > 1):
             problems.append(f"foe tier {dup!r} is declared twice")
         claimed: set[str] = set()
         for f in self.foes:
@@ -569,6 +572,8 @@ class Definition(BaseModel):
                 problems.append(f"foe tier {f.key}: steps is on the scale")
             for k in f.tracks:
                 need(f"foe tier {f.key}", "track", k, tset)
+            if not f.threat:
+                problems.append(f"foe tier {f.key}: name the threat words that pick it")
             for word in f.threat:
                 if word not in THREAT_LEVELS:
                     problems.append(f"foe tier {f.key}: threat is of {', '.join(THREAT_LEVELS)}")
@@ -627,7 +632,7 @@ class Definition(BaseModel):
                 problems.append(f"{where}: every step is on the scale")
         if setters > 1:
             problems.append("creation: one of array, budget, roll sets the ratings")
-        for dup in sorted({n for n in names if names.count(n) > 1}):
+        for dup in sorted(k for k, n in Counter(names).items() if n > 1):
             problems.append(f"creation: two picks are named {dup!r} (give one a key)")
         adv = self.advancement
         if adv is None:
@@ -647,3 +652,5 @@ class Definition(BaseModel):
                 problems.append(f"advancement.then: no track {adv.then.adjust!r}")
             if adv.then.who != "self":
                 problems.append("advancement.then: who is self")
+            if isinstance(adv.then.by, str):
+                problems.append("advancement.then: by is a number, not dice")

@@ -1,7 +1,9 @@
 # A game definition for the built-in `uro-composable` ruleset (D-114) with nothing of the classic
 # vocabulary: you act through what you feel, and Composure is all that holds you together. Played
-# on 2d6 here, and just as playable on a d20 or a pool (swap `[resolver]`). No gear, no fights, no
-# foes: what a character carries is only story, and violence is a run of Lash out checks.
+# on 2d6 here. It also plays on a d20 or a pool (swap `[resolver]`), with one difference: those
+# two never roll the `cost` band, so Lash out's `cost` effect is then never used. No gear, no
+# fights, no foes: what a character carries is only story, and violence is a run of Lash out
+# checks.
 
 [resolver]
 kind = "2d6"

@@ -72,15 +72,14 @@ class Sheet(BaseModel):
 
 class Spec(BaseModel):
     """What `new_character` takes. `ratings` and `picks` answer the definition's creation choices;
-    `seed` is the dice of a rolled creation (the same seed, the same character); `tier` asks for
-    one of the definition's foe tiers. An empty spec is the default character."""
+    `seed` is the dice of a rolled creation (the same seed, the same character). An empty spec is
+    the default character. (A foe tier is picked by the engine's threat word, never by a spec.)"""
 
     model_config = _STRICT
 
     ratings: dict[str, int] | None = None
     picks: dict[str, list[str]] | None = None
     seed: int | None = None
-    tier: str | None = None
 
 
 # --- a sheet under a definition (module-level: the settings' own validation builds with them) ---
@@ -164,12 +163,19 @@ def _resize(defn: Definition, sheet: Sheet, *, fresh: bool = False) -> None:
         del sheet.tracks[gone]
 
 
-def _tier(defn: Definition, spec: Spec, threat: str) -> tuple[D.FoeTier | None, bool]:
-    """The foe tier a spec asks for, else the one its threat word picks. (tier, unknown name)."""
-    if spec.tier is not None:
-        named = next((f for f in defn.foes if f.key == spec.tier), None)
-        return named, named is None
-    return next((f for f in defn.foes if threat and threat in f.threat), None), False
+def _tier(defn: Definition, threat: str) -> D.FoeTier | None:
+    """The foe tier a threat word picks, if any."""
+    return next((f for f in defn.foes if threat and threat in f.threat), None)
+
+
+def load(defn: Definition, sheet: SheetDict) -> Sheet:
+    """A stored sheet brought up to this definition: a rating it lacks at its default, one the
+    definition no longer has dropped, tracks resized. A sheet made under another definition (an
+    earlier version, another campaign's game on the same branch) still reads."""
+    s = Sheet.model_validate(sheet)
+    s.ratings = {r.key: s.ratings.get(r.key, defn.base_step(r.key)) for r in defn.ratings}
+    _resize(defn, s)
+    return s
 
 
 def build(
@@ -192,10 +198,7 @@ def build(
                 SpecProblem(loc=["ratings", key], message=f"from {scale.min} to {scale.max}")
             )
             del given[key]
-    tier, unknown = _tier(defn, spec, threat)
-    if unknown:
-        known = ", ".join(f.key for f in defn.foes) or "none"
-        problems.append(SpecProblem(loc=["tier"], message=f"no such tier (there are: {known})"))
+    tier = _tier(defn, threat)
     if tier is not None:
         sheet.ratings = {k: tier.steps for k in sheet.ratings} | given
         sheet.sizes = dict(tier.tracks)
@@ -397,7 +400,7 @@ class UroComposable:
 
     def spec_schema(self) -> dict[str, Any]:
         """What a spec may say under this definition: its ratings, its picks, a seed when the
-        creation rolls, a tier when there are foes."""
+        creation rolls."""
         scale, props = self.d.scale, {}
         if self.d.ratings:
             props["ratings"] = {
@@ -432,8 +435,6 @@ class UroComposable:
             }
         if any(isinstance(c, D.RollChoice) for c in self.d.creation):
             props["seed"] = {"type": "integer", "description": "the dice of a rolled character"}
-        if self.d.foes:
-            props["tier"] = {"enum": [f.key for f in self.d.foes]}
         return {"type": "object", "additionalProperties": False, "properties": props}
 
     # --- characters ---
@@ -472,13 +473,13 @@ class UroComposable:
 
     def progression(self, sheet: SheetDict, award: Award) -> SheetDict:
         """`{"adjust": {track: by}}`: the tracks an award moves."""
-        s = Sheet.model_validate(sheet)
+        s = load(self.d, sheet)
         for key, by in dict(award.data.get("adjust") or {}).items():
             _move(self.d, s, str(key), by=int(by))
         return s.model_dump()
 
     def pending_choices(self, sheet: SheetDict) -> list[Choice]:
-        s, adv = Sheet.model_validate(sheet), self.d.advancement
+        s, adv = load(self.d, sheet), self.d.advancement
         if adv is None or _ADVANCE not in s.pending:
             return []
         if isinstance(adv, D.BudgetChoice):
@@ -505,7 +506,7 @@ class UroComposable:
         return [Choice(id=_ADVANCE, prompt=prompt, options=options)] if options else []
 
     def answer_choice(self, sheet: SheetDict, choice_id: str, answer: dict[str, Any]) -> SheetDict:
-        s, adv = Sheet.model_validate(sheet), self.d.advancement
+        s, adv = load(self.d, sheet), self.d.advancement
         assert adv is not None
         if isinstance(adv, D.BudgetChoice):
             self._spend(s, adv, answer)
@@ -519,6 +520,13 @@ class UroComposable:
         elif track is not None:
             _move(self.d, s, track.key, to=track.min)
         _resize(self.d, s)
+        # One answer, one advance: a `then` that leaves the track full would open the choice
+        # again at once, for ever. The track starts over instead.
+        if track is not None and _ADVANCE in s.pending:
+            s.pending.remove(_ADVANCE)
+            _move(self.d, s, track.key, to=track.min)
+            if _ADVANCE in s.pending:  # (a track whose lowest is its highest can't happen)
+                s.pending.remove(_ADVANCE)
         return s.model_dump()
 
     def _spend(self, s: Sheet, adv: D.BudgetChoice, answer: dict[str, Any]) -> None:
@@ -570,7 +578,7 @@ class UroComposable:
 
     def downtime(self, sheet: SheetDict, days: int) -> SheetDict | None:
         """Tracks renewed by this many days go back to their start; tags that last days lapse."""
-        s = Sheet.model_validate(sheet)
+        s = load(self.d, sheet)
         before = s.model_dump()
         for track in self.d.tracks:
             renew = track.renew
@@ -672,8 +680,12 @@ class UroComposable:
         d_step, d_band = self._sum(mods, action.key, rating)
         step = max(0, sheet.ratings.get(rating, self.d.scale.default_step) + d_step)
         push = self.resolver.push if isinstance(self.resolver, Pool) else None
+        after_cost = sheet
+        if push is not None and action.cost is not None:  # the push is paid after the action
+            after_cost = sheet.model_copy(deep=True)
+            _move(self.d, after_cost, action.cost.track, by=-action.cost.by)
         rolled = roll(
-            self.resolver, step, action.difficulty, rng, may_push=self._can_pay(sheet, push)
+            self.resolver, step, action.difficulty, rng, may_push=self._can_pay(after_cost, push)
         )
         band = shift(self.resolver, rolled.band, d_band)
         paid = [c for c in (action.cost, push if rolled.pushed else None) if c is not None]
@@ -714,7 +726,7 @@ class UroComposable:
         if found is None:
             raise ValueError(f"uro-composable: this game has no action {req.stat!r}")
         action, rating = found
-        before = Sheet.model_validate(req.sheet)
+        before = load(self.d, req.sheet)
         sheet = before.model_copy(deep=True)
         tried = self._attempt(sheet, _gear(req.holdings), action, rating, rng)
         for cost in tried.paid:
@@ -748,8 +760,7 @@ class UroComposable:
         return by if by in ("alternate", "simultaneous") else "rating"  # type: ignore[return-value]
 
     def _fighter(self, c: Combatant) -> _Fighter:
-        sheet = Sheet.model_validate(c.sheet)
-        _resize(self.d, sheet)  # a sheet from before a definition changed still plays
+        sheet = load(self.d, c.sheet)  # a sheet from before a definition changed still plays
         return _Fighter(actor_id=c.actor_id, team=c.team, sheet=sheet, gear=_gear(c.holdings))
 
     def start_encounter(self, ctx: EncounterCtx, rng: Rng) -> EncounterState:
@@ -841,17 +852,22 @@ class UroComposable:
     ) -> tuple[EncounterState, list[Effect]]:
         st = _as_enc(state).model_copy(deep=True)
         if self._mode != "simultaneous":
-            effects = self._act(st.fighters, st.fighters, action, rng, st.round)
-            return self._advance_turn(st), effects
+            done = self._act(st.fighters, st.fighters, action, rng, st.round)
+            return self._advance_turn(st), done
         st.committed[action.actor_id] = action
         if any(a not in st.committed for a in st.order if self._active(st.fighters[a])):
             return st, []  # the round isn't closed yet
         # everyone acts on the fight as it stood when the round began, then it all lands at once
         was = {a: f.model_copy(deep=True) for a, f in st.fighters.items()}
-        effects = []
+        effects: list[Effect] = []
+        leaving: list[str] = []
         for actor_id in st.order:
             if actor_id in st.committed:
-                effects += self._act(was, st.fighters, st.committed[actor_id], rng, st.round)
+                effects += self._act(
+                    was, st.fighters, st.committed[actor_id], rng, st.round, leaving
+                )
+        for actor_id in leaving:  # who gets away is settled once every blow has landed
+            effects += self._leave(st.fighters, actor_id)
         st.committed, st.round = {}, st.round + 1
         return st, effects
 
@@ -862,9 +878,11 @@ class UroComposable:
         action: Action,
         rng: Rng,
         round_: int,
+        leaving: list[str] | None = None,
     ) -> list[Effect]:
         """One fighter's action: judged on the fighters in `read`, landing on those in `write`
-        (the same ones, unless the round is simultaneous)."""
+        (the same ones, unless the round is simultaneous). One who leaves goes at once, or is
+        only noted in `leaving` when the round settles that after every action."""
         actor = action.actor_id
         if action.kind == "hold":
             return [Effect(kind="hold", actor_id=actor, trace=f"{actor} holds")]
@@ -902,10 +920,17 @@ class UroComposable:
             effects.append(
                 Effect(kind="out", actor_id=target, trace=f"{target} is out of the fight")
             )
-        if left and not self._out(write[actor].sheet):
-            write[actor].fled = True
-            effects.append(Effect(kind="fled", actor_id=actor, trace=f"{actor} gets away"))
+        if left and leaving is not None:
+            leaving.append(actor)
+        elif left:
+            effects += self._leave(write, actor)
         return effects
+
+    def _leave(self, fighters: dict[str, _Fighter], actor: str) -> list[Effect]:
+        if self._out(fighters[actor].sheet):
+            return []  # beaten in the same breath: out, not away
+        fighters[actor].fled = True
+        return [Effect(kind="fled", actor_id=actor, trace=f"{actor} gets away")]
 
     def _advance_turn(self, st: _Encounter) -> _Encounter:
         if self.is_over(st) is not None:
@@ -938,18 +963,29 @@ class UroComposable:
         """The fight's end: tags that last a fight lapse, tracks a fight renews go back to their
         start, and each player character still standing gets the encounter's award."""
         st = _as_enc(state).model_copy(deep=True)
-        brief = {t.key for t in self.d.tags if t.lasts == "encounter"}
         award = self.d.encounter.award if self.d.encounter is not None else None
         for actor_id, f in st.fighters.items():
-            f.sheet.tags = [t for t in f.sheet.tags if t not in brief]
-            for track in self.d.tracks:
-                state_ = f.sheet.tracks.get(track.key)
-                if track.renew is not None and track.renew.encounter and state_ is not None:
-                    start = _value(self.d, f.sheet, track.start, state_.min, state_.max)
-                    _move(self.d, f.sheet, track.key, to=start)
+            self._after_fight(f.sheet)
             if award is not None and actor_id in pcs and actor_id in outcome.survivors:
                 self._apply(f.sheet, award, Rng(0))  # an award is a number, never dice
         return {a: f.sheet.model_dump() for a, f in st.fighters.items()}
+
+    def _after_fight(self, sheet: Sheet) -> None:
+        """What only lasts a fight ends with it: such tags lapse, tracks a fight renews restart."""
+        brief = {t.key for t in self.d.tags if t.lasts == "encounter"}
+        sheet.tags = [t for t in sheet.tags if t not in brief]
+        for track in self.d.tracks:
+            state = sheet.tracks.get(track.key)
+            if track.renew is not None and track.renew.encounter and state is not None:
+                start = _value(self.d, sheet, track.start, state.min, state.max)
+                _move(self.d, sheet, track.key, to=start)
+
+    def leave_encounter(self, state: EncounterState, actor_id: str) -> SheetDict:
+        """The sheet of one who leaves an undecided fight (it goes on, or the game closed it):
+        tidied like a fight's end, with no award. Optional on the port (D-114)."""
+        sheet = _as_enc(state).fighters[actor_id].sheet.model_copy(deep=True)
+        self._after_fight(sheet)
+        return sheet.model_dump()
 
 
 def _as_enc(state: EncounterState) -> _Encounter:

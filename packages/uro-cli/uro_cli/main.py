@@ -821,7 +821,8 @@ def beat_detail_lines(
             lines.append(f"  ? {c['id']}: {c['prompt']} — `uro character choose` or /choose")
     wait = details.get("encounter")  # D-112: the fight waits on a player's choice
     if wait:
-        lines.append(f"  · the fight waits on {wait['actor_id']}:")
+        who = f" (player {wait['participant_id']})" if wait.get("participant_id") else ""
+        lines.append(f"  · the fight waits on {wait['actor_id']}{who}:")
         lines += refusal_lines("", wait.get("legal_actions") or [])[1:]
     created = details.get("created") or []
     if created:
@@ -1142,6 +1143,10 @@ def connect(
                                 msg["reason"], msg.get("legal_actions") or []
                             ):
                                 typer.echo(line)
+                            if msg.get("waiting_on"):  # D-114: it is another character's move
+                                typer.echo(f"    (the fight waits on {msg['waiting_on']})")
+                        elif kind == "encounter_abandoned":  # D-114: the game closed the fight
+                            typer.echo("  · the fight was closed, undecided")
                         elif kind == "intent_rejected":
                             typer.echo(
                                 f"  ✗ [{msg['participant_id']}] intent rejected: {msg['text']!r}"
@@ -2595,11 +2600,16 @@ def character_preview(
                 raise typer.Exit(1) from exc
         finally:
             await store.close()
+        left = (preview.guidance or {}).get("left") or []
         if not preview.ok:
             _echo_refused(CharSpecError(preview.problems))
+            if left:  # D-114: the ruleset's own count of what the build still wants
+                typer.echo(f"still to do: {json.dumps(left)}", err=True)
             raise typer.Exit(1)
         typer.echo(f"ok ({preview.ruleset}):")
         typer.echo(json.dumps(preview.sheet, indent=2, sort_keys=True))
+        if left:
+            typer.echo(f"still to do: {json.dumps(left)}")
 
     _run_async(_run)
 

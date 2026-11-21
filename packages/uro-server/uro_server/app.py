@@ -3136,7 +3136,8 @@ async def _fight_waits_on(deps: ServerDeps, campaign_id: str, participant: str) 
         return False
     try:
         wait = await deps.fight_status(campaign_id, participant)
-    except (ChoiceRefused, KeyError):
+    except Exception:  # a fault here must not take the socket down: the table's answer stands
+        logger.warning("fight status failed for %s on %s", participant, campaign_id, exc_info=True)
         return False
     return wait is not None and wait.get("participant_id") == participant
 
@@ -3193,6 +3194,26 @@ async def _run_and_broadcast(
             {"type": "intent_rejected", "participant_id": participant, "text": text, **echo},
         )
         return
+    async with hub.beat_lock(campaign_id):
+        await _play_beat(
+            deps, arbiter, hub, campaign_id, participant, text, action, echo, holds_turn
+        )
+
+
+async def _play_beat(
+    deps: ServerDeps,
+    arbiter: TurnArbiter,
+    hub: SessionHub,
+    campaign_id: str,
+    participant: str,
+    text: str,
+    action: dict[str, Any] | None,
+    echo: dict[str, Any],
+    holds_turn: bool,
+) -> None:
+    """An admitted intent's beat: run it and broadcast its frames. `holds_turn` says the sender
+    held the table's turn (a fight turn played out of the table's order did not), so only then
+    does the table's turn pass."""
     await hub.publish(
         campaign_id,
         {"type": "beat_started", "participant_id": participant, "intent": text, **echo},
@@ -3279,8 +3300,10 @@ async def _run_and_broadcast(
         # A failed turn STILL yields the token (cross-phase review P7xP3): otherwise a
         # deterministically-failing holder (e.g. an unbound participant) would wedge the whole
         # party forever. The trade-off — a transient failure costs a turn — is acceptable; the
-        # player gets the token back next round.
-        await arbiter.beat_committed(campaign_id, participant, "")
+        # player gets the token back next round. (Only the holder's: a failed fight turn played
+        # out of the table's order never held it, D-114 review.)
+        if holds_turn:
+            await arbiter.beat_committed(campaign_id, participant, "")
         return
     commit_id = deps.last_commit(campaign_id) if deps.last_commit is not None else None
     deps.announced.add(commit_id, campaign_id)  # (engine_deps already did, at append time)

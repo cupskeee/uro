@@ -3254,3 +3254,59 @@ def test_describing_a_ruleset_refuses_what_the_ruleset_refuses() -> None:
         client.post("/rulesets/describe?token=nope", json={"ruleset": "uro-basic"}).status_code
         == 401
     )
+
+
+def test_a_failed_fight_turn_out_of_the_tables_order_leaves_the_tables_turn_alone() -> None:
+    from uro_core.session import PartyArbiter
+
+    waits_on = {"who": "player-2"}
+    deps, played = _fight_table(waits_on)
+    inner = deps.run_beat
+
+    async def run_beat(
+        campaign_id: str, participant: str, text: str, action: Any = None
+    ) -> AsyncIterator[Any]:
+        if action is not None:
+            raise RuntimeError("the model fell over")
+        async for chunk in inner(campaign_id, participant, text, action):  # type: ignore[call-arg]
+            yield chunk
+
+    deps.run_beat = run_beat  # type: ignore[assignment]
+    client = TestClient(create_app(deps, arbiter=PartyArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,  # holds the turn
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")
+        b.send_json({"type": "intent", "action": {"kind": "strike"}})
+        # (each frame is read on its sender's own socket: the test client runs every socket on
+        # its own event loop, and a frame from another loop may not wake a waiting reader)
+        assert _recv_until(b, "beat_failed")[-1]["participant_id"] == "player-2"
+        waits_on["who"] = ""
+        a.send_json({"type": "intent", "text": "I look around"})  # still player-1's turn
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-1"
+    assert played == ["player-1"]
+
+
+def test_a_fault_reading_the_fight_leaves_the_tables_answer_and_the_socket() -> None:
+    from uro_core.session import PartyArbiter
+
+    deps, played = _fight_table({"who": ""})
+
+    async def broken(campaign_id: str, participant: str | None) -> dict[str, Any] | None:
+        raise ValueError("this server doesn't have that ruleset")
+
+    deps.fight_status = broken
+    client = TestClient(create_app(deps, arbiter=PartyArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")
+        b.send_json({"type": "intent", "action": {"kind": "strike"}})
+        assert _recv_until(b, "not_your_turn")[-1]["participant_id"] == "player-2"
+        b.send_json({"type": "intent", "text": "still here"})  # the socket is still open
+        assert _recv_until(b, "not_your_turn")[-1]["text"] == "still here"
+    assert played == []

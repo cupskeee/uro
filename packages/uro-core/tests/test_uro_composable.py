@@ -118,6 +118,17 @@ def test_it_is_listed_beside_the_other_built_ins() -> None:
         ({"creation": [{"choice": "pick", "from": "nowhere"}]}, "no list 'nowhere'"),
         ({"creation": [{"choice": "array", "steps": [9]}]}, "on the scale"),
         ({"foes": [{"key": "a", "steps": 1, "threat": ["scary"]}]}, "threat"),
+        ({"foes": [{"key": "a", "steps": 1}]}, "name the threat words"),
+        (
+            {
+                "advancement": {
+                    "choice": "budget",
+                    "points": 1,
+                    "then": {"adjust": "xp", "by": "1d4"},
+                }
+            },
+            "not dice",
+        ),
         (
             {"ready_made": [{"name": "Nobody", "spec": {"ratings": {"str": 3}}}]},
             "doesn't build",
@@ -213,7 +224,7 @@ def test_an_array_and_a_pick_make_a_character_and_guidance_counts_what_is_left()
         with pytest.raises(CharSpecError):
             _sheet(game, bad)
     schema = spec_schema_of(game)
-    assert set(schema["properties"]) == {"ratings", "picks", "tier"}
+    assert set(schema["properties"]) == {"ratings", "picks"}  # no tier: that is never a spec's
     assert schema["properties"]["picks"]["properties"]["kits"]["items"]["enum"] == [
         "soldier",
         "wanderer",
@@ -262,14 +273,14 @@ def test_a_rolled_character_is_the_seeds_and_the_same_every_time() -> None:
     assert "seed" in spec_schema_of(game)["properties"]
 
 
-def test_a_foe_takes_a_tier_by_name_or_by_how_dangerous_it_is() -> None:
+def test_a_foe_takes_the_tier_its_danger_word_picks_and_a_spec_cant_ask_for_one() -> None:
     game = _game(CLASSIC)
     brute = _sheet(game, threat="strong")
     assert set(brute["ratings"].values()) == {3} and brute["tracks"]["hp"]["max"] == 14
-    assert _sheet(game, {"tier": "boss"})["tracks"]["hp"] == {"value": 30, "min": 0, "max": 30}
+    assert _sheet(game, threat="deadly")["tracks"]["hp"] == {"value": 30, "min": 0, "max": 30}
     assert _sheet(game, threat="average")["tracks"]["hp"]["max"] == 10  # no tier claims it
-    with pytest.raises(CharSpecError, match="no such tier"):
-        _sheet(game, {"tier": "dragon"})
+    with pytest.raises(CharSpecError):  # or a player would build a boss (review)
+        _sheet(game, {"tier": "boss"})
 
 
 # --- checks ---
@@ -561,3 +572,89 @@ async def test_growing_is_answered_through_the_characters_own_choices(
     assert [ch.id for ch in mine.choices] == ["advance"]
     after = await answer_character_choice(store, c, "p1", "advance", {"ratings": {"joy": 1}})
     assert after.sheet is not None and after.sheet["ratings"]["joy"] == 3 and after.choices == []
+
+
+# --- found by the D-114 review ---
+
+
+def test_an_advancement_is_answered_once_whatever_its_then_does() -> None:
+    config = deepcopy(FEELINGS)
+    config["definition"]["advancement"]["then"] = {"adjust": "composure", "by": -1}
+    game = _game(config)
+    sheet = _sheet(game)
+    sheet["tracks"]["growth"]["value"] = 5
+    sheet["pending"] = ["advance"]
+    after = answer_choice(game, sheet, "advance", {"ratings": {"anger": 1}})
+    assert after["pending"] == [] and after["tracks"]["growth"]["value"] == 0
+    assert after["tracks"]["composure"]["value"] == 4  # the `then` still happened
+
+
+def test_a_sheet_from_another_definition_still_reads() -> None:
+    classic, feelings = _game(CLASSIC), _game(FEELINGS)
+    foreign = _sheet(feelings)
+    classic.downtime(foreign, 1)  # brought up to this game: it used to be a KeyError
+    assert pending_choices(classic, foreign) == []
+    result = _check(classic, foreign, "persuade", 1)
+    assert result.outcome in ("fail", "success", "great")
+    assert set(classic.progression(foreign, type("A", (), {"data": {}})())["ratings"]) == {
+        "str", "dex", "con", "int", "wis", "cha"
+    }  # fmt: skip
+
+
+def test_a_push_is_paid_for_after_the_actions_own_cost() -> None:
+    config = deepcopy(FEELINGS)
+    config["resolver"] = {"kind": "pool", "push": {"track": "composure", "by": 1}}
+    config["definition"]["actions"][1]["cost"] = {"track": "composure", "by": 1}  # slip_away
+    game = _game(config)
+    sheet = _sheet(game)
+    sheet["tracks"]["composure"]["value"] = 1  # enough for the action, not for a push as well
+    for seed in range(200):
+        result = _check(game, sheet, "slip_away", seed)
+        assert result.player_view["pushed"] is False
+        assert result.sheet["tracks"]["composure"]["value"] == 0
+
+
+def test_leaving_a_fight_thats_undecided_tidies_what_only_lasts_a_fight() -> None:
+    config = deepcopy(CLASSIC)
+    d = config["definition"]
+    d["tags"] = [{"key": "staggered", "lasts": "encounter"}]
+    d["tracks"].append({"key": "guard", "min": 0, "max": 2, "start": "max",
+                        "renew": {"encounter": True}})  # fmt: skip
+    game = _game(config)
+    state = game.start_encounter(EncounterCtx(encounter_id="e", combatants=_fighters(game)), Rng(0))
+    hero = state.fighters["a:hero"].sheet
+    hero.tags.append("staggered")
+    hero.tracks["guard"].value = 0
+    assert game.sheets(state)["a:hero"]["tags"] == ["staggered"]  # as the fight has it
+    left = game.leave_encounter(state, "a:hero")  # as the one leaving takes it
+    assert left["tags"] == [] and left["tracks"]["guard"]["value"] == 2
+    assert game.sheets(state)["a:hero"]["tags"] == ["staggered"]  # the fight's state untouched
+
+
+def test_in_a_simultaneous_round_one_beaten_as_they_turn_to_go_is_out_whoever_went_first() -> None:
+    for first in ("a:hero", "a:foe"):
+        game = _game(_with(CLASSIC, encounter={"by": "simultaneous"}))
+        fighters = _fighters(game)
+        if first == "a:foe":
+            fighters.reverse()
+        next(c for c in fighters if c.actor_id == "a:hero").sheet["tracks"]["hp"]["value"] = 1
+        start = game.start_encounter(EncounterCtx(encounter_id="e", combatants=fighters), Rng(0))
+        seen = set()
+        for seed in range(300):
+            rng, state = Rng(seed), start
+            for who in fighters:
+                act = (
+                    Action(kind="retreat", actor_id="a:hero")
+                    if who.actor_id == "a:hero"
+                    else Action(kind="strike.str", actor_id="a:foe", target_id="a:hero")
+                )
+                state, effects = game.resolve_action(state, act, rng)
+            kinds = {e.kind for e in effects}
+            hero = state.fighters["a:hero"]
+            if "out" in kinds:  # struck down in the round they tried to leave
+                assert not hero.fled and "fled" not in kinds
+                seen.add("out")
+            elif "fled" in kinds:
+                assert hero.fled
+                seen.add("fled")
+        assert seen == {"out", "fled"}

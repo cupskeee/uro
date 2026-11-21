@@ -187,6 +187,16 @@ def join_encounter(
     return joined
 
 
+def leaving_sheet(ruleset: Any, state: EncounterState, actor_id: str) -> Sheet:
+    """The sheet a combatant takes out of a fight that isn't decided for it (D-114: it left a
+    fight that goes on, or the game closed the fight). The ruleset's optional
+    `leave_encounter(state, actor_id)` tidies what only lasts a fight; without the hook, the sheet
+    as the fight has it."""
+    fn = getattr(ruleset, "leave_encounter", None)
+    sheet: Sheet = fn(state, actor_id) if callable(fn) else ruleset.sheets(state)[actor_id]
+    return sheet
+
+
 def standing(ruleset: Any, state: EncounterState) -> frozenset[str] | None:
     """The combatants still in the fight (D-114): not beaten, not gone. The ruleset's optional
     `standing(state)`; None for a ruleset without the hook, which the engine reads as "everyone,
@@ -460,7 +470,8 @@ class Ruleset(Protocol):
     # `join_encounter` / `standing`): `join_encounter(state, combatant, rng) -> EncounterState`
     # adds a combatant to a fight under way, and `standing(state)` lists who is still in it. Both
     # must be pure functions of their inputs and the Rng, like every encounter method: a fight
-    # played turn by turn is rebuilt by replaying them.
+    # played turn by turn is rebuilt by replaying them. `leave_encounter(state, actor_id) -> Sheet`
+    # is the sheet of one who leaves an undecided fight (read through `leaving_sheet`).
 
     def conclude_encounter(
         self, state: EncounterState, outcome: EncounterOutcome, pcs: frozenset[str]

@@ -45,6 +45,7 @@ from uro_core.rulesets.base import (
     EncounterState,
     Ruleset,
     join_encounter,
+    leaving_sheet,
     standing,
 )
 from uro_core.rulesets.rng import Rng
@@ -183,6 +184,9 @@ class FightStep(BaseModel):
     encounter_id: str
     events: list[DomainEvent] = Field(default_factory=list)
     outcome: EncounterOutcome | None = None
+    # D-114: player characters who had left the fight before the beat that decided it. Their
+    # sheets and what they hold have been their own since: the fight's end doesn't touch them.
+    released: list[str] = Field(default_factory=list)
     waiting_on: str | None = None
     legal_actions: list[ActionSpec] = Field(default_factory=list)
 
@@ -237,9 +241,13 @@ def _step(
         # is no longer bound to it. Its sheet is committed as it left, and is its own from here.
         now = standing(ruleset, state)
         if now is not None:
-            sheets = ruleset.sheets(state)
             events += [
-                sheet_updated(actor_id=a, sheet=sheets[a], ruleset_id=ruleset.id, caused_by=cause)
+                sheet_updated(
+                    actor_id=a,
+                    sheet=leaving_sheet(ruleset, state, a),
+                    ruleset_id=ruleset.id,
+                    caused_by=cause,
+                )
                 for a in sorted(players - now)
                 if before is None or a in before
             ]
@@ -249,6 +257,7 @@ def _step(
             waiting_on=waiting,
             legal_actions=ruleset.legal_actions(state, waiting),
         )
+    released = frozenset() if before is None else players - before
     ending, outcome = _conclude(
         ruleset,
         state,
@@ -256,9 +265,14 @@ def _step(
         encounter_id=encounter_id,
         cause=cause,
         lethal=False,
-        released=frozenset() if before is None else players - before,
+        released=released,
     )
-    return FightStep(encounter_id=encounter_id, events=[*events, *ending], outcome=outcome)
+    return FightStep(
+        encounter_id=encounter_id,
+        events=[*events, *ending],
+        outcome=outcome,
+        released=sorted(released),
+    )
 
 
 def fighters_of(started: dict[str, Any], log: list[dict[str, Any]]) -> list[Combatant]:
@@ -379,7 +393,8 @@ def join_fight(
     ruleset: Ruleset, started: dict[str, Any], log: list[dict[str, Any]], combatant: Combatant
 ) -> FightStep | None:
     """Bring `combatant` into an open fight (D-114), then play the ruleset's turns up to the next
-    player's choice or the end. None when the ruleset takes no one into a fight under way. The
+    player's choice or the end. None when the ruleset takes no one into a fight under way, or the
+    combatant wouldn't be standing in it. The
     join is an event in the fight's log, so later turns replay it in its place."""
     encounter_id = started["encounter_id"]
     cause = ruleset_cause(encounter_id)
@@ -388,6 +403,9 @@ def join_fight(
     joined = join_encounter(ruleset, state, combatant, rng)
     if joined is None:
         return None
+    now = standing(ruleset, joined)
+    if now is not None and combatant.actor_id not in now:
+        return None  # one who can't stand in the fight (already beaten) doesn't enter it
     event = encounter_joined(
         encounter_id=encounter_id,
         actor_id=combatant.actor_id,

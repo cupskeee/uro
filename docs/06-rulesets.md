@@ -37,6 +37,7 @@ class Ruleset(Protocol):
     # Optional since D-114
     def join_encounter(self, state, combatant, rng) -> EncounterState   # a latecomer enters a fight
     def standing(self, state) -> list[str]             # who is still in the fight
+    def leave_encounter(self, state, actor_id) -> Sheet   # the sheet of one leaving it undecided
     def creation_guidance(self, spec) -> dict          # what a build still wants, its own shape
     def starting_holdings(self, spec) -> list[Holding] # things a build gives its character to hold
 ```
@@ -82,7 +83,7 @@ Contract notes:
 - **Triggers make affordances mandatory, not just available (D-21):** each affordance declares trigger categories — intent/risk classes that *must* invoke it (e.g. `persuade` triggers on any attempt to change an NPC's disposition or intent). Plan validation enforces triggers deterministically (`13-contracts.md`), and consequence gating is *intended* to backstop it at commit: protected-state changes without mechanics backing get downgraded, so "I persuade the king to hand me the crown" can't succeed by phrasing alone. **Phase-3 status: only the plan-side trigger check ships; the commit-time consequence-gating backstop is NOT built yet (`13`, `extraction.py`) — a misclassified intent can still slip a low-stakes change through, so this is not yet a hard boundary.**
 - **Who chooses each turn's action (D-26):** the pipeline drives the initiative loop; on a PC's turn the action comes from the player (an intent's `action`, `08`, D-112); on an NPC's turn it comes from `npc_action`. Either way it runs through `resolve_action` and is recorded as `EncounterTurnTaken` (emitter R, `12`). *(D-29: encounters auto-resolve by default — both sides use `npc_action` and the whole fight commits as one beat. D-112: a campaign started with `encounters: "turns"` plays its fights turn by turn: the fight pauses on the player character's turn, and each later beat is the player's chosen action (an intent's `action`, validated against `legal_actions`). The ruleset's opaque state is never stored: each turn replays the fight from its `EncounterStarted` (seed, combatants as they entered) and the choices recorded on its turns, so a fork taken mid-fight carries it. D-114: a second player's character may enter an open fight by attacking someone in it, and a character who leaves a fight that goes on plays on; see "Leaving, joining and more than one player in a fight" above.)* NPC selection lives in the **ruleset as deterministic code**, not an LLM planner — because Phase 3 requires seeded-RNG, recorded-response replay, and dry-run (`10`, `05`), which a live LLM chooser would break. (The "no LLM in rulesets" rule alone wouldn't forbid a *planner*-side chooser; the determinism requirement is what settles it.)
 - Effects map to domain events so mechanical outcomes are timeline citizens like everything else: harm reaches the timeline as the ruleset's opaque final `SheetUpdated` (D-30 — never an hp-scalar event), loot as `ItemTransferred`, and the fight bracketed by `EncounterStarted`/`EncounterEnded`. (`ActorDamaged` is legacy — pre-D-30 — retained only for replaying old logs.)
-- The world pack declares `ruleset = "id@version"` + config; a campaign snapshots the ruleset id+version at creation so worlds don't break under it. **Binding (inc 6.3, D-30):** a **registry** (`rulesets/registry.py`) resolves the declared id → a bound `Ruleset`; `create_world` records the pack's ruleset on `WorldGenesis`, a campaign started on the world **pins** it (`CampaignStarted.ruleset_id`/`ruleset_version` + the `campaigns` projection), and `play`/`dry-run` **rebind** from the campaign's pin — so a PbtA pack (`worlds/emberfell`) plays under `uro_pbta`, not the old hard-coded default. An unknown id fails loudly. **Per-game settings (D-62):** a pack's `[ruleset.config]` is validated by the ruleset itself (an unknown or invalid key fails `validate`, import and `create_world`, never silently ignored), stored on the world's WorldGenesis, and passed to every ruleset built for the world's campaigns, on the CLI and the server alike. Each built-in exposes its numbers as settings defaulting to the rules as written (`uro ruleset list` shows them): Uro Pool `push_strain`, `strain_limit`, `triumph_marks`, `milestones_per_advance`, `trait_cap`; PbtA `xp_on_miss`, `xp_per_advance`, `stat_cap`; Uro Basic `max_level`. The PoC ships an explicit registry of the three built-ins (`uro-basic`, `uro-pbta`, `uro-pool` — `uro ruleset list`, `GET /rulesets`); a game can also install its own ruleset as a **plugin** (D-65, see "Writing a ruleset plugin" below), and an embedder can `register()` one in-process. *(`uro serve` rebinds per campaign too (2026-10-30): its engine serves its own ruleset and unpinned campaigns, and each other ruleset gets a sibling engine (`Engine.with_ruleset`) built once and sharing the router and the per-branch react locks, so a reload reaches it and D-34's counter serialization holds across rulesets.)*
+- The world pack declares `ruleset = "id@version"` + config; a campaign snapshots the ruleset id+version at creation so worlds don't break under it. **Binding (inc 6.3, D-30):** a **registry** (`rulesets/registry.py`) resolves the declared id → a bound `Ruleset`; `create_world` records the pack's ruleset on `WorldGenesis`, a campaign started on the world **pins** it (`CampaignStarted.ruleset_id`/`ruleset_version` + the `campaigns` projection), and `play`/`dry-run` **rebind** from the campaign's pin — so a PbtA pack (`worlds/emberfell`) plays under `uro_pbta`, not the old hard-coded default. An unknown id fails loudly. **Per-game settings (D-62):** a pack's `[ruleset.config]` is validated by the ruleset itself (an unknown or invalid key fails `validate`, import and `create_world`, never silently ignored), stored on the world's WorldGenesis, and passed to every ruleset built for the world's campaigns, on the CLI and the server alike. Each built-in exposes its numbers as settings defaulting to the rules as written (`uro ruleset list` shows them): Uro Pool `push_strain`, `strain_limit`, `triumph_marks`, `milestones_per_advance`, `trait_cap`; PbtA `xp_on_miss`, `xp_per_advance`, `stat_cap`; Uro Basic `max_level`. The PoC ships an explicit registry of the four built-ins (`uro-basic`, `uro-pbta`, `uro-pool`, `uro-composable` — `uro ruleset list`, `GET /rulesets`); a game can also install its own ruleset as a **plugin** (D-65, see "Writing a ruleset plugin" below), and an embedder can `register()` one in-process. *(`uro serve` rebinds per campaign too (2026-10-30): its engine serves its own ruleset and unpinned campaigns, and each other ruleset gets a sibling engine (`Engine.with_ruleset`) built once and sharing the router and the per-branch react locks, so a reload reaches it and D-34's counter serialization holds across rulesets.)*
 
 ## Built-in: "Uro Basic"
 
@@ -118,11 +119,16 @@ built-in offers a way out that can fail (`flee`, `get_clear`, `withdraw`); only 
 attacks someone in it and enters on the side against them, as an `EncounterJoined` in the fight's
 ordered log, so the fight still replays from its start. `standing` says who is still in it; a
 player character who is not (beaten, or away) while the fight goes on is released to free-roam
-with its sheet as it left. A ruleset without `join_encounter` plays the attack as free-roam; one
+with its sheet as it left (`leave_encounter`, when the ruleset tidies what only lasts a fight;
+the same sheet an abandoned fight leaves). It starts or joins no other fight until that one ends,
+and the end neither loots it nor advances it. A join is only into a fight one of the joiner's own
+campaign's characters is in. A ruleset without `join_encounter` plays the attack as free-roam; one
 without `standing` holds everyone to the fight's end. Both hooks must be pure functions of their
 inputs and the Rng, like every encounter method. `creation_guidance(spec)` is the ruleset's own
 count of what a build still wants, carried on a character preview; `starting_holdings(spec)` names
 things a build gives its character to hold (a picked kit), which the engine makes items.
+A known NPC without a sheet rolls a free-roam check on a first sheet built from its hint; that
+sheet is for the roll and is not stored (a fight stores the one its combatants enter with).
 
 Building it forced every d20 assumption out of the "generic" port into `uro_basic` (the full
 forced-change list is the leak report in D-30). A narrate-only null ruleset would **not** have
@@ -251,7 +257,8 @@ The settings are `{definition, resolver}`:
   - `tracks`: counters with `min`, `max` (a number, or `{base, per: {rating, times}}`), `start`,
     `renew` (`downtime_days`, `encounter`), `at_min`/`at_max` (a tag worn while it sits there) and
     a `role`: `harm` (out of a fight at `out_at`) or `advance` (full opens the advancement).
-  - `tags` (`lasts`: `until_removed`, `encounter`, or a number of days) and `modifiers`
+  - `tags` (`lasts`: `until_removed`, `encounter`, or N: gone after one rest of at least N days;
+    days of play don't add up) and `modifiers`
     (`applies_to` ratings or actions or `all`, `when: {has, lacks}`, `side: self | against`,
     `change: {step, band}`, `stack`).
   - `actions`: `uses` (the ratings it may roll: one affordance each, `key` or `key.rating`),
@@ -260,11 +267,15 @@ The settings are `{definition, resolver}`:
   - `gear`: `{tag, modifier}`, what a tag on a held thing (`data.tags`) means while it is held.
   - `lists` of options (each may give tags, steps, room on a track, things to hold), `creation`
     (`array`, `budget`, `roll`, `pick`) and `advancement` (`budget` or `pick`, with `then`).
-  - `encounter` (`by`: a rating, `alternate` or `simultaneous`; `award`), `foes` (tiers by name
-    or by threat word), `ready_made` (`{name, line, spec}`), `credits`.
+  - `encounter` (`by`: a rating, `alternate` or `simultaneous`; `award`), `foes` (tiers, each
+    picked by the threat words it lists; a spec can't ask for one), `ready_made`
+    (`{name, line, spec}`), `credits`.
 
-A spec is `{ratings?, picks?, seed?, tier?}`. An empty one is the default character; one that
-answers any creation choice must satisfy them all, and a preview's `guidance` says what is left. A
-rolled creation uses the spec's `seed`. Outside a fight an effect on a `target` does nothing (a
-check is handed one sheet). With no `encounter`, a violent action is a check like any other. The
+A spec is `{ratings?, picks?, seed?}`. An empty one is the default character; one that answers
+any creation choice must complete every array and pick and stay within a budget (points may be
+left unspent), and a preview's `guidance` says what is left. A rolled creation uses the spec's
+`seed`. Outside a fight an effect on a `target` does nothing (a check is handed one sheet). A
+band's effects are only used under a resolver that rolls that band (`cost` under `2d6` only).
+Answering an advancement always starts the advance track over unless its `then` already did. A
+sheet made under another definition is read as this one's (missing ratings at their default). With no `encounter`, a violent action is a check like any other. The
 language stops at these pieces: a game they can't express is a code plugin (D-65).

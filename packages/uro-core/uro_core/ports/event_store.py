@@ -160,7 +160,8 @@ class EventStore(Protocol):
     async def append_fight_beat(
         self, branch_id: str, encounter_id: str, turns_seen: int, events: list[DomainEvent]
     ) -> Commit:
-        """Commit a fight turn's beat if the fight still has `turns_seen` turns (D-112)."""
+        """Commit a fight's beat if its log still has `turns_seen` entries (D-112): turns AND
+        joins, as `open_encounters` returns them (D-114)."""
         ...
 
     async def amend_character(

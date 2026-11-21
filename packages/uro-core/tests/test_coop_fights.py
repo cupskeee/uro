@@ -267,3 +267,37 @@ async def test_a_ruleset_that_takes_no_latecomers_keeps_the_free_roam_fallback(
     assert "EncounterJoined" not in await _types(store, c.branch_id)
     assert await engine.fight_status(c, "p2") is None  # Bo is not in it
     assert await engine.fight_status(c, "p1") == opened.encounter
+
+
+async def test_another_campaign_on_the_branch_cant_walk_into_the_fight(
+    store: PostgresEventStore,
+) -> None:
+    c, _ada, _bo = await _party(store)
+    engine = _engine(store)
+    opened = await engine.run_beat(c, "p1", "I attack the brute", plan=_ATTACK)
+    other = await start_campaign(  # same branch, its own campaign, fights in one beat
+        store, c.world_id, c.branch_id, participant_id="p9", new_pc_name="Cy"
+    )
+    beat = await engine.run_beat(other, "p9", "I attack the brute", plan=_ATTACK)
+    assert beat.mode == "freeroam" and beat.encounter is None
+    assert "EncounterJoined" not in await _types(store, c.branch_id)
+    turns = await start_campaign(  # nor one that plays turn by turn but has no one in the fight
+        store, c.world_id, c.branch_id, participant_id="p8", new_pc_name="Di", encounters="turns"
+    )
+    beat = await engine.run_beat(turns, "p8", "I attack the brute", plan=_ATTACK)
+    assert beat.mode == "freeroam" and await engine.fight_status(c) == opened.encounter
+
+
+async def test_one_already_beaten_doesnt_enter_a_fight(store: PostgresEventStore) -> None:
+    from uro_core.domain.events import sheet_updated
+
+    c, _ada, bo = await _party(store)
+    engine = _engine(store)
+    opened = await engine.run_beat(c, "p1", "I attack the brute", plan=_ATTACK)
+    down = {**(await store.get_sheet(c.branch_id, bo) or {}), "hp": 0}
+    await store.append_beat(
+        c.branch_id, [sheet_updated(actor_id=bo, sheet=down, ruleset_id="uro-basic")]
+    )
+    beat = await engine.run_beat(c, "p2", "I crawl into the fray", plan=_ATTACK)
+    assert beat.mode == "freeroam" and await engine.fight_status(c, "p2") is None
+    assert await engine.fight_status(c) == opened.encounter

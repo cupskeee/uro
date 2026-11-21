@@ -9,9 +9,15 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+Upgrading: finish or abandon any fight still open in a campaign that plays fights turn by turn
+(v0.21.0's `encounters: "turns"`) before upgrading. `flee`, `defend` and `keep_cool` now do
+something, so a fight with one of them already recorded no longer replays; it can only be closed
+(`uro campaign encounter <campaign> --abandon`, after the upgrade too).
+
 For embedders: an `EventStore`/`EngineStore` of your own returns joins in `open_encounters`' log
-(an `EncounterJoined` payload among the turns). A ruleset plugin needs no change: the four new
-hooks are optional. Changed: in a campaign playing fights turn by turn, a second player attacking
+(an `EncounterJoined` payload among the turns), and `append_fight_beat`'s `turns_seen` counts that
+whole log. A ruleset plugin needs no change: the five new hooks are optional. `uro serve` now runs
+one beat at a time per campaign. Changed: in a campaign playing fights turn by turn, a second player attacking
 someone already in a fight now joins it (it used to play as free-roam), and a refused fight action
 passes the table's turn when its holder's fight waits on someone else.
 
@@ -23,11 +29,12 @@ passes the table's turn when its holder's fight waits on someone else.
   undecided: `Engine.abandon_fight`, `POST /campaigns/{c}/encounter/abandon` (operator),
   `uro campaign encounter --abandon`, the `encounter_abandoned` frame.
 - **A known NPC without a sheet rolls its free-roam check** on a first sheet built from its hint
-  (it used to be skipped).
+  (it used to be skipped). The sheet is for the roll; it isn't stored.
 - **More than one player character in a fight** played turn by turn: a player joins by attacking
   someone in it (`EncounterJoined`); the fight says whose player it waits on
   (`encounter.participant_id`), that player acts whoever holds the table's turn, and a character
-  who leaves a fight that goes on plays on. Optional ruleset hooks `join_encounter` and `standing`.
+  who leaves a fight that goes on plays on. Optional ruleset hooks `join_encounter`, `standing`
+  and `leave_encounter`.
 - **`uro-composable`**, a fourth built-in ruleset whose whole game is its settings: a definition
   (ratings on a step scale, tracks, tags, modifiers, actions, choices, gear, encounter, foes) and a
   resolver (`d20`, `2d6` or `pool`). Examples in `examples/definitions/`; docs/06.

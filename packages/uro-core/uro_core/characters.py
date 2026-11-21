@@ -438,7 +438,12 @@ async def rebuild_character(
     # what a build gave (a kit) follows the build; what the player chose follows `holdings`
     replaced: dict[str, list[dict[str, Any]]] = {}
     if spec is not None and callable(getattr(ruleset, "starting_holdings", None)):
-        replaced[GRANTED] = granted_holdings(ruleset, spec)
+        granted = granted_holdings(ruleset, spec)
+        had = any(
+            h.get("kind") == GRANTED for h in await store.holdings(campaign.branch_id, actor_id)
+        )
+        if granted or had:  # a build that gives and gave nothing changes nothing held
+            replaced[GRANTED] = granted
     if holdings is not None:
         replaced[CHOSEN] = chosen_holdings(ruleset, holdings)
     if replaced:

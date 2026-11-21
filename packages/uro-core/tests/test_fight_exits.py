@@ -215,5 +215,57 @@ async def test_a_known_npc_rolls_its_check_on_a_first_sheet(store: PostgresEvent
     beat = await engine.run_beat(c, "p", "The Sage studies the door", plan=plan)
     assert [o.actor_id for o in beat.outcomes] == ["a:sage"]  # it rolled (it used to be skipped)
     assert beat.outcomes[0].player_view is None  # an NPC's numbers stay hidden
-    sheet = await store.get_sheet(c.branch_id, "a:sage")
-    assert sheet is not None and sheet["level"] == 3  # built from its danger word, and kept
+    # the sheet was for the roll only (review): fixing it now would ignore a danger word the story
+    # gives the Sage later, and an NPC's check changes nothing of its own
+    assert await store.get_sheet(c.branch_id, "a:sage") is None
+    again = await engine.run_beat(c, "p", "The Sage studies the door again", plan=plan)
+    assert [o.actor_id for o in again.outcomes] == ["a:sage"]
+
+
+async def test_the_loot_goes_to_one_still_standing_and_never_from_one_who_left_earlier(
+    store: PostgresEventStore,
+) -> None:
+    c, engine = await _fight(store)
+    pc = await store.pc_for_participant(c.campaign_id, "p")
+    assert pc is not None
+    await store.append_beat(c.branch_id, [actor_created(actor_id="a:ally", name="Ally")])
+    sheet = UroBasic().new_character(CharSpec(data={}), Rng(0))
+    combatants = [  # the hero opened the fight, so is listed first
+        Combatant(actor_id=pc, team="aggressor", sheet=sheet, is_pc=True),
+        Combatant(actor_id="a:ally", team="aggressor", sheet=sheet),
+        Combatant(actor_id="a:brute", team="defender", sheet=sheet),
+    ]
+    won = EncounterOutcome(
+        winner_team="aggressor", survivors=["a:ally"], out_of_fight=["a:brute"], fled=[pc]
+    )
+    fallout = await engine._combat_consequences(c.branch_id, won, combatants)
+    loot = [e.payload for e in fallout if e.event_type == "ItemTransferred"]
+    assert [x["to_ref"] for x in loot] == ["a:ally"]  # not the hero, who had run
+    nobody = EncounterOutcome(winner_team="aggressor", out_of_fight=["a:brute"], fled=[pc])
+    fallout = await engine._combat_consequences(c.branch_id, nobody, combatants)
+    assert [e.event_type for e in fallout] == ["ClaimRecorded"]  # wounded; no one there to loot
+    # one beaten and released before the end is wounded, but what they hold is theirs
+    lost = EncounterOutcome(winner_team="defender", survivors=["a:brute"], out_of_fight=[pc])
+    fallout = await engine._combat_consequences(c.branch_id, lost, combatants, frozenset({pc}))
+    assert pc in {r for e in fallout if e.event_type == "ClaimRecorded" for r in e.entity_refs}
+    assert "ItemTransferred" not in [e.event_type for e in fallout]  # the purse stays theirs
+    fallout = await engine._combat_consequences(c.branch_id, lost, combatants)
+    assert "ItemTransferred" in [e.event_type for e in fallout]  # (beaten in the last beat: looted)
+
+
+async def test_a_fight_that_no_longer_replays_can_still_be_closed(
+    store: PostgresEventStore,
+) -> None:
+    class Changed(UroBasic):  # the rules a fight began under are not the rules now
+        def resolve_action(self, state: Any, action: Any, rng: Any) -> Any:
+            raise RuntimeError("doesn't replay")
+
+    c, engine = await _fight(store)
+    await engine.run_beat(c, "p", "I hold", action=TurnChoice(kind="defend"))
+    later = Engine(store, ProviderRouter(bindings={}, default=_Narrator()), ruleset=Changed())
+    assert await later.abandon_fight(c) is not None
+    b = await store.get_branch(c.branch_id)
+    last = await store.commit_detail(b.world_id, b.head_commit)  # type: ignore[union-attr,arg-type]
+    types = [e.event_type for e in last.events]  # type: ignore[union-attr]
+    assert "EncounterEnded" in types and "SheetUpdated" not in types
+    assert await store.open_encounters(c.branch_id) == []
