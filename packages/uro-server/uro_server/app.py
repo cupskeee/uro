@@ -3107,6 +3107,17 @@ def _beat_details(result: BeatResult) -> dict[str, object]:
     }
 
 
+async def _fight_waits_on(deps: ServerDeps, campaign_id: str, participant: str) -> bool:
+    """Whether an open fight waits on this participant's own character (D-114)."""
+    if deps.fight_status is None:
+        return False
+    try:
+        wait = await deps.fight_status(campaign_id, participant)
+    except (ChoiceRefused, KeyError):
+        return False
+    return wait is not None and wait.get("participant_id") == participant
+
+
 async def _run_and_broadcast(
     deps: ServerDeps,
     arbiter: TurnArbiter,
@@ -3125,6 +3136,16 @@ async def _run_and_broadcast(
         return
     echo = {"intent_id": intent_id[:64]} if isinstance(intent_id, str) and intent_id else {}
     decision = await arbiter.admit(campaign_id, participant, text)
+    # D-114: a fight has its own turn order. A player whose character the fight waits on plays
+    # that turn whoever holds the table's turn; the table's turn passes only when its holder acts.
+    holds_turn = decision == AdmitDecision.ADMITTED
+    if (
+        not holds_turn
+        and action is not None
+        and decision in (AdmitDecision.NOT_YOUR_TURN, AdmitDecision.QUEUED)
+        and await _fight_waits_on(deps, campaign_id, participant)
+    ):
+        decision = AdmitDecision.ADMITTED
     if decision == AdmitDecision.NOT_YOUR_TURN:
         # Valid intent, but another participant holds the turn (round-robin, OQ-7) — tell the
         # client to hold; it is NOT rejected, so a client may retry when the token rotates.
@@ -3206,9 +3227,14 @@ async def _run_and_broadcast(
                 "participant_id": participant,
                 "reason": str(exc),
                 "legal_actions": [a.model_dump() for a in exc.legal_actions],
+                "waiting_on": exc.waiting_on,  # D-114: the character whose move it is, if another's
                 **echo,
             },
         )
+        # D-114, the one refusal that passes the table's turn: its holder is in a fight that
+        # waits on someone else, so holding the turn for them would stall everyone not in it.
+        if holds_turn and exc.waiting_on is not None:
+            await arbiter.beat_committed(campaign_id, participant, "")
         return
     except Exception:
         # A beat failure (e.g. a ruleset mismatch, a provider error) must NOT crash the WS
@@ -3248,4 +3274,6 @@ async def _run_and_broadcast(
         },
     )
     # The beat committed — let the arbiter rotate the turn token to the next participant (OQ-7).
-    await arbiter.beat_committed(campaign_id, participant, "")
+    # A fight turn played out of the table's order (D-114) leaves the token where it was.
+    if holds_turn:
+        await arbiter.beat_committed(campaign_id, participant, "")

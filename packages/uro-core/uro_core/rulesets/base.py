@@ -173,6 +173,28 @@ def check_holdings(ruleset: Any, holdings: list[Holding]) -> None:
         raise CharSpecError(spec_problems(exc)) from exc
 
 
+def join_encounter(
+    ruleset: Any, state: EncounterState, combatant: Combatant, rng: Rng
+) -> EncounterState | None:
+    """The fight with `combatant` added to it (D-114), through the ruleset's optional
+    `join_encounter(state, combatant, rng)`: where a latecomer falls in the turn order (and what
+    it rolls for that) is the ruleset's. None for a ruleset without the hook: its fights take
+    nobody after they start."""
+    fn = getattr(ruleset, "join_encounter", None)
+    if not callable(fn):
+        return None
+    joined: EncounterState = fn(state, combatant, rng)
+    return joined
+
+
+def standing(ruleset: Any, state: EncounterState) -> frozenset[str] | None:
+    """The combatants still in the fight (D-114): not beaten, not gone. The ruleset's optional
+    `standing(state)`; None for a ruleset without the hook, which the engine reads as "everyone,
+    until the fight ends"."""
+    fn = getattr(ruleset, "standing", None)
+    return frozenset(fn(state)) if callable(fn) else None
+
+
 class Choice(BaseModel):
     """A choice a ruleset leaves for a player about their character (D-113): how it grows, what a
     setback costs. Ruleset-shaped and opaque to the engine: an id, the words to show, the options
@@ -409,6 +431,12 @@ class Ruleset(Protocol):
     ) -> tuple[EncounterState, list[Effect]]: ...
 
     def is_over(self, state: EncounterState) -> EncounterOutcome | None: ...
+
+    # Optional since D-114 (a ruleset without them still loads; read through the module's
+    # `join_encounter` / `standing`): `join_encounter(state, combatant, rng) -> EncounterState`
+    # adds a combatant to a fight under way, and `standing(state)` lists who is still in it. Both
+    # must be pure functions of their inputs and the Rng, like every encounter method: a fight
+    # played turn by turn is rebuilt by replaying them.
 
     def conclude_encounter(
         self, state: EncounterState, outcome: EncounterOutcome, pcs: frozenset[str]

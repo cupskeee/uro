@@ -851,6 +851,18 @@ class EncounterTurnTakenPayload(BaseModel):
     chosen: dict[str, Any] | None = None
 
 
+class EncounterJoinedPayload(BaseModel):
+    """A combatant entered a fight played turn by turn after it began (D-114): which side, and the
+    combatant as it entered (sheet, holdings), so the fight replays with the join in its place
+    among the turns."""
+
+    v: int = 1
+    encounter_id: str
+    actor_id: str
+    team: str
+    combatant: dict[str, Any] = Field(default_factory=dict)
+
+
 class EncounterEndedPayload(BaseModel):
     v: int = 1
     encounter_id: str
@@ -974,6 +986,24 @@ def encounter_turn_taken(
             result=result,
             trace=trace,
             chosen=chosen,
+        ).model_dump(),
+    )
+
+
+def encounter_joined(
+    *,
+    encounter_id: str,
+    actor_id: str,
+    team: str,
+    combatant: dict[str, Any],
+    caused_by: CausedBy | None = None,
+) -> DomainEvent:
+    return DomainEvent(
+        event_type="EncounterJoined",
+        entity_refs=[actor_id],
+        caused_by=_default_cause(caused_by),
+        payload=EncounterJoinedPayload(
+            encounter_id=encounter_id, actor_id=actor_id, team=team, combatant=combatant
         ).model_dump(),
     )
 

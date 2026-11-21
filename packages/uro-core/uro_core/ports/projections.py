@@ -152,7 +152,8 @@ class ProjectionQueries(Protocol):
     async def open_encounters(
         self, branch_id: str
     ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
-        """The fights being played turn by turn on the branch (D-112): each start and its turns."""
+        """The fights being played turn by turn on the branch (D-112): each start and its log in
+        order, turns and later joins (D-114: an EncounterJoined payload carries `combatant`)."""
         ...
 
     async def holdings(self, branch_id: str, owner_ref: str) -> list[dict[str, Any]]:

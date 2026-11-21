@@ -82,9 +82,7 @@ async def test_one_open_fight_never_hides_another(store: PostgresEventStore) -> 
     engine = _engine(store)
     first = await engine.run_beat(c, "p", "I attack the brute", plan=_attack("a:brute"))
     assert first.encounter is not None
-    # q can't pull the brute (already fighting) into a second fight: it plays as free-roam
-    pulled = await engine.run_beat(c, "q", "I attack the brute too", plan=_attack("a:brute"))
-    assert pulled.encounter is None and pulled.mode == "freeroam"
+    # (attacking the brute would bring q INTO p's fight since D-114: test_coop_fights.py)
     # q's own fight with the wolf opens beside p's, and each player sees their own
     own = await engine.run_beat(c, "q", "I attack the wolf", plan=_attack("a:wolf"))
     assert own.encounter is not None

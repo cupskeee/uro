@@ -31,6 +31,7 @@ from uro_core.rulesets.base import (
     CharSpecError,
     CheckRequest,
     CheckResult,
+    Combatant,
     Effect,
     EncounterCtx,
     EncounterOutcome,
@@ -272,6 +273,22 @@ class UroPbtA:
         if self.is_over(st) is not None:
             return None
         return st.order[st.turn_index]
+
+    def join_encounter(
+        self, state: EncounterState, combatant: Combatant, rng: Rng
+    ) -> EncounterState:
+        """A latecomer (D-114) takes the last place in the exchange."""
+        st = _as_enc(state).model_copy(deep=True)
+        st.fighters[combatant.actor_id] = _Fighter(
+            actor_id=combatant.actor_id,
+            team=combatant.team,
+            sheet=Sheet.model_validate(combatant.sheet),
+        )
+        st.order.append(combatant.actor_id)
+        return st
+
+    def standing(self, state: EncounterState) -> list[str]:
+        return sorted(a for a, f in _as_enc(state).fighters.items() if f.active)
 
     def sheets(self, state: EncounterState) -> dict[str, SheetDict]:
         return {a: f.sheet.model_dump() for a, f in _as_enc(state).fighters.items()}

@@ -29,6 +29,7 @@ from uro_core.domain.events import (
     DomainEvent,
     actor_died,
     encounter_ended,
+    encounter_joined,
     encounter_started,
     encounter_turn_taken,
     ruleset_cause,
@@ -43,6 +44,8 @@ from uro_core.rulesets.base import (
     EncounterOutcome,
     EncounterState,
     Ruleset,
+    join_encounter,
+    standing,
 )
 from uro_core.rulesets.rng import Rng
 
@@ -113,7 +116,11 @@ def _conclude(
     encounter_id: str,
     cause: Any,
     lethal: bool,
+    released: frozenset[str] = frozenset(),
 ) -> tuple[list[DomainEvent], EncounterOutcome]:
+    """The decided fight's final sheets and its end. `released` (D-114) are player characters who
+    left a fight that went on without them: their sheets were committed when they left and are
+    theirs again since, so the fight's end doesn't write over them."""
     outcome = ruleset.is_over(state) or EncounterOutcome()
     # Persist ruleset-shaped harm as OPAQUE final sheets — the timeline never assumes hp (D-30) —
     # after the ruleset's own aftermath (advancement for the player characters, D-63).
@@ -124,6 +131,7 @@ def _conclude(
             actor_id=actor_id, sheet=final[actor_id], ruleset_id=ruleset.id, caused_by=cause
         )
         for actor_id in sorted(final)
+        if actor_id not in released
     ]
     if lethal:
         for actor_id in outcome.out_of_fight:
@@ -183,9 +191,18 @@ class ChoiceRefused(ValueError):
     """A player's encounter action that can't be played now (D-112): not their turn, or not one
     of the legal actions, which are carried so a client can offer them."""
 
-    def __init__(self, reason: str, legal_actions: list[ActionSpec] | None = None) -> None:
+    def __init__(
+        self,
+        reason: str,
+        legal_actions: list[ActionSpec] | None = None,
+        *,
+        waiting_on: str | None = None,
+    ) -> None:
         super().__init__(reason)
         self.legal_actions = legal_actions or []
+        # D-114: the character the fight waits on, when that is someone else's (a table's turn
+        # arbiter then lets the turn pass instead of holding it for a player who can't act)
+        self.waiting_on = waiting_on
 
 
 class TurnChoice(BaseModel):
@@ -206,7 +223,9 @@ def _step(
     *,
     encounter_id: str,
     cause: Any,
+    before: frozenset[str] | None = None,
 ) -> FightStep:
+    """`before` is who stood in the fight when this beat's step began (None: everyone)."""
     players = frozenset(c.actor_id for c in combatants if c.is_pc)
     state, turns = _advance(
         ruleset, state, rng, encounter_id=encounter_id, cause=cause, players=players
@@ -214,6 +233,16 @@ def _step(
     events = [*events, *turns]
     waiting = _waits_on(ruleset, state, players)
     if waiting is not None and ruleset.is_over(state) is None:
+        # D-114: a player character who left this beat (beaten, or away) while the fight goes on
+        # is no longer bound to it. Its sheet is committed as it left, and is its own from here.
+        now = standing(ruleset, state)
+        if now is not None:
+            sheets = ruleset.sheets(state)
+            events += [
+                sheet_updated(actor_id=a, sheet=sheets[a], ruleset_id=ruleset.id, caused_by=cause)
+                for a in sorted(players - now)
+                if before is None or a in before
+            ]
         return FightStep(
             encounter_id=encounter_id,
             events=events,
@@ -221,9 +250,23 @@ def _step(
             legal_actions=ruleset.legal_actions(state, waiting),
         )
     ending, outcome = _conclude(
-        ruleset, state, combatants, encounter_id=encounter_id, cause=cause, lethal=False
+        ruleset,
+        state,
+        combatants,
+        encounter_id=encounter_id,
+        cause=cause,
+        lethal=False,
+        released=frozenset() if before is None else players - before,
     )
     return FightStep(encounter_id=encounter_id, events=[*events, *ending], outcome=outcome)
+
+
+def fighters_of(started: dict[str, Any], log: list[dict[str, Any]]) -> list[Combatant]:
+    """Everyone in an open fight: those who began it and those who joined since (D-114)."""
+    return [
+        *(Combatant.model_validate(c) for c in started.get("combatants", [])),
+        *(Combatant.model_validate(e["combatant"]) for e in log if "combatant" in e),
+    ]
 
 
 def open_fight(
@@ -251,15 +294,27 @@ def open_fight(
 def replay_fight(
     ruleset: Ruleset, started: dict[str, Any], turns: list[dict[str, Any]]
 ) -> tuple[EncounterState, Rng, list[Combatant]]:
-    """Rebuild an open fight's state from its EncounterStarted payload and its turns so far: the
-    same start and the same actions (a player's recorded choice, or the ruleset's own, decided
-    again) on the same dice stream."""
+    """Rebuild an open fight's state from its EncounterStarted payload and its log so far: the
+    same start, the same joins in their places (D-114) and the same actions (a player's recorded
+    choice, or the ruleset's own, decided again) on the same dice stream. Returns the state, the
+    Rng where the log left it, and everyone in the fight."""
     rng = Rng(int(started["seed"]))
     combatants = [Combatant.model_validate(c) for c in started["combatants"]]
     state = ruleset.start_encounter(
         EncounterCtx(encounter_id=started["encounter_id"], combatants=combatants), rng
     )
     for t in turns:
+        if "combatant" in t:  # an EncounterJoined: someone entered here
+            joiner = Combatant.model_validate(t["combatant"])
+            joined = join_encounter(ruleset, state, joiner, rng)
+            if joined is None:
+                raise RuntimeError(
+                    f"encounter {started['encounter_id']} doesn't replay: {joiner.actor_id!r} "
+                    f"joined it, and {ruleset.id} takes no one into a fight under way"
+                )
+            state = joined
+            combatants.append(joiner)
+            continue
         actor_id = ruleset.current_actor(state)
         if actor_id != t["actor_id"]:
             raise RuntimeError(
@@ -292,7 +347,7 @@ def take_turn(
     current = ruleset.current_actor(state)
     legal = ruleset.legal_actions(state, current) if current else []
     if current != actor_id:
-        raise ChoiceRefused(f"it isn't {actor_id}'s turn (it's {current}'s)", [])
+        raise ChoiceRefused(f"it isn't {actor_id}'s turn (it's {current}'s)", waiting_on=current)
     spec = next((a for a in legal if a.kind == choice.kind), None)
     if spec is None:
         kinds = ", ".join(a.kind for a in legal) or "none"
@@ -305,6 +360,48 @@ def take_turn(
             f"{choice.kind!r} needs a target among {', '.join(spec.targets)}", legal
         )
     action = Action(kind=choice.kind, actor_id=actor_id, target_id=target, data=choice.data)
+    before = standing(ruleset, state)
     state, effects = ruleset.resolve_action(state, action, rng)
     turn = _turn_event(encounter_id, actor_id, action, effects, cause, chosen=True)
-    return _step(ruleset, state, rng, combatants, [turn], encounter_id=encounter_id, cause=cause)
+    return _step(
+        ruleset,
+        state,
+        rng,
+        combatants,
+        [turn],
+        encounter_id=encounter_id,
+        cause=cause,
+        before=before,
+    )
+
+
+def join_fight(
+    ruleset: Ruleset, started: dict[str, Any], log: list[dict[str, Any]], combatant: Combatant
+) -> FightStep | None:
+    """Bring `combatant` into an open fight (D-114), then play the ruleset's turns up to the next
+    player's choice or the end. None when the ruleset takes no one into a fight under way. The
+    join is an event in the fight's log, so later turns replay it in its place."""
+    encounter_id = started["encounter_id"]
+    cause = ruleset_cause(encounter_id)
+    state, rng, combatants = replay_fight(ruleset, started, log)
+    before = standing(ruleset, state)
+    joined = join_encounter(ruleset, state, combatant, rng)
+    if joined is None:
+        return None
+    event = encounter_joined(
+        encounter_id=encounter_id,
+        actor_id=combatant.actor_id,
+        team=combatant.team,
+        combatant=combatant.model_dump(),
+        caused_by=cause,
+    )
+    return _step(
+        ruleset,
+        joined,
+        rng,
+        [*combatants, combatant],
+        [event],
+        encounter_id=encounter_id,
+        cause=cause,
+        before=None if before is None else before | {combatant.actor_id},
+    )

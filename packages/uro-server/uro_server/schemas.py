@@ -546,6 +546,7 @@ class EncounterWaitOut(Out):
     encounter_id: str
     actor_id: str
     legal_actions: list[ActionSpecOut]
+    participant_id: str | None = None  # D-114: who plays that character
 
 
 class FightAbandoned(Out):

@@ -3107,3 +3107,99 @@ def test_openapi_describes_every_input() -> None:
     assert "security" not in spec["paths"]["/healthz"]["get"]
     assert spec["paths"]["/version"]["get"]["security"] == [{"bearer": []}, {"token": []}]
     assert set(spec["components"]["securitySchemes"]) == {"bearer", "token"}
+
+
+# --- D-114: a fight's turn order beside the table's ---
+
+
+def _fight_table(waits_on: dict[str, str]) -> tuple[ServerDeps, list[str]]:
+    """Fake deps for a two-player table in one fight: `waits_on["who"]` is the participant the
+    fight waits on. A beat by anyone else is refused, naming the character it waits on."""
+    from uro_core.pipeline.encounter import ChoiceRefused
+
+    deps = _fake_deps()
+    played: list[str] = []
+
+    async def run_beat(
+        campaign_id: str, participant: str, text: str, action: Any = None
+    ) -> AsyncIterator[Any]:
+        if waits_on["who"] and participant != waits_on["who"]:
+            raise ChoiceRefused("it is another's move", waiting_on=f"a:{waits_on['who']}")
+        played.append(participant)
+        yield "Steel rings."
+
+    async def fight_status(campaign_id: str, participant: str | None) -> dict[str, Any] | None:
+        if not waits_on["who"]:
+            return None
+        return {
+            "encounter_id": "e:1",
+            "actor_id": f"a:{waits_on['who']}",
+            "legal_actions": [],
+            "participant_id": waits_on["who"],
+        }
+
+    deps.run_beat = run_beat  # type: ignore[assignment]
+    deps.fight_status = fight_status
+    return deps, played
+
+
+def test_a_fight_turn_is_played_whoever_holds_the_tables_turn() -> None:
+    from uro_core.session import PartyArbiter
+
+    waits_on = {"who": "player-2"}
+    deps, played = _fight_table(waits_on)
+    client = TestClient(create_app(deps, arbiter=PartyArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,  # holds the turn
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")
+        # player-2 without an action is held by the table as ever
+        b.send_json({"type": "intent", "text": "I look around"})
+        assert _recv_until(a, "not_your_turn")[-1]["participant_id"] == "player-2"
+        # with an action, on a fight that waits on their character, they play
+        b.send_json({"type": "intent", "action": {"kind": "strike"}})
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"
+        # and the table's turn stayed with player-1
+        waits_on["who"] = ""
+        a.send_json({"type": "intent", "text": "I look around"})
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-1"
+    assert played == ["player-2", "player-1"]
+
+
+def test_an_action_out_of_the_fights_order_is_still_held_by_the_table() -> None:
+    from uro_core.session import PartyArbiter
+
+    deps, played = _fight_table({"who": "player-1"})
+    client = TestClient(create_app(deps, arbiter=PartyArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")
+        b.send_json({"type": "intent", "action": {"kind": "strike"}})
+        assert _recv_until(a, "not_your_turn")[-1]["participant_id"] == "player-2"
+    assert played == []
+
+
+def test_a_holder_whose_fight_waits_on_another_passes_the_tables_turn() -> None:
+    from uro_core.session import PartyArbiter
+
+    waits_on = {"who": "player-2"}
+    deps, played = _fight_table(waits_on)
+    client = TestClient(create_app(deps, arbiter=PartyArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,  # holds the turn
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")
+        a.send_json({"type": "intent", "text": "I look around", "id": "i-1"})
+        refused = _recv_until(a, "encounter_action_refused")[-1]
+        assert refused["waiting_on"] == "a:player-2" and refused["intent_id"] == "i-1"
+        # the turn passed: player-2 now plays without an action too
+        b.send_json({"type": "intent", "text": "I press on"})
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"
+    assert played == ["player-2"]

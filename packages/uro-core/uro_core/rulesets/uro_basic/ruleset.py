@@ -28,6 +28,7 @@ from uro_core.rulesets.base import (
     CheckRequest,
     CheckResult,
     Choice,
+    Combatant,
     Effect,
     EncounterCtx,
     EncounterOutcome,
@@ -364,6 +365,24 @@ class UroBasic:
         if self.is_over(st) is not None:
             return None
         return st.order[st.turn_index]
+
+    def join_encounter(
+        self, state: EncounterState, combatant: Combatant, rng: Rng
+    ) -> EncounterState:
+        """A latecomer (D-114) rolls initiative (kept on record) and acts last in the order."""
+        sheet = Sheet.model_validate(combatant.sheet)
+        st = _as_enc(state).model_copy(deep=True)
+        st.fighters[combatant.actor_id] = _Fighter(
+            actor_id=combatant.actor_id,
+            team=combatant.team,
+            sheet=sheet,
+            initiative=rng.d20() + sheet.modifier("DEX"),
+        )
+        st.order.append(combatant.actor_id)  # acts last this round, whatever it rolled
+        return st
+
+    def standing(self, state: EncounterState) -> list[str]:
+        return sorted(a for a, f in _as_enc(state).fighters.items() if f.active)
 
     def sheets(self, state: EncounterState) -> dict[str, SheetDict]:
         return {a: f.sheet.model_dump() for a, f in _as_enc(state).fighters.items()}
