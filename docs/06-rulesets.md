@@ -60,7 +60,10 @@ dice, capped, with the spec's own values winning. `CheckRequest.holdings` and `C
 carry what the actor holds (`Holding`: item id, name, opaque data from a pack's `{name, data}`
 starting gear); a ruleset may ignore them. `Effect.player_view` does the same for an action in a fight (D-118):
 set on the effect of the action being resolved, it reaches the acting character's own player
-among the beat's checks. `CheckResult.player_view` is the part of a check a
+among the beat's checks; a ruleset that resolves a round at once names whose roll each is in
+`Effect.viewer` (D-119). `sheet_reads(sheet)` (optional, D-119) says how a sheet reads to its
+player where the ruleset keeps a value one way and says it another (a step read as "+3"); it
+reaches the player's own character read as `reads`. `CheckResult.player_view` is the part of a check a
 player may see, the ruleset's choice (the built-ins: the actor's own dice, modifier, total, the
 difficulty faced and the band); the engine sends it only for the acting player's own character.
 

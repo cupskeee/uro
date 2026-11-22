@@ -32,8 +32,12 @@ and import, no longer at parse. `uro_core.rulesets.base.THREAT_LEVELS` is gone
 ### Changed
 
 - **A player's own fight turn carries its roll** (D-118). It arrives among a beat's `checks`
-  (`{affordance: the action, outcome, player_view}`) live and in the chronicle, for `uro-basic`,
-  `uro-pbta` and `uro-composable` (`uro-pool` resolves a round together and sends none yet). A ruleset sets `Effect.player_view` to offer one. `EncounterTurnTaken`
+  (`{affordance: the action, outcome, player_view}`) live and in the chronicle, for all four
+  built-ins. `uro-pool` resolves a round at once, so `Effect.viewer` says whose roll each is
+  and `EncounterTurnTaken.views` keeps the others' (D-119).
+- **A character in play says how it reads** (D-119). `GET /campaigns/{c}/character` gains
+  `reads`: for `uro-composable`, each rating's step, word and reading ("+3"), the same values a
+  creation preview gives. A ruleset offers it through the optional `sheet_reads(sheet)`. A ruleset sets `Effect.player_view` to offer one. `EncounterTurnTaken`
   gains optional `target_id`, `out` and `player_view`.
 - **The threat scale is the ruleset's** (D-116). The five danger words left the ruleset port and
   the default extractor prompt. A ruleset declares its own words and what they measure

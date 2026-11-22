@@ -138,3 +138,47 @@ async def test_characters_over_rest(store: PostgresEventStore) -> None:
         r = await client.patch(_q(f"/campaigns/{cid}/character", _BOB), json={"name": "Late"})
         assert r.status_code == 409 and "story has started" in r.json()["detail"]
         assert not (await client.get(_q(f"/campaigns/{cid}/character", _BOB))).json()["build_open"]
+
+
+async def test_a_character_in_play_says_how_its_ratings_read(store: PostgresEventStore) -> None:
+    """D-119: a game that keeps a rating as a step says how it reads (`+3`, a word), on the
+    player's own character, so a client shows the same thing its creation preview showed. A
+    ruleset with nothing to add says nothing."""
+    world = await store.create_world(f"Reads-{new_id()}")
+    game = {
+        "definition": {
+            "scale": {"min": 0, "max": 2, "words": ["poor", "fair", "fine"]},
+            "ratings": [{"key": "str", "label": "Strength"}, {"key": "wit", "label": "Wit"}],
+        },
+        "resolver": {"kind": "d20"},
+    }
+    async with _client(store) as client:
+        preview = (
+            await client.post(
+                _q(f"/worlds/{world.world_id}/character-preview"),
+                json={"spec": {"ratings": {"str": 2}}, "ruleset": "uro-composable",
+                      "ruleset_config": game},
+            )
+        ).json()  # fmt: skip
+        assert preview["ok"], preview
+        started = await client.post(
+            _q(f"/worlds/{world.world_id}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "Ada", "spec": {"ratings": {"str": 2}},
+                  "ruleset": "uro-composable", "ruleset_config": game},
+        )  # fmt: skip
+        assert started.status_code == 200, started.text
+        own = (await client.get(_q(f"/campaigns/{started.json()['campaign_id']}/character"))).json()
+        reads = own["reads"]["ratings"]
+        assert reads["str"]["step"] == own["sheet"]["ratings"]["str"] == 2
+        assert reads["str"]["word"] == "fine" and reads["wit"]["word"] in ("poor", "fair")
+        # the very reading the preview's guidance gave for the same step
+        assert reads["str"]["reads"] == preview["guidance"]["ratings"]["str"]["reads"]
+
+        other = await store.create_world(f"Plain-{new_id()}")
+        plain = await client.post(
+            _q(f"/worlds/{other.world_id}/campaigns"),
+            json={"participant": "alice", "new_pc_name": "Bo"},
+        )
+        assert plain.status_code == 200, plain.text
+        bo = (await client.get(_q(f"/campaigns/{plain.json()['campaign_id']}/character"))).json()
+        assert bo["reads"] is None

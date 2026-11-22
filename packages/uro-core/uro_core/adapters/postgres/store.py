@@ -1429,14 +1429,15 @@ class PostgresEventStore:
                        -- turn keeps what a client shows of it (D-118): the action, its result
                        -- and the roll the ruleset lets that player see.
                        CASE WHEN e.event_type = 'EncounterTurnTaken'
-                                 AND e.payload->'chosen' IS NOT NULL
-                                 AND e.payload->'chosen' <> 'null'::jsonb
                             THEN jsonb_build_object(
                                 'actor_id', e.payload->'actor_id',
                                 'action', e.payload->'action',
                                 'result', e.payload->'result',
-                                'chosen', '{}'::jsonb,
-                                'player_view', e.payload->'player_view')
+                                'chosen', CASE WHEN e.payload->'chosen' IS NULL
+                                                 OR e.payload->'chosen' = 'null'::jsonb
+                                               THEN 'null'::jsonb ELSE '{}'::jsonb END,
+                                'player_view', e.payload->'player_view',
+                                'views', COALESCE(e.payload->'views', '{}'::jsonb))
                             WHEN e.event_type LIKE 'Encounter%' THEN '{}'::jsonb
                             ELSE e.payload END AS payload
                 FROM chain JOIN events e ON e.commit_id = chain.commit_id

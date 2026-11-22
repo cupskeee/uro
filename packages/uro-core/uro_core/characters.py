@@ -45,6 +45,7 @@ from uro_core.rulesets.base import (
     check_holdings,
     creation_guidance,
     pending_choices,
+    sheet_reads,
     spec_schema_of,
     starting_holdings,
 )
@@ -115,6 +116,10 @@ class CharacterView(BaseModel):
     # D-113: choices the ruleset left for this player (how the character grows, what a setback
     # costs), answered with `answer_character_choice`; play never waits on them
     choices: list[Choice] = Field(default_factory=list)
+    # D-119: how the sheet reads to its player where the ruleset keeps a value one way and says
+    # it another (`{"ratings": {"str": {"step": 4, "word": "", "reads": "+3"}}}`); None when
+    # the ruleset says nothing
+    reads: dict[str, Any] | None = None
 
 
 async def campaign_game(
@@ -488,6 +493,7 @@ async def own_character(
     sheet = await store.get_sheet(campaign.branch_id, actor_id)
     reason = await store.character_frozen(campaign.branch_id, actor_id)
     ruleset = campaign.ruleset_id or (await store.world_ruleset(campaign.branch_id)).id
+    bound = await resolve_for_campaign(store, campaign)
     return CharacterView(
         campaign_id=campaign.campaign_id,
         participant_id=participant_id,
@@ -498,7 +504,8 @@ async def own_character(
         holdings=await store.holdings(campaign.branch_id, actor_id),
         build_open=reason is None,
         frozen_reason=reason or "",
-        choices=pending_choices(await resolve_for_campaign(store, campaign), sheet),
+        choices=pending_choices(bound, sheet),
+        reads=sheet_reads(bound, sheet),
     )
 
 

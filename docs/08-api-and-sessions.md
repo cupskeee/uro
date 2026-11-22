@@ -68,7 +68,7 @@ GET  /campaigns/{c}                                                one campaign
 POST /campaigns/{c}/join         {participant, new_pc_name|adopt_actor_id|character, spec?, holdings?}   bind an additional PC, built from `spec` under the campaign's game (D-112)
 POST /campaigns/{c}/character/preview {spec?}                      the sheet a spec would make under the campaign's game, or `{ok: false, problems}` (D-112)
 POST /campaigns/{c}/character/proposal {description}               a build proposed from free text under the campaign's game (OPERATOR-only, D-112)
-GET  /campaigns/{c}/character    [?participant=]                   your own character: sheet, holdings, whether its build is open; an operator may name another (D-112)
+GET  /campaigns/{c}/character    [?participant=]                   your own character: sheet, holdings, whether its build is open; an operator may name another (D-112); `reads`: how the sheet reads to its player, when the ruleset says (D-119)
 PATCH /campaigns/{c}/character   {spec?, name?, participant?}      rebuild and/or rename until the first beat after it was bound; then 409 with why (D-112)
 GET  /campaigns/{c}/encounter    [?participant=]                   the fight waiting on the caller's character (whose turn and whose player, legal actions), or `{encounter: null}` (D-112, D-114)
 POST /campaigns/{c}/encounter/abandon {participant?}               close a fight undecided: sheets as they stand, nobody wounded or looted; `{encounter_id}` or null (OPERATOR-only, D-114)

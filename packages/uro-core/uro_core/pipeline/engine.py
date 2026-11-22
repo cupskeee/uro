@@ -107,6 +107,7 @@ from uro_core.rulesets.base import (
     threat_scale,
 )
 from uro_core.rulesets.rng import Rng
+from uro_core.timeline.beats import fight_checks
 from uro_core.timeline.clock import day_cue
 from uro_core.timeline.models import Campaign, Commit, ThreadView
 from uro_core.worldpack.rules import RulePack
@@ -231,15 +232,19 @@ def _outcomes(ctx: _Context) -> list[CheckOutcome]:
 
 def _fight_outcomes(events: list[DomainEvent], pc_actor_id: str) -> list[CheckOutcome]:
     """The acting player's own turn in a fight, as a check a client can show (D-118): the action,
-    the ruleset's result for it and the part of the roll it lets that player see."""
+    the ruleset's result for it and the part of the roll it lets that player see (on the turn, or
+    among another turn's `views` when the ruleset resolves a round at once, D-119). A turn with
+    no view still reports its action and result."""
+    turns = [e.payload for e in events if e.event_type == "EncounterTurnTaken"]
+    seen = {c.affordance: c for c in fight_checks(turns) if c.actor_id == pc_actor_id}
     return [
         CheckOutcome(
-            actor_id=p["actor_id"],
+            actor_id=pc_actor_id,
             affordance=p["action"],
-            outcome=p.get("result") or "",
-            player_view=p.get("player_view"),
+            outcome=seen[p["action"]].outcome if p["action"] in seen else p.get("result") or "",
+            player_view=seen[p["action"]].player_view if p["action"] in seen else None,
         )
-        for p in (e.payload for e in events if e.event_type == "EncounterTurnTaken")
+        for p in turns
         if p.get("chosen") is not None and p["actor_id"] == pc_actor_id
     ]
 

@@ -79,9 +79,18 @@ def _turn_event(
         target_id=action.target_id or "",
         out=out,
         # a player's own turn only: what their ruleset lets them see of it (D-118)
-        player_view=next((e.player_view for e in effects if e.player_view), None)
+        player_view=next(
+            (e.player_view for e in effects if e.player_view and e.viewer in ("", actor_id)),
+            None,
+        )
         if chosen
         else None,
+        # rolls of OTHER fighters resolved on this turn, each for its own player (D-119)
+        views={
+            e.viewer: {"result": e.kind, "player_view": e.player_view}
+            for e in effects
+            if e.player_view and e.viewer not in ("", actor_id)
+        },
         caused_by=cause,
     )
 

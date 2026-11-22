@@ -650,6 +650,8 @@ class CharacterOut(Out):
     build_open: bool
     frozen_reason: str
     choices: list[ChoiceOut]  # D-113: what the ruleset left for this player to decide
+    # D-119: how the sheet reads to its player, in the ruleset's shape; null when it says nothing
+    reads: dict[str, Any] | None = None
 
 
 class CampaignCreated(Out):
