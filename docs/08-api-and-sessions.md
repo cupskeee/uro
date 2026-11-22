@@ -74,7 +74,7 @@ GET  /campaigns/{c}/encounter    [?participant=]                   the fight wai
 POST /campaigns/{c}/encounter/abandon {participant?}               close a fight undecided: sheets as they stand, nobody wounded or looted; `{encounter_id}` or null (OPERATOR-only, D-114)
 POST /campaigns/{c}/character/choices/{id} {answer, participant?}  answer a choice the ruleset left on your character; 400 with problems if refused, 409 if the sheet changed meanwhile; not a beat (D-113)
 GET  /campaigns/{c}/roster                                         active PC ids
-GET  /campaigns/{c}/state        [?sections=actors,threads,…]      branch projections; player allowlist, omniscient sections operator-only (D-46) (B5)
+GET  /campaigns/{c}/state        [?sections=actors,threads,…][&scope=story]  branch projections; player allowlist, omniscient sections operator-only (D-46) (B5). `scope=story` narrows actors, places, factions and threads to what the told story has shown: named or made by a beat, every actor with a player binding, threads not dormant (D-117); the response says its `scope`
 GET  /campaigns/{c}/chronicle    [?limit=]                         recent beats, oldest first: each one's words and what its commit said (`commit_id`, `mode`, `checks` with `player_view` on the acting player's own character only, `created`, `threads_changed`: plots that moved until the next beat) (D-115)
 GET  /campaigns/{c}/pacing                                         each live thread's quiet beats + the one the next beat would name, under the world's `[pacing]` (D-95)
 DELETE /campaigns/{c}                                              remove the campaign and its branch; one on `main` or sharing its branch → 400 (OPERATOR-only, D-99)
@@ -304,7 +304,7 @@ uro serve --token alice --token bob       # run the server;  uro connect <campai
 uro serve --token dev --cors-origin http://localhost:5173   # allow a browser SPA — see "Browser access" below
 uro serve --nats nats://localhost:4222    # push commits made by ANY process to clients live (D-67; run `uro outbox relay` too)
 uro world list | uro campaign list [--world W] | uro campaign show <campaign>   # what exists, who sits where
-uro state <campaign> | uro state --world W [--branch B | --at REF] [--sections …]   # projections now, or at any past commit
+uro state <campaign> [--story] | uro state --world W [--branch B | --at REF] [--sections …]   # projections now, or at any past commit; --story = what the campaign's told story has shown (D-117)
 uro chronicle <campaign> | uro chronicle --world W --branch B   # recent beats, oldest first
 uro events <world> [--branch --type --entity --caused-by]      # the raw event log (operator view, D-45)
 uro show <world> <commit|prefix|marker>   # one commit's events;  ids print in FULL (a ULID's first 10 chars are a timestamp)

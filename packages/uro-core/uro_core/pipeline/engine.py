@@ -98,11 +98,13 @@ from uro_core.rulesets.base import (
     EncounterOutcome,
     Holding,
     Ruleset,
+    ThreatScale,
     build_character,
     leaving_sheet,
     pending_choices,
     ruleset_contract_problem,
     standing,
+    threat_scale,
 )
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.clock import day_cue
@@ -311,7 +313,12 @@ class Engine:
         semantic_k: int = 4,
         bare: bool = False,
         pacing: PacingSettings | None = None,
+        threat: ThreatScale | None = None,
     ) -> None:
+        # `threat`: the scale the extractor uses when NO ruleset is bound (D-116): a campaign
+        # played without mechanics still has a game, and its people are still sized up in that
+        # game's words. With a ruleset bound, the ruleset's own scale is used.
+        self._threat = threat
         problem = ruleset_contract_problem(ruleset) if ruleset is not None else None
         if problem is not None:  # fail here, not mid-fight on a missing hook (D-65 review)
             raise ValueError(f"ruleset {getattr(ruleset, 'id', '?')!r} can't be used: {problem}")
@@ -344,6 +351,7 @@ class Engine:
             semantic_k=self._semantic_k,
             bare=self._bare,
             pacing=self._pacing,
+            threat=self._threat,
         )
         sibling._shared = self._shared
         return sibling
@@ -2001,7 +2009,10 @@ class Engine:
         integrity is never sacrificed to keep prose, and prose is never lost to keep state).
         Also returns the live threads the beat brought into play (D-95), for its BeatResolved."""
         _, env = await self._prompt_style(branch_id)
-        messages = build_extractor_messages(recall, narration, env=env)
+        # the bound ruleset's own threat scale (D-116); without a ruleset, the one this engine
+        # was given (a campaign played without mechanics), else none
+        scale = threat_scale(self._ruleset) if self._ruleset is not None else self._threat
+        messages = build_extractor_messages(recall, narration, env=env, threat=scale)
         raw = ""
         for _ in range(3):  # 1 attempt + 2 re-asks (docs/13)
             try:
@@ -2026,7 +2037,12 @@ class Engine:
             if extraction is not None:
                 policy = await self._store.get_extraction_policy()
                 events = await run_gauntlet(
-                    self._store, branch_id, extraction, policy=policy, narration=narration
+                    self._store,
+                    branch_id,
+                    extraction,
+                    policy=policy,
+                    narration=narration,
+                    threat_words=scale.words if scale else (),
                 )
                 return events, touched_threads(extraction, recall.active_threads, events)
             messages = [

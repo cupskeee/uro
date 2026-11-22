@@ -18,8 +18,6 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from uro_core.rulesets.base import THREAT_LEVELS
-
 _STRICT = ConfigDict(extra="forbid", populate_by_name=True)
 Key = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,39}$")]
 Text = Annotated[str, StringConstraints(max_length=400)]
@@ -291,15 +289,16 @@ class Encounter(BaseModel):
 
 class FoeTier(BaseModel):
     """A ready level of foe: every rating at `steps`, the named tracks at these sizes. `threat`
-    lists the engine's danger words that pick this tier (the only way to one: a spec can't ask
-    for a tier, or a player's could)."""
+    lists the words that pick this tier (the only way to one: a spec can't ask for a tier, or a
+    player's could). The words are the game's own (D-116): together, in the order the tiers list
+    them, they are the scale the extractor picks from."""
 
     model_config = _STRICT
 
     key: Key
     steps: int
     tracks: dict[Key, int] = Field(default_factory=dict)
-    threat: list[str] = Field(default_factory=list)
+    threat: list[Key] = Field(default_factory=list, max_length=12)
 
 
 class HeldThing(BaseModel):
@@ -439,6 +438,11 @@ class Definition(BaseModel):
     advancement: AdvanceChoice | None = None
     encounter: Encounter | None = None
     foes: list[FoeTier] = Field(default_factory=list, max_length=_MAX_ITEMS)
+    # What the foe tiers' threat words measure, and examples, as the extractor is told (D-116):
+    # "how dangerous they would be in a fight", '"a frightened child" → harmless'. Left empty, the
+    # ruleset says it for the five standard words and in general terms for any others.
+    threat_measures: Text = ""
+    threat_examples: Text = ""
     ready_made: list[ReadyMade] = Field(default_factory=list, max_length=_MAX_ITEMS)
 
     # --- lookups ---
@@ -577,9 +581,7 @@ class Definition(BaseModel):
             if not f.threat:
                 problems.append(f"foe tier {f.key}: name the threat words that pick it")
             for word in f.threat:
-                if word not in THREAT_LEVELS:
-                    problems.append(f"foe tier {f.key}: threat is of {', '.join(THREAT_LEVELS)}")
-                elif word in claimed:
+                if word in claimed:
                     problems.append(f"foe tier {f.key}: threat {word!r} already picks a tier")
                 claimed.add(word)
         if problems:

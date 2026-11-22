@@ -206,7 +206,8 @@ class ActorCreatedPayload(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     provenance: str = ""  # D-108: "author" or "ai_backfill" (a pack); "" = not recorded
     # D-112: what the ruleset builds this actor's sheet from, the first time one is needed: a
-    # pack's opaque spec, and the engine's neutral danger word (rulesets.base.THREAT_LEVELS).
+    # pack's opaque spec, and one word of the ruleset's own threat scale (D-116,
+    # rulesets.base.ThreatScale).
     spec: dict[str, Any] = Field(default_factory=dict)
     threat: str = ""
 

@@ -9,6 +9,32 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+For a ruleset plugin: one that reads `CharSpec.threat` now declares `threat_scale()`, or it is
+handed no word. For a pack: an actor's `threat` is checked against the pack's ruleset at validate
+and import, no longer at parse. `uro_core.rulesets.base.THREAT_LEVELS` is gone
+(`uro_core.rulesets.five_words.FIVE_WORDS` holds the built-ins' five).
+
+### Added
+
+- **A campaign's state as its story has shown it** (D-117). `GET /campaigns/{c}/state?scope=story`
+  and `uro state <campaign> --story` narrow people, places and factions to those a beat has named
+  or made (plus every actor with a player binding), and plots to those not dormant. It works with a
+  player's token, so a client no longer reads the whole world to hide most of it. The response
+  says its `scope`. By name, so someone the story hasn't named isn't listed.
+
+### Changed
+
+- **The threat scale is the ruleset's** (D-116). The five danger words left the ruleset port and
+  the default extractor prompt. A ruleset declares its own words and what they measure
+  (`threat_scale()`); the extractor is asked in those words, and not at all without a ruleset or
+  a scale. The three dice built-ins keep the same five words and prompt wording.
+  `uro-composable` takes its scale from the definition's foe tiers: the standard five as before,
+  or any words of its own (with optional `threat_measures` and `threat_examples`). A word from
+  another game's scale is no hint at play time rather than an error. A pack under a definition
+  with no foe tiers that gives an actor a `threat` is now refused at validate (it was accepted
+  and ignored). `Engine(threat=)` gives an engine with no ruleset bound a scale, which
+  `uro play --no-mechanics` uses.
+
 ## [0.22.1] - 2026-11-22
 
 No migration, and nothing to change for embedders or clients.

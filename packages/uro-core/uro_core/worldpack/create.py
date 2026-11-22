@@ -12,7 +12,7 @@ from uro_core.errors import PackError
 from uro_core.ports.projections import EngineStore
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
-from uro_core.rulesets.base import CharSpec, CharSpecError, build_character
+from uro_core.rulesets.base import CharSpec, CharSpecError, build_character, threat_problem
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.models import World
 from uro_core.worldpack.backfill import backfill_gaps
@@ -46,6 +46,9 @@ def ruleset_problem(pack: WorldPack) -> str | None:
     # every actor's spec builds under the pack's ruleset (D-112), so a typo fails here, loudly,
     # instead of quietly falling back to a default sheet in the actor's first fight
     for a in pack.actors:
+        why = threat_problem(ruleset, a.threat)
+        if why is not None:
+            return f"actor {a.id!r}: {why}"
         if a.spec or a.threat:
             try:
                 build_character(ruleset, CharSpec(data=a.spec, threat=a.threat), Rng(0))

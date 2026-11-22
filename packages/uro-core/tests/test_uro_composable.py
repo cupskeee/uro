@@ -125,7 +125,7 @@ def test_it_is_listed_beside_the_other_built_ins() -> None:
         ({"advancement": None}, "role advance needs advancement"),
         ({"creation": [{"choice": "pick", "from": "nowhere"}]}, "no list 'nowhere'"),
         ({"creation": [{"choice": "array", "steps": [9]}]}, "on the scale"),
-        ({"foes": [{"key": "a", "steps": 1, "threat": ["scary"]}]}, "threat"),
+        ({"foes": [{"key": "a", "steps": 1, "threat": ["Not A Word"]}]}, "threat"),
         ({"foes": [{"key": "a", "steps": 1}]}, "name the threat words"),
         (
             {

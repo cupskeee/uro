@@ -41,9 +41,11 @@ from uro_core.rulesets.base import (
     EncounterState,
     Holding,
     SpecProblem,
+    ThreatScale,
     spec_problems,
 )
 from uro_core.rulesets.base import Sheet as SheetDict
+from uro_core.rulesets.five_words import FIVE_WORDS
 from uro_core.rulesets.rng import Rng
 from uro_core.rulesets.uro_composable import definition as D
 from uro_core.rulesets.uro_composable.definition import Definition, parse_dice
@@ -372,6 +374,28 @@ class UroComposable:
 
     def config_schema(self) -> dict[str, Any]:
         return ComposableConfig.model_json_schema()
+
+    def threat_scale(self) -> ThreatScale | None:
+        """The definition's own scale (D-116). A game with no foe tiers sizes nobody up. Tiers
+        picked only by the five standard words keep that whole scale and its reading, as before
+        (a word no tier lists, `average` say, builds the default foe). Any other word makes the
+        scale the tiers' own words, in the order they list them; what those measure is the
+        definition's to say (`threat_measures`, `threat_examples`), with a general line unsaid."""
+        words = tuple(dict.fromkeys(w for f in self.d.foes for w in f.threat))
+        if not words:
+            return None
+        standard = set(words) <= set(FIVE_WORDS.words)
+        return ThreatScale(
+            words=FIVE_WORDS.words if standard else words,
+            measures=self.d.threat_measures
+            or (
+                FIVE_WORDS.measures
+                if standard
+                else "how much of a match they would be for the characters"
+            ),
+            examples=self.d.threat_examples
+            or (FIVE_WORDS.examples if standard and not self.d.threat_measures else ""),
+        )
 
     def sheet_schema(self) -> dict[str, Any]:
         """The sheet's shape, with this definition's ratings and tracks named in it."""

@@ -6,6 +6,7 @@ from uro_core.adapters.postgres.store import PostgresEventStore
 from uro_core.characters import _without_nulls, start_campaign
 from uro_core.domain.ids import new_id
 from uro_core.pipeline.extraction import Extraction, ProposedActor, run_gauntlet
+from uro_core.rulesets.five_words import FIVE_WORDS
 
 
 async def test_a_known_untagged_person_takes_the_first_danger_word_shown(
@@ -18,7 +19,9 @@ async def test_a_known_untagged_person_takes_the_first_danger_word_shown(
     branch = c.branch_id
 
     async def play(actor: ProposedActor) -> list[str]:
-        events = await run_gauntlet(store, branch, Extraction(actors=[actor]))
+        events = await run_gauntlet(
+            store, branch, Extraction(actors=[actor]), threat_words=FIVE_WORDS.words
+        )
         await store.append_beat(branch, events)
         return [e.event_type for e in events]
 
