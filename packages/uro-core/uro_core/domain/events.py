@@ -855,6 +855,12 @@ class EncounterTurnTakenPayload(BaseModel):
     # D-112: the action a PLAYER chose on this turn (kind, target, data), recorded so the turn
     # replays; None for a turn the ruleset's own `npc_action` decided (that replays by itself).
     chosen: dict[str, Any] | None = None
+    # D-118: whom the action was done to ("" for none), who was no longer standing after it, and
+    # the part of a player's own turn their ruleset lets them see. All optional: a fight recorded
+    # before D-118 has none of them, and replays the same.
+    target_id: str = ""
+    out: list[str] = Field(default_factory=list)
+    player_view: dict[str, Any] | None = None
 
 
 class EncounterJoinedPayload(BaseModel):
@@ -979,6 +985,9 @@ def encounter_turn_taken(
     result: str = "",
     trace: str = "",
     chosen: dict[str, Any] | None = None,
+    target_id: str = "",
+    out: list[str] | None = None,
+    player_view: dict[str, Any] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -992,6 +1001,9 @@ def encounter_turn_taken(
             result=result,
             trace=trace,
             chosen=chosen,
+            target_id=target_id,
+            out=out or [],
+            player_view=player_view,
         ).model_dump(),
     )
 

@@ -1425,8 +1425,19 @@ class PostgresEventStore:
                 )
                 SELECT chain.commit_id, e.event_type,
                        -- a fight's events only mark the beat as a fight's: their payloads
-                       -- (whole sheets, every trace) stay in the database
-                       CASE WHEN e.event_type LIKE 'Encounter%' THEN '{}'::jsonb
+                       -- (whole sheets, every trace) stay in the database. A player's own
+                       -- turn keeps what a client shows of it (D-118): the action, its result
+                       -- and the roll the ruleset lets that player see.
+                       CASE WHEN e.event_type = 'EncounterTurnTaken'
+                                 AND e.payload->'chosen' IS NOT NULL
+                                 AND e.payload->'chosen' <> 'null'::jsonb
+                            THEN jsonb_build_object(
+                                'actor_id', e.payload->'actor_id',
+                                'action', e.payload->'action',
+                                'result', e.payload->'result',
+                                'chosen', '{}'::jsonb,
+                                'player_view', e.payload->'player_view')
+                            WHEN e.event_type LIKE 'Encounter%' THEN '{}'::jsonb
                             ELSE e.payload END AS payload
                 FROM chain JOIN events e ON e.commit_id = chain.commit_id
                 WHERE chain.depth <= (SELECT max(depth) FROM beats)

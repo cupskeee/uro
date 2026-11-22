@@ -743,6 +743,20 @@ once**, not a measure of quality across models.
 | A branch's state as its story has shown it (D-117) | **proven; by name (best-effort)** | `test_story_scope.py`: named or made by a beat, every actor with a player binding, threads not dormant; a player's token reads it over HTTP; a fork tells it the same. Name matching is whole-word and case-blind, so an unnamed stranger is missed and a common-word name can show early. Its cost on a long story is unmeasured. |
 | A ruleset described under given settings | **proven** | `POST /rulesets/describe` and `uro ruleset describe`: schemas and affordances for one ruleset and its settings; refused settings are a 400 with the reason. |
 
+## Post-PoC — the v0.22.1 live pass (2026-11-22, run by Claude on the owner's Anthropic connection, Sonnet 5.5)
+
+Through the reference web client in a browser, and a two-player fight over the play socket.
+
+| Claim | Status | Evidence |
+|---|---|---|
+| A game that lives in its settings plays (`uro-composable`, D-114) | **live-validated once** | a six-rating d20 definition on Ashfall: the planner chose its `persuade` action for a trust-winning intent, the check resolved with a player view, and a fight offered the definition's own actions (`strike.str`, `strike.dex`, `retreat`, `hold`). |
+| A fight played turn by turn, and a way out (D-112, D-114) | **live-validated once** | four turns in a browser; `retreat` ended it; the character's meter moved 10 → 5. |
+| More than one player in a fight (D-114) | **live-validated once** | a second player joined by attacking the same foe, turns alternated between the two, an out-of-turn move got `not_your_turn`, and the fight ended with the foe at 0. |
+| The clock follows play (D-77) | **live-validated again** | "I spend two days hauling peat" moved the day 0 → 2 with no skip. |
+| A campaign's state as its story has shown it (D-117) | **live-validated once** | after one beat the story scope held the two things the narration had named; a player's own token read it during the two-player fight. |
+| The ruleset's threat scale (D-116) | **not observed** | the model gave the one new person no word (the prose called him "broad, soot-streaked"); inconclusive. |
+| A fight is told truly | **found broken, fixed in D-118, the fix re-seen live once in part** (a second fight after the fix: the foe's blow told as the foe's, no numbers in two beats of prose, the player's strike shown as "rolled 17, +3, total 20 against 10"; a character's fall and a join were not re-seen) | the narrator gave a foe's blows to the player, wrote damage as "points", never said a player's character had fallen (0 hit points, no word), and told a joining player's own character as a stranger. A fight turn also carried no roll. |
+
 ## Post-PoC — the D-111..D-113 live pass (2026-11-21, run by Claude on the owner's Anthropic connection)
 
 Scratch worlds in the test database; the provider built in-process from the registry's connection,

@@ -216,14 +216,69 @@ _CREATED_KINDS = {
 
 def _outcomes(ctx: _Context) -> list[CheckOutcome]:
     return [
-        CheckOutcome(
-            actor_id=c.actor_id,
-            affordance=c.affordance,
-            outcome=c.result.outcome,
-            player_view=c.result.player_view if c.actor_id == ctx.pc_actor_id else None,
-        )
-        for c in ctx.checks
+        *(
+            CheckOutcome(
+                actor_id=c.actor_id,
+                affordance=c.affordance,
+                outcome=c.result.outcome,
+                player_view=c.result.player_view if c.actor_id == ctx.pc_actor_id else None,
+            )
+            for c in ctx.checks
+        ),
+        *ctx.fight_outcomes,
     ]
+
+
+def _fight_outcomes(events: list[DomainEvent], pc_actor_id: str) -> list[CheckOutcome]:
+    """The acting player's own turn in a fight, as a check a client can show (D-118): the action,
+    the ruleset's result for it and the part of the roll it lets that player see."""
+    return [
+        CheckOutcome(
+            actor_id=p["actor_id"],
+            affordance=p["action"],
+            outcome=p.get("result") or "",
+            player_view=p.get("player_view"),
+        )
+        for p in (e.payload for e in events if e.event_type == "EncounterTurnTaken")
+        if p.get("chosen") is not None and p["actor_id"] == pc_actor_id
+    ]
+
+
+def outcome_line(
+    winner_team: str | None, combatants: list[Combatant], names: dict[str, str]
+) -> str:
+    """How a decided fight ended, by name: a side's label ("aggressor") tells the narrator
+    nothing about who won."""
+    if winner_team is None:
+        return "outcome: both sides fall"
+    won = [names.get(c.actor_id, c.actor_id) for c in combatants if c.team == winner_team]
+    return f"outcome: {', '.join(won) or winner_team} prevail{'s' if len(won) == 1 else ''}"
+
+
+def fight_lines(events: list[DomainEvent], names: dict[str, str]) -> list[str]:
+    """A fight's turns as the narrator is told them (D-118): who acted, on whom, the ruleset's
+    own trace with ids read as names, and who that left out of the fight. A bare trace ("attack
+    14 vs AC 11 → hit for 4") doesn't say whose blow it was, and live the narrator gave a foe's
+    blows to the player's character and never said a character had fallen."""
+
+    def named(text: str) -> str:
+        for actor_id in sorted(names, key=len, reverse=True):
+            text = text.replace(actor_id, names[actor_id])
+        return text
+
+    lines = []
+    for p in (e.payload for e in events if e.event_type == "EncounterTurnTaken"):
+        if not p.get("trace"):
+            continue
+        who = names.get(p["actor_id"], p["actor_id"])
+        target = p.get("target_id") or ""
+        aim = f" at {names.get(target, target)}" if target else ""
+        line = f"{who} ({p['action']}{aim}): {named(p['trace'])}"
+        fallen = [names.get(a, a) for a in p.get("out") or []]
+        if fallen:
+            line += f". Now out of the fight: {', '.join(fallen)}"
+        lines.append(line)
+    return lines
 
 
 def _created(events: list[DomainEvent]) -> list[CreatedEntity]:
@@ -247,6 +302,8 @@ class _Context(BaseModel):
     check_sheets: dict[str, dict[str, Any]] = Field(default_factory=dict)
     # this beat's resolved checks, committed as CheckResolved so reaction rules can answer (D-64)
     checks: list[ResolvedCheck] = Field(default_factory=list)
+    # the acting player's own turn in a fight, shown beside the checks (D-118)
+    fight_outcomes: list[CheckOutcome] = Field(default_factory=list)
     # actor_id → the first sheet built this beat for a known NPC whose check needed one (D-114)
     first_sheets: dict[str, dict[str, Any]] = Field(default_factory=dict)
     directives: str = ""
@@ -934,17 +991,11 @@ class Engine:
                 legal_actions=step.legal_actions,
                 participant_id=await self._player_of(campaign, step.waiting_on),
             )
-        traces = [
-            e.payload["trace"]
-            for e in step.events
-            if e.event_type == "EncounterTurnTaken" and e.payload.get("trace")
-        ]
+        names = {a.actor_id: a.name for a in await self._store.list_actors(campaign.branch_id)}
+        traces = fight_lines(step.events, names)
+        ctx.fight_outcomes = _fight_outcomes(step.events, ctx.pc_actor_id)
         if step.outcome is not None:
-            traces.append(
-                f"outcome: team {step.outcome.winner_team} prevails"
-                if step.outcome.winner_team is not None
-                else "outcome: both sides fall"
-            )
+            traces.append(outcome_line(step.outcome.winner_team, combatants, names))
         return events, traces
 
     async def _acting_pc(self, campaign: Campaign, participant_id: str) -> str:
@@ -1686,16 +1737,10 @@ class Engine:
         )
         consequences = await self._combat_consequences(branch, outcome, combatants)
 
-        traces = [
-            e.payload["trace"]
-            for e in enc_events
-            if e.event_type == "EncounterTurnTaken" and e.payload.get("trace")
-        ]
-        traces.append(
-            f"outcome: team {outcome.winner_team} prevails"
-            if outcome.winner_team is not None
-            else "outcome: both sides fall"  # a mutual knockout (uro_pool's simultaneous rounds)
-        )
+        names = {a.actor_id: a.name for a in await self._store.list_actors(branch)}
+        traces = fight_lines(enc_events, names)
+        # no winner: a mutual knockout (uro_pool's simultaneous rounds)
+        traces.append(outcome_line(outcome.winner_team, combatants, names))
         return [*setup, *enc_events, *consequences], traces
 
     async def _combatant(
@@ -1768,7 +1813,12 @@ class Engine:
         ctx.fight, ctx.fight_opens = (started, log), False
         events, traces = await self._fight_events(campaign, ctx, step, [*fighters, combatant])
         name = (await self._store.get_actor(branch, joiner)).name  # type: ignore[union-attr]
-        return [*setup, *events], [f"{name} joins the fight", *traces]
+        # the joiner is the acting player's own character: said so, or the narrator has told them
+        # as a stranger arriving beside "you" (live, 2026-11-22)
+        return [*setup, *events], [
+            f'{name} (the player\'s own character, "you") joins the fight',
+            *traces,
+        ]
 
     async def _combat_consequences(
         self,

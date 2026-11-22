@@ -437,6 +437,10 @@ class Effect(BaseModel):
     actor_id: str
     payload: dict[str, Any] = Field(default_factory=dict)
     trace: str = ""
+    # The part of this effect its ACTING character's player may see (D-118), like a check's
+    # `player_view`: their own dice, modifier and the band reached. Set it only on the effect of
+    # the action being resolved; None = nothing beyond the turn's result.
+    player_view: dict[str, Any] | None = None
 
 
 class EncounterOutcome(BaseModel):
