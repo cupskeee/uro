@@ -9,17 +9,21 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-22
+
 Upgrading: finish or abandon any fight still open in a campaign that plays fights turn by turn
 (v0.21.0's `encounters: "turns"`) before upgrading. `flee`, `defend` and `keep_cool` now do
 something, so a fight with one of them already recorded no longer replays; it can only be closed
 (`uro campaign encounter <campaign> --abandon`, after the upgrade too).
 
 For embedders: an `EventStore`/`EngineStore` of your own returns joins in `open_encounters`' log
-(an `EncounterJoined` payload among the turns), and `append_fight_beat`'s `turns_seen` counts that
-whole log, and the store gains `beat_records`. A ruleset plugin needs no change: the five new hooks
-are optional. `uro serve` now runs one beat at a time per campaign. Changed: in a campaign playing fights turn by turn, a second player attacking
-someone already in a fight now joins it (it used to play as free-roam), and a refused fight action
-passes the table's turn when its holder's fight waits on someone else.
+(an `EncounterJoined` payload among the turns), `append_fight_beat`'s `turns_seen` counts that
+whole log, and the store gains `beat_records`. A ruleset plugin needs no change: the five new
+hooks are optional.
+
+Changed: `uro serve` runs one beat at a time per campaign. In a campaign playing fights turn by
+turn, a second player attacking someone already in a fight joins it (it used to play as
+free-roam), and the table's turn passes on from a holder whose fight waits on someone else.
 
 ### Added (D-115; Uro Loom request 24)
 
@@ -1360,7 +1364,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/cupskeee/uro/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/cupskeee/uro/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/cupskeee/uro/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/cupskeee/uro/compare/v0.18.0...v0.19.0
