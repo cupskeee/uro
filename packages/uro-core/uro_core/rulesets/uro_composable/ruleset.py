@@ -970,6 +970,7 @@ class UroComposable:
                 actor_id=actor,
                 payload={"target": target, **tried.view},
                 trace=f"round {round_}: {actor}{aim}: {tried.trace}",
+                player_view=tried.view or None,  # the acting character's own roll (D-118)
             )
         ]
         if target is not None and not was_out and self._out(write[target].sheet):

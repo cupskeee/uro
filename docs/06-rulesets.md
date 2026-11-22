@@ -58,7 +58,9 @@ handed one. A scale's words are distinct, lowercase and trimmed. The three dice 
 `strong`, `deadly`, in `rulesets/five_words.py`) and map them to a level, a stat spread or trait
 dice, capped, with the spec's own values winning. `CheckRequest.holdings` and `Combatant.holdings`
 carry what the actor holds (`Holding`: item id, name, opaque data from a pack's `{name, data}`
-starting gear); a ruleset may ignore them. `CheckResult.player_view` is the part of a check a
+starting gear); a ruleset may ignore them. `Effect.player_view` does the same for an action in a fight (D-118):
+set on the effect of the action being resolved, it reaches the acting character's own player
+among the beat's checks. `CheckResult.player_view` is the part of a check a
 player may see, the ruleset's choice (the built-ins: the actor's own dice, modifier, total, the
 difficulty faced and the band); the engine sends it only for the acting player's own character.
 

@@ -425,8 +425,20 @@ class UroBasic:
 
         if action.kind == "attack" and action.target_id is not None:
             target = fighters[action.target_id]
-            atk = rng.d20() + actor.sheet.modifier("STR") + actor.sheet.proficiency
+            die = rng.d20()
+            bonus = actor.sheet.modifier("STR") + actor.sheet.proficiency
+            atk = die + bonus
             ac = target.sheet.ac + (_GUARD_AC if target.guard else 0)
+
+            def seen(band: str) -> dict[str, Any]:  # the attacker's own roll (D-118)
+                return {
+                    "dice": [die],
+                    "modifier": bonus,
+                    "total": atk,
+                    "against": ac,
+                    "band": band,
+                }
+
             if atk >= ac:
                 dmg = max(
                     1, rng.die(_damage_die(actor.sheet.weapon_tier)) + actor.sheet.modifier("STR")
@@ -438,6 +450,7 @@ class UroBasic:
                         actor_id=target.actor_id,
                         payload={"amount": dmg, "source": actor.actor_id},
                         trace=f"attack {atk} vs AC {ac} → hit for {dmg}",
+                        player_view=seen("hit"),
                     )
                 )
                 if not target.sheet.conscious:
@@ -456,6 +469,7 @@ class UroBasic:
                         actor_id=target.actor_id,
                         payload={"source": actor.actor_id},
                         trace=f"attack {atk} vs AC {ac} → miss",
+                        player_view=seen("miss"),
                     )
                 )
         elif action.kind == "defend":  # D-114: +2 AC until this fighter's next turn

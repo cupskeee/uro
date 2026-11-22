@@ -106,6 +106,22 @@ def beat_records(
                         player_view=p.get("player_view"),
                     )
                 )
+            elif (
+                own
+                and event_type == "EncounterTurnTaken"
+                and p.get("chosen") is not None
+                and p.get("player_view") is not None
+            ):
+                # a player's own turn in a fight, with the roll their ruleset lets them see
+                # (D-118): kept like a check, so the story read back still shows it
+                record.checks.append(
+                    BeatCheck(
+                        actor_id=p["actor_id"],
+                        affordance=p["action"],
+                        outcome=p.get("result") or "",
+                        player_view=p["player_view"],
+                    )
+                )
             elif own and event_type in _CREATED:
                 kind, id_key, name_key = _CREATED[event_type]
                 record.created.append(BeatCreated(kind=kind, id=p[id_key], name=p[name_key]))

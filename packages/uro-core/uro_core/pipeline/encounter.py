@@ -61,6 +61,7 @@ def _turn_event(
     cause: Any,
     *,
     chosen: bool = False,
+    out: list[str] | None = None,
 ) -> DomainEvent:
     # The ruleset names its own effect kinds (uro_basic: hit/miss/down; uro_pbta:
     # full/partial/miss); the runner just surfaces the last one as the turn's result label.
@@ -75,8 +76,21 @@ def _turn_event(
         result=result,
         trace=trace,
         chosen=action.model_dump() if chosen else None,
+        target_id=action.target_id or "",
+        out=out,
+        # a player's own turn only: what their ruleset lets them see of it (D-118)
+        player_view=next((e.player_view for e in effects if e.player_view), None)
+        if chosen
+        else None,
         caused_by=cause,
     )
+
+
+def _fell(ruleset: Ruleset, before: EncounterState, after: EncounterState) -> list[str]:
+    """Who stood in the fight before an action and doesn't after it (D-118); none for a ruleset
+    that doesn't say who is standing."""
+    was, now = standing(ruleset, before), standing(ruleset, after)
+    return sorted(was - now) if was is not None and now is not None else []
 
 
 def _waits_on(ruleset: Ruleset, state: EncounterState, players: frozenset[str]) -> str | None:
@@ -104,8 +118,13 @@ def _advance(
         if actor_id is None or _waits_on(ruleset, state, players) is not None:
             break
         action = ruleset.npc_action(state, actor_id, rng)
+        prior = state
         state, effects = ruleset.resolve_action(state, action, rng)
-        events.append(_turn_event(encounter_id, actor_id, action, effects, cause))
+        events.append(
+            _turn_event(
+                encounter_id, actor_id, action, effects, cause, out=_fell(ruleset, prior, state)
+            )
+        )
     return state, events
 
 
@@ -375,8 +394,17 @@ def take_turn(
         )
     action = Action(kind=choice.kind, actor_id=actor_id, target_id=target, data=choice.data)
     before = standing(ruleset, state)
+    prior = state
     state, effects = ruleset.resolve_action(state, action, rng)
-    turn = _turn_event(encounter_id, actor_id, action, effects, cause, chosen=True)
+    turn = _turn_event(
+        encounter_id,
+        actor_id,
+        action,
+        effects,
+        cause,
+        chosen=True,
+        out=_fell(ruleset, prior, state),
+    )
     return _step(
         ruleset,
         state,

@@ -22,8 +22,19 @@ and import, no longer at parse. `uro_core.rulesets.base.THREAT_LEVELS` is gone
   player's token, so a client no longer reads the whole world to hide most of it. The response
   says its `scope`. By name, so someone the story hasn't named isn't listed.
 
+### Fixed
+
+- **A fight is told by name** (D-118, found live). The narrator was given each fight turn's bare
+  dice string, so it gave a foe's blows to the player, wrote damage as "points" and never said a
+  character had fallen. Each turn now says who acted, on whom and who it left out of the fight;
+  the end names who prevailed; and numbers stay out of the prose.
+
 ### Changed
 
+- **A player's own fight turn carries its roll** (D-118). It arrives among a beat's `checks`
+  (`{affordance: the action, outcome, player_view}`) live and in the chronicle, for `uro-basic`
+  and `uro-composable`. A ruleset sets `Effect.player_view` to offer one. `EncounterTurnTaken`
+  gains optional `target_id`, `out` and `player_view`.
 - **The threat scale is the ruleset's** (D-116). The five danger words left the ruleset port and
   the default extractor prompt. A ruleset declares its own words and what they measure
   (`threat_scale()`); the extractor is asked in those words, and not at all without a ruleset or

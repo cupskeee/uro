@@ -325,8 +325,10 @@ def build_narrator_messages(
     # outcome — a failed persuade check cannot be narrated as a success.
     if mechanics_traces:
         context_lines.append(
-            "MECHANICS (weave these outcomes in — do not contradict them):\n"
-            + "\n".join(f"- {t}" for t in mechanics_traces)
+            "MECHANICS (weave these outcomes in — do not contradict them; each line names who "
+            "acted, so tell it as that character's act and no one else's; the numbers are the "
+            'rules\' working, so never give a number, a roll or "points" in the prose — show a '
+            "blow by what it does):\n" + "\n".join(f"- {t}" for t in mechanics_traces)
         )
     if directives:
         beside_intent.append(f"DIRECTION: {directives}")
