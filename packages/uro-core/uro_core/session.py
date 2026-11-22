@@ -110,6 +110,11 @@ class PartyArbiter:
             return None
         return ring[self._turn.get(campaign_id, 0) % len(ring)]
 
+    def holder(self, campaign_id: str) -> str | None:
+        """Who holds the table's turn now, or None with nobody connected. (Not on the port: a
+        server reads it when an arbiter has one, to move a turn its holder can't use, D-115.)"""
+        return self._holder(campaign_id)
+
     async def admit(self, campaign_id: str, participant_id: str, intent: str) -> AdmitDecision:
         holder = self._holder(campaign_id)
         if holder is None or holder == participant_id:
@@ -165,7 +170,10 @@ class PartyArbiter:
 
     async def beat_committed(self, campaign_id: str, participant_id: str, beat_id: str) -> None:
         ring = self._ring.get(campaign_id)
-        if ring:  # rotate the token to the next member
+        # Rotate the token to the next member, when the one whose beat this was still holds it.
+        # A beat admitted while the turn was theirs may finish after the turn moved on (D-115: the
+        # server passes on a turn its holder can't use); rotating again would skip a player.
+        if ring and self._holder(campaign_id) == participant_id:
             self._turn[campaign_id] = (self._turn.get(campaign_id, 0) + 1) % len(ring)
 
 

@@ -20,6 +20,11 @@ class World(BaseModel):
     description: str = ""
     tone: list[str] = Field(default_factory=list)
     content: dict[str, Any] | None = None
+    # The game the world was written for (D-115): its ruleset id ("" = the default) and the
+    # settings it gives it, as its WorldGenesis pinned them. A client needs both to draw a
+    # character creator for a ruleset whose game is its settings.
+    ruleset_id: str = ""
+    ruleset_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class Branch(BaseModel):

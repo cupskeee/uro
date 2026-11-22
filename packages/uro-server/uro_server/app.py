@@ -57,6 +57,7 @@ from uro_core.ports.outbox import CommitFeed, OutboxMessage
 from uro_core.ports.projections import EngineStore
 from uro_core.rulesets.base import CharSpecError
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
+from uro_core.timeline.beats import BeatRecord, for_players, without_views
 from uro_core.timeline.models import FORK_TIME_SKIP, World
 from uro_core.worldpack.create import SeedResult
 
@@ -2069,8 +2070,9 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such world")
         b = await _branch_ref(store, world_id, request.query_params.get("branch") or "main")
         limit = _parse_limit(request, 20)
-        beats = await store.recent_beats(b.branch_id, limit)
-        return {"branch": b.name, "beats": [bt.model_dump() for bt in beats]}
+        # (no `player_view`: there is no one campaign here to say whose character is whose)
+        records = without_views(await store.beat_records(b.branch_id, limit))
+        return {"branch": b.name, "beats": [_chronicle_beat(r) for r in records]}
 
     # Every field, set or default: the bundle's `v` is a default, and a bundle must carry its format
     # version like `uro world export` writes it (review: exclude_unset dropped it).
@@ -2690,14 +2692,19 @@ def create_app(
 
     @app.get("/campaigns/{campaign_id}/chronicle", **_out(S.Chronicle))
     async def campaign_chronicle(campaign_id: str, request: Request) -> dict[str, Any]:
+        """The campaign's recent beats, oldest first (`?limit=`, default 20): each one's words and
+        what its commit said (D-115): `checks` (a check's `player_view` only on the acting
+        player's own character, as the play channel sends it), `mode`, `created` and
+        `threads_changed`. Read from the branch's history, so a What if tells its story's past
+        the same way."""
         _auth(request)
         store = _mgmt()
         c = await store.get_campaign(campaign_id)
         if c is None:
             raise HTTPException(status_code=404, detail="no such campaign")
         limit = _parse_limit(request, 20)
-        beats = await store.recent_beats(c.branch_id, limit)
-        return {"beats": [b.model_dump() for b in beats]}
+        records = for_players(await store.beat_records(c.branch_id, limit))
+        return {"beats": [_chronicle_beat(r) for r in records]}
 
     _MAX_TIMESKIP_DAYS = 100 * 365  # cap the in-fiction jump (a runaway skip fires N agenda rounds)
 
@@ -2903,6 +2910,7 @@ def create_app(
             # forms the SAME order regardless of connect race; None (fake-deps/no store) → append.
             seats = await deps.store.pc_seats(campaign_id) if deps.store is not None else None
             await arb.note_joined(campaign_id, participant, seats)  # add to the turn roster (OQ-7)
+            await _pass_a_turn_that_cant_be_used(deps, arb, campaign_id)
             joined = True
             await hub.publish(
                 campaign_id, {"type": "participant_joined", "participant_id": participant}
@@ -2981,6 +2989,7 @@ def create_app(
                 hub.unsubscribe(campaign_id, queue)
             if joined:  # only tear down a roster entry we created (guards a pre-join failure)
                 await arb.note_left(campaign_id, participant)  # drop from the turn roster (OQ-7)
+                await _pass_a_turn_that_cant_be_used(deps, arb, campaign_id)
                 # A departure can COMPLETE a pending vote round — the last holdout LEFT instead of
                 # voting — which cast_vote never re-checks (D-38 review). Recompute and announce it,
                 # else the round would silently never resolve.
@@ -3111,6 +3120,11 @@ def _turn_choice(action: dict[str, Any] | None) -> TurnChoice | None:
         raise ChoiceRefused(f"an action is {{kind, target_id?, data?}}: {exc}") from exc
 
 
+def _chronicle_beat(record: BeatRecord) -> dict[str, Any]:
+    """A beat record as the chronicle returns it: the beat's own fields, then its commit's."""
+    return {**record.beat.model_dump(), **record.model_dump(exclude={"beat"})}
+
+
 def _beat_details(result: BeatResult) -> dict[str, object]:
     """What `beat_committed` carries beside the narration (D-98), sent to every seat: each check's
     ruleset-graded outcome (not its trace, which may carry sheet values, D-46), the acting
@@ -3128,6 +3142,34 @@ def _beat_details(result: BeatResult) -> dict[str, object]:
         # D-113: choices the ruleset left on the acting player's character (for `participant_id`)
         "choices": [c.model_dump() for c in result.choices],
     }
+
+
+async def _pass_a_turn_that_cant_be_used(
+    deps: ServerDeps, arbiter: TurnArbiter, campaign_id: str
+) -> None:
+    """Move the table's turn on while its holder is in a fight that waits on someone else (D-115):
+    that holder can do nothing with it, and the players outside the fight would wait for a move
+    that can't come. Checked whenever the fight or the table may have moved (a beat committed, a
+    refusal, a player gone). At most once round the table: when everyone seated is in a fight
+    that waits on someone absent, the turn comes back to where it was. An arbiter that doesn't
+    say who holds its turn is left alone."""
+    holder_of = getattr(arbiter, "holder", None)
+    if deps.fight_status is None or not callable(holder_of):
+        return
+    seen: set[str] = set()
+    while True:
+        holder = holder_of(campaign_id)
+        if holder is None or holder in seen:
+            return
+        seen.add(holder)
+        try:
+            wait = await deps.fight_status(campaign_id, holder)
+        except Exception:
+            logger.warning("fight status failed for %s on %s", holder, campaign_id, exc_info=True)
+            return
+        if wait is None or wait.get("participant_id") in (None, holder):
+            return
+        await arbiter.beat_committed(campaign_id, holder, "")
 
 
 async def _fight_waits_on(deps: ServerDeps, campaign_id: str, participant: str) -> bool:
@@ -3279,6 +3321,7 @@ async def _play_beat(
         # waits on someone else, so holding the turn for them would stall everyone not in it.
         if holds_turn and exc.waiting_on is not None:
             await arbiter.beat_committed(campaign_id, participant, "")
+            await _pass_a_turn_that_cant_be_used(deps, arbiter, campaign_id)
         return
     except Exception:
         # A beat failure (e.g. a ruleset mismatch, a provider error) must NOT crash the WS
@@ -3304,6 +3347,7 @@ async def _play_beat(
         # out of the table's order never held it, D-114 review.)
         if holds_turn:
             await arbiter.beat_committed(campaign_id, participant, "")
+            await _pass_a_turn_that_cant_be_used(deps, arbiter, campaign_id)
         return
     commit_id = deps.last_commit(campaign_id) if deps.last_commit is not None else None
     deps.announced.add(commit_id, campaign_id)  # (engine_deps already did, at append time)
@@ -3323,3 +3367,4 @@ async def _play_beat(
     # A fight turn played out of the table's order (D-114) leaves the token where it was.
     if holds_turn:
         await arbiter.beat_committed(campaign_id, participant, "")
+    await _pass_a_turn_that_cant_be_used(deps, arbiter, campaign_id)

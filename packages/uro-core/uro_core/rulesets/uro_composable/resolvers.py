@@ -43,13 +43,14 @@ def _full(table: dict[Difficulty, int], name: str) -> None:
 
 
 class D20(BaseModel):
-    """d20 + `per_step` times step against the difficulty's target: `fail` below it, `success`
-    at it, `great` at target + `great_margin` or on a natural 20. No `cost` band."""
+    """d20 + `per_step` times step (+ `base`) against the difficulty's target: `fail` below it,
+    `success` at it, `great` at target + `great_margin` or on a natural 20. No `cost` band."""
 
     model_config = _STRICT
 
     kind: Literal["d20"] = "d20"
     per_step: int = Field(2, ge=0, le=5)
+    base: int = Field(0, ge=-10, le=10)  # added to every roll: a scale that starts below +0
     targets: dict[Difficulty, int] = Field(default_factory=lambda: _table(8, 12, 16, 20))
     great_margin: int = Field(10, ge=1, le=40)
 
@@ -65,7 +66,7 @@ class D20(BaseModel):
     def judge(
         self, dice: list[int], step: int, difficulty: Difficulty
     ) -> tuple[Band, str, dict[str, Any]]:
-        die, mod, target = dice[0], self.per_step * step, self.targets[difficulty]
+        die, mod, target = dice[0], self.per_step * step + self.base, self.targets[difficulty]
         total = die + mod
         band: Band = (
             "great"
@@ -82,6 +83,9 @@ class D20(BaseModel):
 
     def shape(self, step: int) -> list[int]:
         return [20]
+
+    def reads(self, step: int) -> str:
+        return f"{self.per_step * step + self.base:+d}"
 
 
 class TwoD6(BaseModel):
@@ -126,6 +130,9 @@ class TwoD6(BaseModel):
     def shape(self, step: int) -> list[int]:
         return [6, 6]
 
+    def reads(self, step: int) -> str:
+        return f"{max(-1, min(3, step - 1)):+d}"
+
 
 class Pool(BaseModel):
     """max(step, 1) d6, each die making it at the difficulty's face or higher: `fail` when none
@@ -165,6 +172,9 @@ class Pool(BaseModel):
 
     def shape(self, step: int) -> list[int]:
         return [6] * max(step, 1)
+
+    def reads(self, step: int) -> str:
+        return f"{max(step, 1)}d6"
 
 
 Resolver = Annotated[D20 | TwoD6 | Pool, Field(discriminator="kind")]

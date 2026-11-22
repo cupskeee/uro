@@ -16,10 +16,21 @@ something, so a fight with one of them already recorded no longer replays; it ca
 
 For embedders: an `EventStore`/`EngineStore` of your own returns joins in `open_encounters`' log
 (an `EncounterJoined` payload among the turns), and `append_fight_beat`'s `turns_seen` counts that
-whole log. A ruleset plugin needs no change: the five new hooks are optional. `uro serve` now runs
-one beat at a time per campaign. Changed: in a campaign playing fights turn by turn, a second player attacking
+whole log, and the store gains `beat_records`. A ruleset plugin needs no change: the five new hooks
+are optional. `uro serve` now runs one beat at a time per campaign. Changed: in a campaign playing fights turn by turn, a second player attacking
 someone already in a fight now joins it (it used to play as free-roam), and a refused fight action
 passes the table's turn when its holder's fight waits on someone else.
+
+### Added (D-115; Uro Loom request 24)
+
+- **The chronicle says what each saved beat's commit said:** `commit_id`, `mode`, `checks` (a
+  roll's `player_view` on the acting player's own character only), `created` and
+  `threads_changed`, on `GET /campaigns/{c}/chronicle`, the world chronicle and `uro chronicle`.
+  A reload, a reconnect or a What if no longer loses the rolls.
+- **The table's turn moves on by itself** from a holder whose fight waits on another player.
+- A world says which game it was written for: `ruleset_id` and `ruleset_config` on `GET /worlds`.
+- `uro-composable`: a preview's `guidance` reads each rating (`ratings.<key>`: `step`, `word`,
+  `reads`, `can_raise`, `can_lower`), and the `d20` resolver takes a `base`.
 
 ### Added (D-114; Uro Loom request 23)
 
