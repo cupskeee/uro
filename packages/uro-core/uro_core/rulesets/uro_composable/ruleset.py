@@ -451,12 +451,44 @@ class UroComposable:
         """What a spec's creation choices still want (points to spend, steps to assign, picks to
         make), so a client shows the ruleset's own count. Optional on the port (D-114)."""
         try:
-            _, problems, left = build(
+            sheet, problems, left = build(
                 self.d, Spec.model_validate(spec.data), spec.threat, enforce=True
             )
         except ValidationError:
-            return {"left": [], "complete": False}
-        return {"left": left, "complete": not left and not problems}
+            return {"left": [], "complete": False, "ratings": {}}
+        return {
+            "left": left,
+            "complete": not left and not problems,
+            "ratings": self._readings(sheet, left),
+        }
+
+    def _readings(self, sheet: Sheet, left: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Each rating as a creator shows it: its step, the scale's word for it, how the resolver
+        reads it (`+2`, `3d6`), and whether a step up or down is still a build the creation's
+        rules allow. The counting is here so no client does it."""
+        scale = self.d.scale
+        setter = next((c for c in self.d.creation if not isinstance(c, D.PickChoice)), None)
+        budget = setter if isinstance(setter, D.BudgetChoice) else None
+        lo, hi = scale.min, scale.max
+        points = None
+        if budget is not None:
+            lo = budget.caps.min if budget.caps.min is not None else lo
+            hi = budget.caps.max if budget.caps.max is not None else hi
+            points = next((x["points"] for x in left if x["choice"] == "budget"), 0)
+        free = setter is None  # no rule for ratings: any step on the scale
+        out = {}
+        for key, step in sheet.ratings.items():
+            up = (free or budget is not None) and step < hi
+            if up and budget is not None and points is not None:
+                up = budget.price(step + 1, scale) <= points
+            out[key] = {
+                "step": step,
+                "word": scale.word(step),
+                "reads": self.resolver.reads(step),
+                "can_raise": up,
+                "can_lower": (free or budget is not None) and step > lo,
+            }
+        return out
 
     def starting_holdings(self, spec: CharSpec) -> list[Holding]:
         """The things a spec's picks give its character to hold from the start. Optional on the

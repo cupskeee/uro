@@ -1734,13 +1734,23 @@ def chronicle(
             else:
                 w = await _world_or_exit(store, world)
                 branch_id = (await _branch_or_exit(store, w, branch)).branch_id
-            beats = await store.recent_beats(branch_id, limit)
+            records = await store.beat_records(branch_id, limit)
         finally:
             await store.close()
-        if not beats:
+        if not records:
             typer.echo("(no beats yet)")
-        for beat in beats:
+        for record in records:  # each beat's words, then what its commit said (D-115)
+            beat = record.beat
             typer.echo(f"> [{beat.participant_id}] {beat.intent_text}")
+            for check in record.checks:
+                typer.echo(f"  · {check.affordance}: {check.outcome}")
+            if record.mode == "encounter":
+                typer.echo("  · a fight")
+            if record.created:
+                made = ", ".join(f"{c.name} ({c.kind})" for c in record.created)
+                typer.echo(f"  + new: {made}")
+            for t in record.threads_changed:
+                typer.echo(f"  ~ plot {t.from_state or 'new'} → {t.to_state}: {t.stakes}")
             typer.echo(f"{beat.narration}\n")
 
     _run_async(_run)

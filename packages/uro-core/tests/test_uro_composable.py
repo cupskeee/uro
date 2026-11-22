@@ -59,6 +59,13 @@ _HERO = {
 }
 
 
+def _left(game: Any, spec: dict[str, Any]) -> dict[str, Any]:
+    """What a build still wants, as the ruleset counts it (without the per-rating readings)."""
+    guidance = creation_guidance(game, CharSpec(data=spec))
+    assert guidance is not None
+    return {"left": guidance["left"], "complete": guidance["complete"]}
+
+
 def _game(config: dict[str, Any] | None = None) -> Any:
     return registry.resolve("uro-composable", "", config)
 
@@ -203,13 +210,13 @@ def test_an_array_and_a_pick_make_a_character_and_guidance_counts_what_is_left()
         ("mail shirt", {"tags": ["armor"]}),
         ("shield", {"tags": ["shield"]}),
     ]
-    assert creation_guidance(game, CharSpec(data=_HERO)) == {"left": [], "complete": True}
+    assert _left(game, _HERO) == {"left": [], "complete": True}
 
     half = {"ratings": {"str": 3, "con": 3}}
     with pytest.raises(CharSpecError) as err:
         _sheet(game, half)
     assert {tuple(p.loc) for p in err.value.problems} == {("ratings",), ("picks", "kits")}
-    assert creation_guidance(game, CharSpec(data=half)) == {
+    assert _left(game, half) == {
         "left": [
             {"choice": "array", "steps": [0, 1, 2, 2]},
             {"choice": "pick", "key": "kits", "count": 1},
@@ -219,7 +226,7 @@ def test_an_array_and_a_pick_make_a_character_and_guidance_counts_what_is_left()
     # an empty spec is still the default character (what an unsheeted actor gets) ...
     assert _sheet(game)["ratings"] == dict.fromkeys(["str", "dex", "con", "int", "wis", "cha"], 2)
     # ... and guidance says everything it would take to make it a built one
-    assert creation_guidance(game, CharSpec(data={}))["left"][0]["steps"] == [0, 1, 2, 2, 3, 3]
+    assert _left(game, {})["left"][0]["steps"] == [0, 1, 2, 2, 3, 3]
     for bad in ({"ratings": {"luck": 3}}, {"picks": {"kits": ["crown"]}}, {"level": 4}):
         with pytest.raises(CharSpecError):
             _sheet(game, bad)
@@ -236,7 +243,7 @@ def test_a_budget_is_counted_by_the_ruleset() -> None:
     game = _game(_with(CLASSIC, creation=[budget], ready_made=[]))
     sheet = _sheet(game, {"ratings": {"str": 4, "dex": 3}})  # 3 for str (1 + 2), 1 for dex
     assert sheet["ratings"]["str"] == 4 and sheet["ratings"]["dex"] == 3
-    assert creation_guidance(game, CharSpec(data={"ratings": {"str": 4}})) == {
+    assert _left(game, {"ratings": {"str": 4}}) == {
         "left": [{"choice": "budget", "points": 1}],
         "complete": False,
     }
@@ -266,7 +273,7 @@ def test_a_rolled_character_is_the_seeds_and_the_same_every_time() -> None:
     assert all(0 <= s <= 5 for s in one["ratings"].values())
     with pytest.raises(CharSpecError, match="the dice set the ratings"):
         _sheet(game, {"seed": 7, "ratings": {"str": 5}})
-    assert creation_guidance(game, CharSpec(data={})) == {
+    assert _left(game, {}) == {
         "left": [{"choice": "roll", "dice": "3d6"}],
         "complete": False,
     }
@@ -540,7 +547,9 @@ async def test_a_preview_says_what_is_left_and_a_rebuild_swaps_the_kit(
     assert half.ok is False and half.guidance is not None
     assert half.guidance["left"][0] == {"choice": "array", "steps": [0, 1, 2, 2, 3]}
     whole = await preview_character(store, branch_id=c.branch_id, campaign=c, spec=_HERO)
-    assert whole.ok and whole.guidance == {"left": [], "complete": True}
+    assert whole.ok and whole.guidance is not None
+    assert (whole.guidance["left"], whole.guidance["complete"]) == ([], True)
+    assert whole.guidance["ratings"]["str"]["reads"] == "+6"  # d20: 2 x step 3
 
     other = {**_HERO, "picks": {"kits": ["wanderer"]}}
     rebuilt = await rebuild_character(store, c, "p1", spec=other)
@@ -658,3 +667,35 @@ def test_in_a_simultaneous_round_one_beaten_as_they_turn_to_go_is_out_whoever_we
                 assert hero.fled
                 seen.add("fled")
         assert seen == {"out", "fled"}
+
+
+def test_guidance_reads_each_rating_and_says_what_may_still_move() -> None:
+    budget = {"choice": "budget", "points": 2, "caps": {"min": 0, "max": 3}}
+    config = _with(CLASSIC, creation=[budget], ready_made=[])
+    config["resolver"] = {"kind": "d20", "per_step": 1, "base": -1}  # steps 0..3 read -1..+2
+    game = _game(config)
+    spec = {"ratings": {"str": 3, "dex": 2, "con": 1}}  # +1 over the default 2, level, -1: spent 0
+    read = creation_guidance(game, CharSpec(data=spec))
+    assert read is not None and read["left"] == [{"choice": "budget", "points": 2}]
+    assert read["ratings"]["str"] == {
+        "step": 3,
+        "word": "able",
+        "reads": "+2",
+        "can_raise": False,
+        "can_lower": True,
+    }  # fmt: skip  (at the cap)
+    assert read["ratings"]["dex"]["can_raise"] is True and read["ratings"]["dex"]["reads"] == "+1"
+    spent = creation_guidance(game, CharSpec(data={"ratings": {"str": 3, "dex": 3}}))
+    assert spent is not None and spent["left"] == []
+    assert spent["ratings"]["con"]["can_raise"] is False  # nothing left to raise it with
+    assert spent["ratings"]["con"]["can_lower"] is True
+    # the resolver's own reading: a d20 modifier, a 2d6 modifier, a pool's dice
+    assert _check(game, _sheet(game), "persuade", 1).player_view["modifier"] == 1  # step 2 - 1
+    for kind, reads in (("2d6", "+2"), ("pool", "3d6")):
+        other = _game({**config, "resolver": {"kind": kind}})
+        got = creation_guidance(other, CharSpec(data=spec))
+        assert got is not None and got["ratings"]["str"]["reads"] == reads
+    # an array is assigned, not stepped; with no rule for ratings any step on the scale goes
+    assert not creation_guidance(_game(CLASSIC), CharSpec(data={}))["ratings"]["str"]["can_raise"]
+    free = creation_guidance(_game(_with(CLASSIC, creation=[], ready_made=[])), CharSpec(data={}))
+    assert free is not None and free["ratings"]["str"]["can_raise"] is True

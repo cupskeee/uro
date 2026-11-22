@@ -106,6 +106,9 @@ class BeatResolvedPayload(BaseModel):
     threads: list[str] = Field(default_factory=list)
     # The quiet thread the engine named to the narrator on this beat (D-95), "" if none.
     paced_thread: str = ""
+    # The character the participant played the beat as (D-115), "" when none or not recorded:
+    # whose dice a saved check's player view is.
+    pc_actor_id: str = ""
 
 
 # --- Constructors (the only sanctioned way to mint these events) ---
@@ -159,6 +162,7 @@ def beat_resolved(
     synopsis: str = "",
     threads: list[str] | None = None,
     paced_thread: str = "",
+    pc_actor_id: str = "",
 ) -> DomainEvent:
     return DomainEvent(
         event_type="BeatResolved",
@@ -171,6 +175,7 @@ def beat_resolved(
             synopsis=synopsis,
             threads=threads or [],
             paced_thread=paced_thread,
+            pc_actor_id=pc_actor_id,
         ).model_dump(),
     )
 

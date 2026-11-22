@@ -67,6 +67,15 @@ def _recv_until(ws: Any, target: str, cap: int = 25) -> list[dict[str, Any]]:
     raise AssertionError(f"never received {target!r}: {[m.get('type') for m in msgs]}")
 
 
+def _recv_from(ws: Any, target: str, who: str, cap: int = 40) -> dict[str, Any]:
+    """The next `target` frame about participant `who`, skipping other players' frames."""
+    for _ in range(cap):
+        m = ws.receive_json()
+        if m.get("type") == target and m.get("participant_id") == who:
+            return dict(m)
+    raise AssertionError(f"never received {target!r} for {who}")
+
+
 # --- broadcast fan-out (the multiplayer seam) ---
 
 
@@ -1355,6 +1364,8 @@ def test_import_operator_instantiates_a_fresh_world() -> None:
         "description": "",
         "tone": [],
         "content": None,
+        "ruleset_id": "",  # D-115: the game it was written for
+        "ruleset_config": {},
     }
     assert store.imported is not None  # the verified bundle reached the store
 
@@ -1416,13 +1427,27 @@ class _FakeUsageStore:
     async def days_since_last_beat(self, branch_id: str) -> int:
         return 0
 
-    async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:
+    async def beat_records(self, branch_id: str, limit: int) -> list[Any]:
+        from uro_core.timeline.beats import BeatCheck, BeatRecord
+
         return [
-            BeatResolvedPayload(
-                beat_id="beat:1",
-                participant_id="player-1",
-                intent_text="strike the warlord",
-                narration="Steel meets steel under a bleeding sky.",
+            BeatRecord(
+                beat=BeatResolvedPayload(
+                    beat_id="beat:1",
+                    participant_id="player-1",
+                    intent_text="strike the warlord",
+                    narration="Steel meets steel under a bleeding sky.",
+                ),
+                commit_id="c:1",
+                mode="encounter",
+                checks=[
+                    BeatCheck(
+                        actor_id="a:pc",
+                        affordance="attack",
+                        outcome="success",
+                        player_view={"dice": [14]},
+                    )
+                ],
             )
         ]
 
@@ -3115,8 +3140,9 @@ def test_openapi_describes_every_input() -> None:
 
 
 def _fight_table(waits_on: dict[str, str]) -> tuple[ServerDeps, list[str]]:
-    """Fake deps for a two-player table in one fight: `waits_on["who"]` is the participant the
-    fight waits on. A beat by anyone else is refused, naming the character it waits on."""
+    """Fake deps for a two-player table and one fight: `waits_on["who"]` is the participant the
+    fight waits on, `waits_on["out"]` a player who isn't in it (default: both are). A beat by
+    another fighter is refused, naming the character the fight waits on."""
     from uro_core.pipeline.encounter import ChoiceRefused
 
     deps = _fake_deps()
@@ -3125,13 +3151,16 @@ def _fight_table(waits_on: dict[str, str]) -> tuple[ServerDeps, list[str]]:
     async def run_beat(
         campaign_id: str, participant: str, text: str, action: Any = None
     ) -> AsyncIterator[Any]:
-        if waits_on["who"] and participant != waits_on["who"]:
+        fighting = participant != waits_on.get("out")
+        if waits_on["who"] and fighting and participant != waits_on["who"]:
             raise ChoiceRefused("it is another's move", waiting_on=f"a:{waits_on['who']}")
         played.append(participant)
+        if action is not None and waits_on.get("then") is not None:
+            waits_on["who"] = waits_on["then"]  # the turn played, the fight now waits elsewhere
         yield "Steel rings."
 
     async def fight_status(campaign_id: str, participant: str | None) -> dict[str, Any] | None:
-        if not waits_on["who"]:
+        if not waits_on["who"] or participant == waits_on.get("out"):
             return None
         return {
             "encounter_id": "e:1",
@@ -3148,7 +3177,8 @@ def _fight_table(waits_on: dict[str, str]) -> tuple[ServerDeps, list[str]]:
 def test_a_fight_turn_is_played_whoever_holds_the_tables_turn() -> None:
     from uro_core.session import PartyArbiter
 
-    waits_on = {"who": "player-2"}
+    # player-1 holds the table's turn and isn't in the fight; player-2's strike will end it
+    waits_on = {"who": "player-2", "then": "", "out": "player-1"}
     deps, played = _fight_table(waits_on)
     client = TestClient(create_app(deps, arbiter=PartyArbiter()))
     with (
@@ -3159,15 +3189,39 @@ def test_a_fight_turn_is_played_whoever_holds_the_tables_turn() -> None:
         _recv_until(a, "participant_joined")
         # player-2 without an action is held by the table as ever
         b.send_json({"type": "intent", "text": "I look around"})
-        assert _recv_until(a, "not_your_turn")[-1]["participant_id"] == "player-2"
+        assert _recv_until(b, "not_your_turn")[-1]["participant_id"] == "player-2"
         # with an action, on a fight that waits on their character, they play
         b.send_json({"type": "intent", "action": {"kind": "strike"}})
-        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"
+        assert _recv_until(b, "beat_committed")[-1]["participant_id"] == "player-2"
         # and the table's turn stayed with player-1
-        waits_on["who"] = ""
         a.send_json({"type": "intent", "text": "I look around"})
-        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-1"
+        assert _recv_from(a, "beat_committed", "player-1")["intent"] == "I look around"
     assert played == ["player-2", "player-1"]
+
+
+def test_the_tables_turn_moves_on_from_a_holder_whose_fight_waits_on_another() -> None:
+    # D-115: nobody has to send a doomed intent first. player-1 holds the table's turn and is in
+    # a fight; once it waits on player-2, the turn passes to player-2 by itself.
+    from uro_core.session import PartyArbiter
+
+    waits_on = {"who": "player-1", "then": "player-2"}  # player-1 strikes, then it's player-2's
+    deps, played = _fight_table(waits_on)
+    client = TestClient(create_app(deps, arbiter=PartyArbiter()))
+    with (
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,  # holds the turn
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
+    ):
+        _recv_until(a, "participant_joined")
+        _recv_until(a, "participant_joined")
+        a.send_json({"type": "intent", "action": {"kind": "strike"}})
+        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-1"
+        b.send_json({"type": "intent", "text": "I press on"})  # no action needed: it is theirs
+        assert _recv_from(b, "beat_committed", "player-2")["intent"] == "I press on"
+        # That beat passed the turn to player-1, who can't use it (the fight still waits on
+        # player-2), so it is player-2's again at once: they play on, never "not your turn".
+        b.send_json({"type": "intent", "text": "and on"})
+        assert _recv_from(b, "beat_committed", "player-2")["intent"] == "and on"
+    assert played == ["player-1", "player-2", "player-2"]
 
 
 def test_an_action_out_of_the_fights_order_is_still_held_by_the_table() -> None:
@@ -3182,29 +3236,43 @@ def test_an_action_out_of_the_fights_order_is_still_held_by_the_table() -> None:
         _recv_until(a, "participant_joined")
         _recv_until(a, "participant_joined")
         b.send_json({"type": "intent", "action": {"kind": "strike"}})
-        assert _recv_until(a, "not_your_turn")[-1]["participant_id"] == "player-2"
+        assert _recv_until(b, "not_your_turn")[-1]["participant_id"] == "player-2"
     assert played == []
 
 
-def test_a_holder_whose_fight_waits_on_another_passes_the_tables_turn() -> None:
+def test_the_tables_turn_never_rests_on_a_player_whose_fight_waits_on_another() -> None:
+    # D-115: the fight already waits on player-2 when the table forms. player-1 sat down first
+    # and would hold the turn; it is player-2's from the moment they join, with nothing sent.
     from uro_core.session import PartyArbiter
 
-    waits_on = {"who": "player-2"}
-    deps, played = _fight_table(waits_on)
+    deps, played = _fight_table({"who": "player-2"})
     client = TestClient(create_app(deps, arbiter=PartyArbiter()))
     with (
-        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,  # holds the turn
+        client.websocket_connect("/campaigns/camp-1/play?token=tok-a") as a,
         client.websocket_connect("/campaigns/camp-1/play?token=tok-b") as b,
     ):
         _recv_until(a, "participant_joined")
         _recv_until(a, "participant_joined")
-        a.send_json({"type": "intent", "text": "I look around", "id": "i-1"})
-        refused = _recv_until(a, "encounter_action_refused")[-1]
-        assert refused["waiting_on"] == "a:player-2" and refused["intent_id"] == "i-1"
-        # the turn passed: player-2 now plays without an action too
-        b.send_json({"type": "intent", "text": "I press on"})
-        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-2"
+        b.send_json({"type": "intent", "text": "I press on"})  # free text: the turn is theirs
+        assert _recv_from(b, "beat_committed", "player-2")["intent"] == "I press on"
     assert played == ["player-2"]
+
+
+async def test_a_beat_that_finishes_after_the_turn_moved_on_doesnt_move_it_again() -> None:
+    # D-115 review: a beat admitted while its sender held the turn may end after the server
+    # passed that turn on; rotating again would skip the next player.
+    from uro_core.session import PartyArbiter
+
+    arbiter = PartyArbiter()
+    for who in ("h", "n", "m"):
+        await arbiter.note_joined("c", who)
+    assert arbiter.holder("c") == "h"
+    await arbiter.beat_committed("c", "h", "")  # the server passes h's turn on
+    assert arbiter.holder("c") == "n"
+    await arbiter.beat_committed("c", "h", "")  # h's own beat ends late: n keeps the turn
+    assert arbiter.holder("c") == "n"
+    await arbiter.beat_committed("c", "n", "")
+    assert arbiter.holder("c") == "m"
 
 
 # --- D-114: a ruleset described under given settings ---
@@ -3259,7 +3327,7 @@ def test_describing_a_ruleset_refuses_what_the_ruleset_refuses() -> None:
 def test_a_failed_fight_turn_out_of_the_tables_order_leaves_the_tables_turn_alone() -> None:
     from uro_core.session import PartyArbiter
 
-    waits_on = {"who": "player-2"}
+    waits_on = {"who": "player-2", "out": "player-1"}  # the holder isn't in the fight
     deps, played = _fight_table(waits_on)
     inner = deps.run_beat
 
@@ -3283,9 +3351,8 @@ def test_a_failed_fight_turn_out_of_the_tables_order_leaves_the_tables_turn_alon
         # (each frame is read on its sender's own socket: the test client runs every socket on
         # its own event loop, and a frame from another loop may not wake a waiting reader)
         assert _recv_until(b, "beat_failed")[-1]["participant_id"] == "player-2"
-        waits_on["who"] = ""
         a.send_json({"type": "intent", "text": "I look around"})  # still player-1's turn
-        assert _recv_until(a, "beat_committed")[-1]["participant_id"] == "player-1"
+        assert _recv_from(a, "beat_committed", "player-1")["intent"] == "I look around"
     assert played == ["player-1"]
 
 
@@ -3310,3 +3377,18 @@ def test_a_fault_reading_the_fight_leaves_the_tables_answer_and_the_socket() -> 
         b.send_json({"type": "intent", "text": "still here"})  # the socket is still open
         assert _recv_until(b, "not_your_turn")[-1]["text"] == "still here"
     assert played == []
+
+
+# --- D-115: the chronicle says what each saved beat's commit said (Uro Loom request 24) ---
+
+
+def test_the_world_chronicle_carries_each_beats_commit_without_anyones_dice() -> None:
+    resp = TestClient(create_app(_operator_deps(_FakeUsageStore()))).get(
+        "/worlds/w:1/chronicle?token=tok-a"
+    )
+    (beat,) = resp.json()["beats"]
+    assert beat["narration"].startswith("Steel") and beat["commit_id"] == "c:1"
+    assert beat["mode"] == "encounter" and beat["created"] == [] and beat["threads_changed"] == []
+    assert beat["checks"] == [
+        {"actor_id": "a:pc", "affordance": "attack", "outcome": "success", "player_view": None}
+    ]

@@ -1578,6 +1578,7 @@ class Engine:
                     participant_id=participant_id,
                     intent_text=intent_text,
                     narration=narration,
+                    pc_actor_id=ctx.pc_actor_id,
                 ),
             ]
             extracted_n = 0
@@ -1601,6 +1602,7 @@ class Engine:
                     narration=narration,
                     threads=touched,
                     paced_thread=ctx.paced_thread.thread_id if ctx.paced_thread else "",
+                    pc_actor_id=ctx.pc_actor_id,
                 ),
                 *check_events,
                 *extracted,

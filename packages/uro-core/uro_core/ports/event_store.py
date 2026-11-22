@@ -16,6 +16,7 @@ from uro_core.export import (
     WorldBundle,  # a whole world's portable, hash-chained bundle (export/import)
 )
 from uro_core.metering import LLMCall
+from uro_core.timeline.beats import BeatRecord
 from uro_core.timeline.models import (
     Branch,
     BranchInfo,
@@ -174,6 +175,11 @@ class EventStore(Protocol):
         """In-fiction days the clock moved OUTSIDE play since the branch's newest beat (D-84): the
         days of every TimeAdvanced after it, except an intent's own (caused by `player_action`
         with reason `play`, which its beat already narrated). 0 when there's no beat yet."""
+        ...
+
+    async def beat_records(self, branch_id: str, limit: int) -> list[BeatRecord]:
+        """The last `limit` beats, oldest first, each with what its commit said (D-115): checks,
+        mode, what it created, the plots that moved until the next beat (`timeline/beats.py`)."""
         ...
 
     async def recent_beats(self, branch_id: str, limit: int) -> list[BeatResolvedPayload]:

@@ -246,7 +246,7 @@ The settings are `{definition, resolver}`:
 
   | Resolver | Dice | Difficulty | Bands |
   |---|---|---|---|
-  | `d20` | d20 + 2 x step (`per_step`) | a target: 8 / 12 / 16 / 20 | `fail` below, `success` at it, `great` at target + 10 or a natural 20 |
+  | `d20` | d20 + 2 x step (`per_step`), plus `base` (default 0) | a target: 8 / 12 / 16 / 20 | `fail` below, `success` at it, `great` at target + 10 or a natural 20 |
   | `2d6` | 2d6 + (step - 1, held to -1..+3) | a shift: +1 / 0 / -1 / -2 | `fail` to 6, `cost` 7 to 9, `success` 10+; `great` at 12+ only if turned on |
   | `pool` | max(step, 1) d6 | the face a die must reach: 3 / 4 / 5 / 6 | `fail` none, `success` one or two, `great` three; `push` rerolls a failed pool once, paid on a track |
 
@@ -273,7 +273,10 @@ The settings are `{definition, resolver}`:
 
 A spec is `{ratings?, picks?, seed?}`. An empty one is the default character; one that answers
 any creation choice must complete every array and pick and stay within a budget (points may be
-left unspent), and a preview's `guidance` says what is left. A rolled creation uses the spec's
+left unspent), and a preview's `guidance` says what is left (`left`, `complete`) and reads each
+rating for a creator (`ratings.<key>`: `step`, the scale's `word`, how the resolver `reads` it
+such as `+2` or `3d6`, and `can_raise` / `can_lower` under the creation's rules, so a client
+never counts points itself). A rolled creation uses the spec's
 `seed`. Outside a fight an effect on a `target` does nothing (a check is handed one sheet). A
 band's effects are only used under a resolver that rolls that band (`cost` under `2d6` only).
 Answering an advancement always starts the advance track over unless its `then` already did. A

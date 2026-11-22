@@ -61,6 +61,7 @@ from uro_core.metering import LLMCall
 from uro_core.ports.model_registry import ModelConnection, ProviderCredential, RoleBinding
 from uro_core.ports.outbox import OutboxMessage
 from uro_core.ports.tokens import TokenInfo
+from uro_core.timeline.beats import BEAT_RECORD_EVENTS, BeatRecord, beat_records
 from uro_core.timeline.models import (
     FORK_TIME_SKIP,
     ActorView,
@@ -239,6 +240,8 @@ def _world(row: dict[str, Any], genesis: dict[str, Any] | None) -> World:
         description=payload.get("description") or "",
         tone=list(payload.get("tone") or []),
         content=dict(payload["content"]) if payload.get("content") else None,
+        ruleset_id=payload.get("ruleset_id") or "",
+        ruleset_config=dict(payload.get("ruleset_config") or {}),
     )
 
 
@@ -1397,6 +1400,50 @@ class PostgresEventStore:
             )
         # rows are newest-first; present oldest-first for chat reconstruction.
         return [BeatResolvedPayload(**r["payload"]) for r in reversed(rows)]
+
+    async def beat_records(self, branch_id: str, limit: int) -> list[BeatRecord]:
+        """The last `limit` beats on the branch, oldest first, each with what its commit said
+        (D-115): its checks, mode, what it created and the plots that moved until the next beat.
+        Read from the branch's lineage, so a fork tells its story's past the same way."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE chain AS (
+                    SELECT c.commit_id, c.parent_id, 0 AS depth
+                    FROM branches b JOIN commits c ON c.commit_id = b.head_commit
+                    WHERE b.branch_id = $1
+                    UNION ALL
+                    SELECT c.commit_id, c.parent_id, chain.depth + 1
+                    FROM commits c JOIN chain ON c.commit_id = chain.parent_id
+                ),
+                beats AS (
+                    SELECT chain.depth
+                    FROM chain JOIN events e ON e.commit_id = chain.commit_id
+                    WHERE e.event_type = 'BeatResolved'
+                    ORDER BY chain.depth ASC, e.seq DESC
+                    LIMIT $2
+                )
+                SELECT chain.commit_id, e.event_type,
+                       -- a fight's events only mark the beat as a fight's: their payloads
+                       -- (whole sheets, every trace) stay in the database
+                       CASE WHEN e.event_type LIKE 'Encounter%' THEN '{}'::jsonb
+                            ELSE e.payload END AS payload
+                FROM chain JOIN events e ON e.commit_id = chain.commit_id
+                WHERE chain.depth <= (SELECT max(depth) FROM beats)
+                  AND e.event_type = ANY($3::text[])
+                ORDER BY chain.depth DESC, e.seq ASC
+                """,
+                branch_id,
+                limit,
+                list(BEAT_RECORD_EVENTS),
+            )
+            stakes = await conn.fetch(
+                "SELECT thread_id, stakes FROM proj_threads WHERE branch_id = $1", branch_id
+            )
+        return beat_records(
+            [(r["commit_id"], r["event_type"], r["payload"]) for r in rows],
+            {r["thread_id"]: r["stakes"] for r in stakes},
+        )
 
     # --- branching: markers, snapshots, fork, materialization (docs/03, 07) ---
 

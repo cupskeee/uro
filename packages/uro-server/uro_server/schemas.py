@@ -355,9 +355,42 @@ class Events(Out):
     events: list[BundleEvent]
 
 
+class ChronicleCheck(Out):
+    actor_id: str
+    affordance: str
+    outcome: str
+    player_view: dict[str, Any] | None = None  # the acting player's own character only
+
+
+class ChronicleCreated(Out):
+    kind: str
+    id: str
+    name: str
+
+
+class ChronicleThreadChange(Out):
+    thread_id: str
+    stakes: str
+    from_state: str
+    to_state: str
+
+
+class ChronicleBeat(BeatResolvedPayload):
+    """A saved beat's words (BeatResolved) and what its commit said (D-115): the same player-safe
+    facts `beat_committed` carried when it was played."""
+
+    commit_id: str
+    mode: str  # "encounter" when the beat was a fight's, else "freeroam"
+    checks: list[ChronicleCheck]
+    created: list[ChronicleCreated]
+    # plots that moved from this beat until the next one (its narration, the world's rules
+    # reacting, days passing, the game moving a plot)
+    threads_changed: list[ChronicleThreadChange]
+
+
 class Chronicle(Out):
     branch: str | None = None  # the world chronicle names its branch; a campaign's is its own
-    beats: list[BeatResolvedPayload]
+    beats: list[ChronicleBeat]
 
 
 # --- projection state rows (one per `_SNAPSHOT_TABLES` section) ---
