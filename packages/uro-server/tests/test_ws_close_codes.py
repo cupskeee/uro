@@ -74,3 +74,61 @@ def test_a_real_client_gets_each_refusal_code() -> None:
             )
         ]
     assert codes == [4401, 4404, 4403]
+
+
+async def test_a_client_that_leaves_during_the_handshake_is_not_a_server_error() -> None:
+    # A browser navigating away (or a dev build mounting twice) drops the socket before the
+    # server has accepted it. That used to raise out of the handler: a traceback per socket in
+    # the operator's log, for nothing that went wrong.
+    import logging
+
+    seen: list[str] = []
+
+    class Catch(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.levelno >= logging.ERROR:
+                seen.append(record.getMessage())
+
+    slow = _deps()
+    quick = slow.campaign_exists
+
+    async def campaign_exists(campaign_id: str) -> bool:
+        await asyncio.sleep(0.15)  # the client is gone by the time the server would accept
+        return await quick(campaign_id)
+
+    slow.campaign_exists = campaign_exists
+    handler = Catch()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(slow), host="127.0.0.1", port=port, log_level="error")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(200):
+        if server.started:
+            break
+        await asyncio.sleep(0.02)
+    logging.getLogger("uvicorn.error").addHandler(handler)
+    try:
+        for path in ("/campaigns/camp-1/play?token=tok", "/campaigns/camp-1/play?token=nope"):
+            _, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(
+                (
+                    f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
+                    "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    "Sec-WebSocket-Version: 13\r\n\r\n"
+                ).encode()
+            )
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+        await asyncio.sleep(0.6)
+        # and the server still serves the next player
+        assert await _close_code(port, "/campaigns/nope/play?token=tok") == 4404
+    finally:
+        logging.getLogger("uvicorn.error").removeHandler(handler)
+        server.should_exit = True
+        thread.join(timeout=5)
+    assert seen == []

@@ -112,9 +112,11 @@ _PACK_UPLOAD_PATHS = frozenset(
 
 async def _refuse(ws: WebSocket, code: int) -> None:
     """Close a play socket with one of the documented codes (D-107): accepted first, so the code
-    reaches the client instead of a bare HTTP 403 handshake rejection."""
-    await ws.accept()
-    await ws.close(code=code)
+    reaches the client instead of a bare HTTP 403 handshake rejection. A client that left during
+    the handshake has nobody to tell."""
+    with contextlib.suppress(RuntimeError):
+        await ws.accept()
+        await ws.close(code=code)
 
 
 def _is_pack_upload(path: str) -> bool:
@@ -2896,7 +2898,12 @@ def create_app(
         if tok_campaign is not None and tok_campaign != campaign_id:
             await _refuse(ws, 4403)  # token not valid for this campaign
             return
-        await ws.accept()
+        try:
+            await ws.accept()
+        except RuntimeError:
+            # The client left during the handshake (a page navigating away, a dev build mounting
+            # twice): nothing was set up, and there is nothing to log.
+            return
         live_sockets.add((token, ws, campaign_id))
         # Everything fallible (a DB round-trip in pc_seats) runs INSIDE the try, so a transient
         # failure can't orphan the hub subscription / turn-roster entry (D-39 review: an unguarded
@@ -2981,6 +2988,11 @@ def create_app(
                             )
         except WebSocketDisconnect:
             pass
+        except RuntimeError:
+            # Reading from or writing to a socket whose client has gone raises this, not a
+            # WebSocketDisconnect, when the close raced the call. Anything else is a real fault.
+            if ws.client_state == WebSocketState.CONNECTED:
+                raise
         finally:
             live_sockets.discard((token, ws, campaign_id))
             if forward is not None:
