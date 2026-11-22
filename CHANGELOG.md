@@ -9,6 +9,12 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- A client that drops the play socket during the handshake (a page navigating away, a dev build
+  mounting twice) no longer leaves a traceback in the server log. Nothing else changed: the
+  socket was already gone.
+
 ## [0.22.0] - 2026-11-22
 
 Upgrading: finish or abandon any fight still open in a campaign that plays fights turn by turn
