@@ -9,6 +9,10 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-22
+
+No migration.
+
 For a ruleset plugin: one that reads `CharSpec.threat` now declares `threat_scale()`, or it is
 handed no word. For a pack: an actor's `threat` is checked against the pack's ruleset at validate
 and import, no longer at parse. `uro_core.rulesets.base.THREAT_LEVELS` is gone
@@ -1417,7 +1421,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/cupskeee/uro/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/cupskeee/uro/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/cupskeee/uro/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/cupskeee/uro/compare/v0.20.0...v0.21.0
