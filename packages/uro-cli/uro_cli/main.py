@@ -23,7 +23,7 @@ from uro_core.pipeline.engine import BeatMechanics, BeatResult, Engine
 from uro_core.ports.model_registry import ROLES
 from uro_core.providers.router import ProviderRouter
 from uro_core.rulesets import registry
-from uro_core.rulesets.base import CharSpec, CharSpecError, Ruleset
+from uro_core.rulesets.base import CharSpec, CharSpecError, Ruleset, threat_scale
 from uro_core.rulesets.rng import Rng
 from uro_core.timeline.gear import starting_gear
 from uro_core.timeline.models import FORK_TIME_SKIP, World
@@ -673,14 +673,16 @@ def play(
                 raise typer.Exit(1)
             # No ruleset in bare (ablation) OR --no-mechanics (narrative-only) mode — the
             # planner/gate are exactly what bare ablates and what no-mechanics skips.
+            # Rebind the campaign's OWN ruleset (D-30) — a PbtA campaign plays under uro_pbta.
+            own = await registry.resolve_for_campaign(store, campaign)
             engine = Engine(
                 store,
                 build_router(provider, model, role_models),
-                # Rebind the campaign's OWN ruleset (D-30) — a PbtA campaign plays under uro_pbta.
-                ruleset=None
-                if (bare or no_mechanics)
-                else await registry.resolve_for_campaign(store, campaign),
+                ruleset=None if (bare or no_mechanics) else own,
                 bare=bare,
+                # without mechanics the story still records how its people size up, in the
+                # campaign's own game's words (D-116), for a later session that rolls
+                threat=threat_scale(own) if no_mechanics else None,
             )
 
             history = await store.recent_beats(campaign.branch_id, 3)
@@ -1670,11 +1672,15 @@ def state(
         "--sections",
         help="comma-separated projections, e.g. actors,claims,beliefs,sheets,items,edges,counters",
     ),
+    story: bool = typer.Option(
+        False, "--story", help="a campaign's state as its told story has shown it (D-117)"
+    ),
 ) -> None:
     """World state, one JSON row per entity: a campaign's now, or with --world any branch head or
     any past commit (--at materializes it like a fork and discards it — nothing is written). Every
     section, including the omniscient ones (claim truth values, hidden beliefs, sheets): the
-    operator view (D-45)."""
+    operator view (D-45). --story narrows a campaign's actors, places, factions and threads to
+    what its beats have named or made (what a player's client shows)."""
 
     async def _run() -> None:
         if (campaign_id is None) == (world is None):
@@ -1688,13 +1694,21 @@ def state(
                 "--at/--branch read a world: use --world (a campaign shows its now)", err=True
             )
             raise typer.Exit(1)
+        if story and campaign_id is None:
+            typer.echo("--story reads a campaign's story: give a campaign id", err=True)
+            raise typer.Exit(1)
         names = [s.strip() for s in sections.split(",") if s.strip()]
         store = build_store()
         await connect_store(store)
         try:
             if campaign_id is not None:
                 c = await _campaign_or_exit(store, campaign_id)
-                rows = (await store.query_across([c.branch_id], names))[c.branch_id]
+                if story:
+                    from uro_core.timeline.story import story_state
+
+                    rows = await story_state(store, c.branch_id, names)
+                else:
+                    rows = (await store.query_across([c.branch_id], names))[c.branch_id]
             else:
                 w = await _world_or_exit(store, world)
                 if at is not None:

@@ -86,7 +86,7 @@ from uro_core.pipeline.prompts import DEFAULT_ENV, PromptEnv
 from uro_core.pipeline.recall import RecallBundle
 from uro_core.ports.projections import ProjectionQueries
 from uro_core.providers.base import Message
-from uro_core.rulesets.base import THREAT_LEVELS
+from uro_core.rulesets.base import ThreatScale
 from uro_core.timeline.models import ClaimView, ThreadView
 
 logger = logging.getLogger(__name__)
@@ -99,9 +99,9 @@ class ProposedActor(BaseModel):
     role: str = ""
     member_of: str = ""  # a faction this actor belongs to (D-50; cascade-created if it's new)
     located_in: str = ""  # a place this actor is at (D-50; cascade-created if it's new)
-    # D-112: how dangerous the prose shows a NEW person to be, in the engine's neutral words
-    # (rulesets.base.THREAT_LEVELS); the ruleset turns it into numbers if they ever fight. Any
-    # other word, or a non-string, is dropped — never the person (review).
+    # D-112, D-116: how the prose shows a NEW person to size up, in one word of the bound
+    # ruleset's own scale (`rulesets.base.ThreatScale`); the ruleset turns it into numbers if a
+    # sheet is ever needed. Any other word, or a non-string, is dropped — never the person.
     threat: str = ""
 
     @field_validator("threat", mode="before")
@@ -411,8 +411,14 @@ def _claims_fail_closed(items: Any) -> Any:
 
 
 def build_extractor_messages(
-    recall: RecallBundle, narration: str, *, env: PromptEnv | None = None
+    recall: RecallBundle,
+    narration: str,
+    *,
+    env: PromptEnv | None = None,
+    threat: ThreatScale | None = None,
 ) -> list[Message]:
+    """`threat` is the bound ruleset's scale (D-116): with one, the prompt asks for a word of it
+    for a new person; with none (no ruleset, or one that sizes nobody up) it doesn't ask."""
     known_actors = "\n".join(f"- {a.name} [{a.actor_id}]" for a in recall.actors) or "(none known)"
     known_places = "\n".join(f"- {p.name} [{p.place_id}]" for p in recall.places) or "(none)"
     known_factions = "\n".join(f"- {f.name} [{f.faction_id}]" for f in recall.factions) or "(none)"
@@ -457,7 +463,12 @@ def build_extractor_messages(
         "character reports: those are dialogue claims. (A character retelling a KNOWN CLAIM is "
         "still a restatement — leave that out.)"
     )
-    system = (env or DEFAULT_ENV).render("extractor.system.j2")
+    system = (env or DEFAULT_ENV).render(
+        "extractor.system.j2",
+        threat_words=list(threat.words) if threat else [],
+        threat_measures=threat.measures if threat else "",
+        threat_examples=threat.examples if threat else "",
+    )
     return [
         Message(role="system", content=system),
         Message(role="user", content=user),
@@ -554,8 +565,12 @@ async def run_gauntlet(
     *,
     policy: ExtractionPolicy | None = None,
     narration: str | None = None,
+    threat_words: tuple[str, ...] = (),
 ) -> list[DomainEvent]:
     """Validate proposals into committable events (docs/13). Downgrade-or-drop only.
+
+    `threat_words` is the bound ruleset's threat scale (D-116): a proposed `threat` is kept only
+    when it is one of them, so with no scale no word is ever recorded.
 
     `narration` (the prose the claims were extracted from) lets the gauntlet check provenance: a
     claim labelled 'narrator' whose words come from a character's quoted speech is recorded as
@@ -674,7 +689,7 @@ async def run_gauntlet(
         # A known person described after they were named (live pass: "Halvard Brenn" one beat, "the
         # hulking veteran in battered plate" the next): the first danger word shown is recorded.
         word = threat.strip().lower()
-        if word in THREAT_LEVELS and actor_id in untagged and policy.extract_actors:
+        if word in threat_words and actor_id in untagged and policy.extract_actors:
             untagged.discard(actor_id)
             events.append(actor_threat_noted(actor_id=actor_id, threat=word))
 
@@ -756,7 +771,7 @@ async def run_gauntlet(
                 tier=1,
                 role=role.strip(),
                 provenance="emergent",
-                threat=threat.strip().lower() if threat.strip().lower() in THREAT_LEVELS else "",
+                threat=threat.strip().lower() if threat.strip().lower() in threat_words else "",
             )
         )
         actors_by_key.setdefault(key, []).append(aid)

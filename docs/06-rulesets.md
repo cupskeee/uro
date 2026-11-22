@@ -48,10 +48,15 @@ refuse a spec it can't build: raise `CharSpecError` with located `SpecProblem`s,
 `ValidationError` from its own spec model escape. Callers go through `build_character`, which turns
 either into problems; an empty spec must always build. The built-ins validate strictly (an
 unknown key or a value past a cap is refused, not clamped; a cap is the world's setting).
-`CharSpec.threat` is the engine's one neutral hint (`harmless`, `weak`, `average`, `strong`,
-`deadly`, `THREAT_LEVELS`), set by a pack's actor or by the extractor for a new person; the ruleset
-decides what it means (the built-ins map it to a level, a stat spread or trait dice, capped, with
-the spec's own values winning) or ignores it. `CheckRequest.holdings` and `Combatant.holdings`
+`CharSpec.threat` is one word of the ruleset's own threat scale (D-116): the optional hook
+`threat_scale()` returns a `ThreatScale` (`words`, lowest first; `measures`, how the extractor is
+told to pick one; `examples`). The engine carries the word as an opaque string, set by a pack's
+actor (refused at validate if the pack's ruleset doesn't name it) or by the extractor for a new
+person (asked only in the bound ruleset's words), and hands it back the first time that actor
+needs a sheet; a word from another game's scale is passed as none. A ruleset with no hook is never
+handed one. A scale's words are distinct, lowercase and trimmed. The three dice built-ins share five fight words (`harmless`, `weak`, `average`,
+`strong`, `deadly`, in `rulesets/five_words.py`) and map them to a level, a stat spread or trait
+dice, capped, with the spec's own values winning. `CheckRequest.holdings` and `Combatant.holdings`
 carry what the actor holds (`Holding`: item id, name, opaque data from a pack's `{name, data}`
 starting gear); a ruleset may ignore them. `CheckResult.player_view` is the part of a check a
 player may see, the ruleset's choice (the built-ins: the actor's own dice, modifier, total, the
@@ -268,7 +273,9 @@ The settings are `{definition, resolver}`:
   - `lists` of options (each may give tags, steps, room on a track, things to hold), `creation`
     (`array`, `budget`, `roll`, `pick`) and `advancement` (`budget` or `pick`, with `then`).
   - `encounter` (`by`: a rating, `alternate` or `simultaneous`; `award`), `foes` (tiers, each
-    picked by the threat words it lists; a spec can't ask for one), `ready_made`
+    picked by the threat words it lists; a spec can't ask for one; D-116: tiers picked only by the five
+    standard words keep that whole scale; any other word makes the scale the tiers' own words,
+    with optional `threat_measures` and `threat_examples` saying what they measure), `ready_made`
     (`{name, line, spec}`), `credits`.
 
 A spec is `{ratings?, picks?, seed?}`. An empty one is the default character; one that answers

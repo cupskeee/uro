@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from uro_core.pipeline.pacing import PacingSettings
-from uro_core.rulesets.base import THREAT_LEVELS
 from uro_core.worldpack.rules import RulePack
 
 Rating = Literal["none", "mild", "mature", "explicit"]
@@ -156,17 +155,11 @@ class ActorSeed(BaseModel):
     knows: list[str] = Field(default_factory=list)
     provenance: str = "author"  # "ai_backfill" for machine-generated seeds (D-108)
     # D-112: what its sheet is built from the first time one is needed — the ruleset's own spec
-    # (checked against the pack's ruleset at validate and import), and/or the engine's neutral
-    # danger word (one of rulesets.base.THREAT_LEVELS)
+    # and/or one word of that ruleset's threat scale (D-116). Both are checked against the pack's
+    # ruleset at validate and import (`worldpack.create.ruleset_problem`), never here: the words
+    # are the ruleset's, and parsing doesn't know it.
     spec: dict[str, Any] = Field(default_factory=dict)
     threat: str = ""
-
-    @field_validator("threat")
-    @classmethod
-    def _threat_word(cls, v: str) -> str:
-        if v and v not in THREAT_LEVELS:
-            raise ValueError(f"threat is one of {', '.join(THREAT_LEVELS)}")
-        return v
 
 
 class CharacterSeed(BaseModel):

@@ -41,6 +41,8 @@ from uro_core.providers.adapters.stub import StubProvider
 from uro_core.providers.base import Message
 from uro_core.providers.registry import build_router_from_registry
 from uro_core.providers.router import ProviderRouter
+from uro_core.rulesets.base import threat_scale
+from uro_core.rulesets.registry import resolve_for_branch
 
 DSN = os.environ.get("URO_DATABASE_URL", "postgresql://uro:uro@localhost:5433/uro")
 RECENCY = 8  # the Engine default
@@ -193,6 +195,9 @@ async def _main(source: str, provider: str, branch: str | None = None) -> None:
                 raise SystemExit("the model-connection registry is empty (see `uro provider`)")
             router = built
         policy = await store.get_extraction_policy()
+        # the source branch's ruleset's threat scale (D-116). Live play used the CAMPAIGN's: a
+        # campaign that pinned a game of its own (D-112) was asked in other words than these.
+        scale = threat_scale(await resolve_for_branch(store, src_branch))
         start = await _before_first_beat(store, src_branch)
         fork = await store.fork_branch(src.world_id, start, f"replay-{new_id()}")
         branch = fork.branch_id
@@ -203,11 +208,18 @@ async def _main(source: str, provider: str, branch: str | None = None) -> None:
             # what the engine shows the extractor (D-82): recall over the intent and the narration
             seen = f"{b.intent_text}\n{b.narration}"
             recall = await assemble_recall(store, branch, seen, RECENCY)
-            messages = build_extractor_messages(recall, b.narration)
+            messages = build_extractor_messages(recall, b.narration, threat=scale)
             extraction, used = await _extract(router, messages, store, branch)
             calls += used
             events = (
-                await run_gauntlet(store, branch, extraction, policy=policy, narration=b.narration)
+                await run_gauntlet(
+                    store,
+                    branch,
+                    extraction,
+                    policy=policy,
+                    narration=b.narration,
+                    threat_words=scale.words if scale else (),
+                )
                 if extraction
                 else []
             )

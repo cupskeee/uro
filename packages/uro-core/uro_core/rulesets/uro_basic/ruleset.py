@@ -34,8 +34,10 @@ from uro_core.rulesets.base import (
     EncounterOutcome,
     EncounterState,
     SpecProblem,
+    ThreatScale,
 )
 from uro_core.rulesets.base import Sheet as SheetDict
+from uro_core.rulesets.five_words import FIVE_WORDS
 from uro_core.rulesets.rng import Rng
 
 ABILITIES: tuple[str, ...] = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
@@ -173,6 +175,10 @@ class UroBasic:
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = BasicConfig.model_validate(config or {})
+
+    def threat_scale(self) -> ThreatScale:
+        """The five fight words (D-116); `_THREAT` says what each means here."""
+        return FIVE_WORDS
 
     def sheet_schema(self) -> dict[str, Any]:
         return Sheet.model_json_schema()

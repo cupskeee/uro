@@ -363,7 +363,12 @@ QUERY: dict[tuple[str, str], list[Query]] = {
             "sections",
             "Comma-separated projection sections.",
             default=("actors,threads,places,factions"),
-        )
+        ),
+        Query(
+            "scope",
+            "`world`: every row on the branch. `story`: what its told story has shown (D-117).",
+            default="world",
+        ),
     ],
     ("GET", "/campaigns/{campaign_id}/chronicle"): [_LIMIT[20]],
     ("GET", "/campaigns/{campaign_id}/encounter"): [

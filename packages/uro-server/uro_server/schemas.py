@@ -515,6 +515,9 @@ class WorldState(Out):
 
 class CampaignState(Out):
     branch_id: str
+    # "world": every row on the branch. "story": what its told story has shown (D-117). A client
+    # that relies on the narrowing checks this: a server from before D-117 ignores `?scope=`.
+    scope: str = "world"
     state: StateSections
 
 

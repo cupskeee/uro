@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from uro_core.rulesets.rng import Rng
 
@@ -83,17 +83,55 @@ Sheet = dict[str, Any]
 # --- character model ---
 
 
-# How dangerous an actor is, in words every game can read (D-112): the one engine-defined hint a
-# spec carries. A pack's actor or the extractor may set it; the RULESET decides what it means (a
-# level, a dice pool, nothing at all). "" = no hint.
-THREAT_LEVELS: tuple[str, ...] = ("harmless", "weak", "average", "strong", "deadly")
+class ThreatScale(BaseModel):
+    """The words a ruleset sizes a non-player character up by (D-116), lowest first, and how the
+    extractor is told to pick one. The words and what they measure are the ruleset's: the engine
+    carries one as an opaque string on the actor (a pack's `threat`, or the extractor's reading of
+    the prose) and hands it back in `CharSpec.threat` the first time that actor needs a sheet.
+
+    `measures` finishes the sentence "`threat` is …" in the extractor's prompt ("how dangerous
+    they would be in a fight"); `examples` follows the list of words, in brackets."""
+
+    words: tuple[str, ...]
+    measures: str
+    examples: str = ""
+
+    @field_validator("words")
+    @classmethod
+    def _plain_words(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        # the gauntlet compares a model's word lowercased and trimmed, so the scale's must be
+        bad = [w for w in v if not w or w != w.strip().lower()]
+        if bad or len(set(v)) != len(v):
+            raise ValueError(f"threat words are distinct, lowercase and trimmed: {bad or v}")
+        return v
+
+
+def threat_scale(ruleset: Any) -> ThreatScale | None:
+    """The ruleset's threat scale, or None: an optional port hook (`threat_scale()`). A ruleset
+    without one (or with no ruleset bound) has no such word: the extractor isn't asked for one,
+    a pack's `threat` is refused at validate, and one an actor already carries is not passed on."""
+    hook = getattr(ruleset, "threat_scale", None)
+    scale = hook() if hook is not None else None
+    return scale if scale is not None and scale.words else None
+
+
+def threat_problem(ruleset: Any, word: str) -> str | None:
+    """Why an authored threat word can't be used under this ruleset, or None."""
+    if not word:
+        return None
+    scale = threat_scale(ruleset)
+    if scale is None:
+        return f"threat {word!r}: {getattr(ruleset, 'id', 'this ruleset')} reads no threat word"
+    if word not in scale.words:
+        return f"threat {word!r}: one of {', '.join(scale.words)}"
+    return None
 
 
 class CharSpec(BaseModel):
     """Ruleset-opaque character-creation input. The ruleset interprets `data` (uro_basic reads
-    `abilities`/`level`/`weapon_tier`; uro_pbta reads its stat spread + playbook). `threat` is the
-    engine's one neutral hint (`THREAT_LEVELS`, D-112); a ruleset may read it or ignore it, and a
-    value in `data` should win over what the hint implies."""
+    `abilities`/`level`/`weapon_tier`; uro_pbta reads its stat spread + playbook). `threat` is one
+    word of the ruleset's own `ThreatScale` (D-116), or ""; a value in `data` should win over what
+    the word implies."""
 
     data: dict[str, Any] = Field(default_factory=dict)
     threat: str = ""
@@ -136,12 +174,12 @@ def spec_problems(exc: Exception) -> list[SpecProblem]:
 
 def build_character(ruleset: Any, spec: CharSpec, rng: Any) -> Sheet:
     """`ruleset.new_character`, with a refused spec as a `CharSpecError` whatever the ruleset
-    raised (its own error, or a `ValidationError`/`ValueError`/`TypeError` from validating), and
-    an unknown threat word refused before the ruleset sees it."""
-    if spec.threat and spec.threat not in THREAT_LEVELS:
-        raise CharSpecError(
-            [SpecProblem(loc=["threat"], message=f"one of {', '.join(THREAT_LEVELS)}")]
-        )
+    raised (its own error, or a `ValidationError`/`ValueError`/`TypeError` from validating). A
+    threat word outside the ruleset's own scale is not passed on (D-116): an actor keeps the word
+    it was given under one game, and a campaign may play the same world by another (D-112), so at
+    play time a foreign word means no hint. Authoring is where it is refused (`threat_problem`)."""
+    if threat_problem(ruleset, spec.threat) is not None:
+        spec = spec.model_copy(update={"threat": ""})
     try:
         sheet: Sheet = ruleset.new_character(spec, rng)
     except CharSpecError:

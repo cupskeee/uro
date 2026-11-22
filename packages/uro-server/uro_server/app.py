@@ -59,6 +59,7 @@ from uro_core.rulesets.base import CharSpecError
 from uro_core.session import AdmitDecision, SoloArbiter, TurnArbiter, VoteCoordinator
 from uro_core.timeline.beats import BeatRecord, for_players, without_views
 from uro_core.timeline.models import FORK_TIME_SKIP, World
+from uro_core.timeline.story import SCOPES, story_state
 from uro_core.worldpack.create import SeedResult
 
 from uro_server import schemas as S
@@ -2639,6 +2640,12 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such campaign")
         raw = request.query_params.get("sections") or "actors,threads,places,factions"
         sections = raw.split(",")
+        # D-117: `scope=story` narrows the scene sections to what the branch's told story has
+        # shown (people and places a beat named or made, threads not dormant), so a player's client
+        # needn't read the whole world to draw a panel. The default stays the whole branch.
+        scope = request.query_params.get("scope") or "world"
+        if scope not in SCOPES:
+            raise HTTPException(status_code=400, detail=f"scope is one of {', '.join(SCOPES)}")
         # D-45 epistemic boundary: a PLAYER may read only the non-omniscient scene sections; the
         # omniscient projections (claims' truth values, hidden beliefs, sheets/items/edges/counters)
         # are operator-only observability (holistic review — the previous any-authed pass leaked the
@@ -2653,15 +2660,17 @@ def create_app(
         try:
             # query_across raises on an unknown section (typo-loud, B5) — a client typo is bad
             # INPUT → 400, matching every mutating endpoint (not a bare 500).
-            across = await store.query_across([c.branch_id], sections)
+            if scope == "story":
+                state = await story_state(store, c.branch_id, sections)
+            else:
+                state = (await store.query_across([c.branch_id], sections)).get(c.branch_id, {})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        state = across.get(c.branch_id, {})
         if not admin:  # an NPC's build and danger word are hidden values (D-46, D-112 review)
             for row in state.get("actors", []):
                 row.pop("spec", None)
                 row.pop("threat", None)
-        return {"branch_id": c.branch_id, "state": state}
+        return {"branch_id": c.branch_id, "scope": scope, "state": state}
 
     @app.delete("/campaigns/{campaign_id}", **_out(S.Removed))
     async def delete_campaign_endpoint(campaign_id: str, request: Request) -> dict[str, Any]:

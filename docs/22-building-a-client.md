@@ -96,7 +96,8 @@ POST /worlds/{world_id}/campaigns             {"participant": "player-1", "new_p
 GET  /campaigns                               resume: every campaign (?world_id= to filter)
 GET  /campaigns/{c}/chronicle?limit=50        the story so far, oldest first: rebuild the transcript on load, rolls included (each beat carries the `checks`, `mode`, `created` and `threads_changed` its commit said, D-115)
 WS   /campaigns/{c}/play?token=…              play
-GET  /campaigns/{c}/state?sections=pcs,actors,places,threads,factions,sheets   side panels
+GET  /campaigns/{c}/state?sections=pcs,actors,places,threads,factions&scope=story   side panels: only what the told story has shown (D-117); check the response says `scope: "story"`
+GET  /campaigns/{c}/character                 your own character and sheet
 ```
 
 **A beat over the WebSocket.** Send:
@@ -209,7 +210,10 @@ tokens, or let the player enter their own rates.
 - **Don't spoil the game.** Your token can read everything (it's an operator token), including
   which claims are true, every character's beliefs, and the raw event log
   (`/worlds/{w}/events`). A player UI should show what the player's character would know: the
-  narration, the people and places met, the plots in play, their own sheet and notes.
+  narration, the people and places met, the plots in play, their own sheet and notes. Ask for
+  the state with `scope=story` and Uro does that narrowing for you (people, places and factions a
+  beat has named or made, plots that aren't dormant); it works with a player's token too. It
+  goes by name, so someone the story hasn't named yet isn't listed.
 - **Not available yet:** a scene frame (the engine keeps no scene), images, voice. Ask if the UX needs one; it's
   engine work.
 - **Errors:** `400` bad input, `401` bad token, `403` not allowed, `404` unknown id, `501` a feature
