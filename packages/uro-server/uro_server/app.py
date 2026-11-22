@@ -2990,8 +2990,15 @@ def create_app(
             pass
         except RuntimeError:
             # Reading from or writing to a socket whose client has gone raises this, not a
-            # WebSocketDisconnect, when the close raced the call. Anything else is a real fault.
-            if ws.client_state == WebSocketState.CONNECTED:
+            # WebSocketDisconnect, when the close raced the call: the handshake never finished, or
+            # a frame sent to the departed client already marked this side closed (the forwarder's
+            # send fails first, then the next read finds the socket shut). Anything else, on a
+            # socket open at both ends, is a real fault.
+            both_open = (
+                ws.client_state == WebSocketState.CONNECTED
+                and ws.application_state == WebSocketState.CONNECTED
+            )
+            if both_open:
                 raise
         finally:
             live_sockets.discard((token, ws, campaign_id))

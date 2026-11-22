@@ -11,9 +11,11 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ### Fixed
 
-- A client that drops the play socket during the handshake (a page navigating away, a dev build
-  mounting twice) no longer leaves a traceback in the server log. Nothing else changed: the
-  socket was already gone.
+- A client that drops the play socket during the handshake or while a frame is on its way to it
+  (a page navigating away, a dev build mounting twice) no longer leaves a traceback in the
+  server log. Nothing else changed: the socket was already gone.
+- `uro-composable` refuses an action keyed `hold`: that is a fight's own move, and the two
+  would have shared a name.
 
 ## [0.22.0] - 2026-11-22
 
