@@ -122,3 +122,34 @@ async def test_a_players_fight_turn_shows_their_roll_live_and_read_back(
     assert turns
     assert all(t["target_id"] for t in turns if t["action"] == "attack")
     assert all(t["player_view"] is None for t in turns if t["actor_id"] == "a:brute")
+
+
+def test_the_2d6_built_in_shows_a_player_their_own_fight_roll() -> None:
+    """D-118, completed for `uro-pbta`: seizing and getting clear carry the roll, as its checks
+    do. (`uro-pool` resolves a round's strikes together, so a strike's roll can land on another
+    fighter's turn: it sets none yet.)"""
+    from uro_core.pipeline.encounter import fighters_of, open_fight, take_turn
+    from uro_core.rulesets import registry
+    from uro_core.rulesets.base import CharSpec
+    from uro_core.rulesets.rng import Rng
+
+    ruleset = registry.resolve("uro-pbta")
+    sheet = ruleset.new_character(CharSpec(), Rng(0))
+    sides = [
+        Combatant(actor_id="a:ada", team="aggressor", sheet=sheet, is_pc=True),
+        Combatant(actor_id="a:brute", team="defender", sheet=sheet),
+    ]
+    step = open_fight(ruleset, sides, Rng(4), encounter_id="e:1")
+    started = next(e.payload for e in step.events if e.event_type == "EncounterStarted")
+    log = [e.payload for e in step.events if e.event_type == "EncounterTurnTaken"]
+    assert step.waiting_on == "a:ada" and fighters_of(started, log)
+    for kind, target in (("seize_by_force", "a:brute"), ("get_clear", None)):
+        turn = take_turn(ruleset, started, log, "a:ada", TurnChoice(kind=kind, target_id=target))
+        mine = next(
+            e.payload
+            for e in turn.events
+            if e.event_type == "EncounterTurnTaken" and e.payload["chosen"] is not None
+        )
+        view = mine["player_view"]
+        assert view["total"] == view["dice"][0] + view["modifier"] and view["band"]
+        assert view["stat"] == ("forceful" if kind == "seize_by_force" else "quick")

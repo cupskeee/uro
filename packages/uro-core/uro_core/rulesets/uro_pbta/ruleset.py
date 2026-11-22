@@ -64,6 +64,12 @@ class PbtAConfig(BaseModel):
 
 
 # What a threat hint (D-112) means here: a stat spread (capped by `stat_cap`). A spec's own wins.
+def _seen(stat: str, dice: int, mod: int, total: int) -> dict[str, Any]:
+    """The acting character's own roll in a fight, as its player may see it (D-118): the same
+    keys a check's view has. The two dice are rolled as one sum here."""
+    return {"stat": stat, "dice": [dice], "modifier": mod, "total": total}
+
+
 _THREAT: dict[str, dict[str, int]] = {
     "harmless": {"forceful": -1, "clever": 0, "quick": 0, "steady": -1},
     "weak": {"forceful": 0, "clever": 0, "quick": 0, "steady": 0},
@@ -335,6 +341,7 @@ class UroPbtA:
             mod = actor.sheet.stats.get("forceful", 0)
             dice = rng.roll(2, 6)
             total = dice + mod
+            seen = _seen("forceful", dice, mod, total)
             if total >= 10:  # full: hit hard, pay nothing
                 target.sheet.harm = min(_HARM_MAX, target.sheet.harm + 2)
                 effects.append(
@@ -343,6 +350,7 @@ class UroPbtA:
                         actor_id=target.actor_id,
                         payload={"harm": 2, "source": actor.actor_id},
                         trace=f"seize 2d6({dice}){mod:+d}={total} → full: 2 harm",
+                        player_view={**seen, "band": "full"},
                     )
                 )
             elif total >= 7:  # PARTIAL: you succeed AND take a cost — the d20-inexpressible band
@@ -359,6 +367,7 @@ class UroPbtA:
                             "cost_actor": actor.actor_id,
                         },
                         trace=f"seize {total}: partial — 1 harm, you are {_EXPOSED}",
+                        player_view={**seen, "band": "partial"},
                     )
                 )
             else:  # miss: the foe makes a hard move against you
@@ -370,6 +379,7 @@ class UroPbtA:
                         actor_id=actor.actor_id,
                         payload={"harm": 2},
                         trace=f"seize 2d6({dice}){mod:+d}={total} → miss: take 2 harm",
+                        player_view={**seen, "band": "miss"},
                     )
                 )
         elif action.kind == "keep_cool":  # D-114: steady yourself — shake off being Exposed
@@ -386,6 +396,7 @@ class UroPbtA:
             mod = actor.sheet.stats.get("quick", 0)
             dice = rng.roll(2, 6)
             total = dice + mod
+            seen = _seen("quick", dice, mod, total)
             if total >= 7:
                 actor.fled = True
                 cost = 0 if total >= 10 else 1
@@ -397,6 +408,7 @@ class UroPbtA:
                         payload={"harm": cost},
                         trace=f"get clear 2d6({dice}){mod:+d}={total} → away"
                         + (", taking 1 harm on the way" if cost else ""),
+                        player_view={**seen, "band": "away"},
                     )
                 )
             else:
@@ -407,6 +419,7 @@ class UroPbtA:
                         actor_id=actor.actor_id,
                         payload={"harm": 1},
                         trace=f"get clear 2d6({dice}){mod:+d}={total} → cut off: take 1 harm",
+                        player_view={**seen, "band": "cut off"},
                     )
                 )
 
