@@ -9,6 +9,10 @@ capability map is [`docs/16-honesty-ledger.md`](docs/16-honesty-ledger.md).
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-11-22
+
+No migration, and nothing to change for embedders or clients.
+
 ### Fixed
 
 - A client that drops the play socket during the handshake or while a frame is on its way to it
@@ -1372,7 +1376,8 @@ milestones** below (P1–P10) are the pre-1.0 history folded into this release.
 - Initial design: re-scoped from a consumer *platform* to a headless *engine* (the engine/platform
   boundary). Decisions D-1…D-15 (see [`docs/decisions.md`](docs/decisions.md)).
 
-[Unreleased]: https://github.com/cupskeee/uro/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/cupskeee/uro/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/cupskeee/uro/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/cupskeee/uro/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/cupskeee/uro/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/cupskeee/uro/compare/v0.19.0...v0.20.0
