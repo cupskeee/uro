@@ -521,6 +521,8 @@ class Definition(BaseModel):
             modifier(f"gear {g.tag}", g.modifier)
         seen: set[str] = set()
         for a in self.actions:
+            if a.key == "hold":  # a fight's own always-there move: an action can't take its name
+                problems.append("action 'hold': that name is a fight's own move (use another)")
             for aid, rating in a.ids():
                 need(f"action {a.key}.uses", "rating", rating, rset)
                 if aid in seen:

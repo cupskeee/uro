@@ -119,6 +119,7 @@ def test_it_is_listed_beside_the_other_built_ins() -> None:
     [
         ({"colour": "red"}, "colour"),  # an unknown key anywhere
         ({"actions": [{"key": "x", "uses": ["nope"]}]}, "no rating 'nope'"),
+        ({"actions": [{"key": "hold", "uses": ["str"]}]}, "a fight's own move"),
         ({"tracks": [{"key": "t", "at_min": "ghost"}]}, "no tag 'ghost'"),
         ({"encounter": {"by": "dex"}, "tracks": []}, "harm"),
         ({"advancement": None}, "role advance needs advancement"),
