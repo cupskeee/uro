@@ -153,3 +153,44 @@ def test_the_2d6_built_in_shows_a_player_their_own_fight_roll() -> None:
         view = mine["player_view"]
         assert view["total"] == view["dice"][0] + view["modifier"] and view["band"]
         assert view["stat"] == ("forceful" if kind == "seize_by_force" else "quick")
+
+
+def test_the_dice_pool_built_in_shows_a_strike_rolled_on_another_fighters_turn() -> None:
+    """D-119: `uro-pool` resolves a round's strikes together when the last fighter commits, so a
+    player's strike may be rolled on a foe's turn of the same beat. Each strike names whose roll
+    it is, and the player's turn is reported with it either way."""
+    from uro_core.pipeline.encounter import open_fight, take_turn
+    from uro_core.pipeline.engine import _fight_outcomes
+    from uro_core.rulesets import registry
+    from uro_core.rulesets.base import CharSpec
+    from uro_core.rulesets.rng import Rng
+    from uro_core.timeline.beats import fight_checks
+
+    ruleset = registry.resolve("uro-pool")
+    sheet = ruleset.new_character(CharSpec(), Rng(0))
+    seen_late = False
+    for seed in range(6):
+        sides = [
+            Combatant(actor_id="a:ada", team="aggressor", sheet=sheet, is_pc=True),
+            Combatant(actor_id="a:brute", team="defender", sheet=sheet),
+        ]
+        step = open_fight(ruleset, sides, Rng(seed), encounter_id="e:1")
+        started = next(e.payload for e in step.events if e.event_type == "EncounterStarted")
+        log = [e.payload for e in step.events if e.event_type == "EncounterTurnTaken"]
+        turn = take_turn(
+            ruleset, started, log, "a:ada", TurnChoice(kind="strike", target_id="a:brute")
+        )
+        turns = [e.payload for e in turn.events if e.event_type == "EncounterTurnTaken"]
+        mine = next(t for t in turns if t["chosen"] is not None)
+        late = [t["views"]["a:ada"] for t in turns if "a:ada" in t["views"]]
+        seen_late |= bool(late)
+        assert (mine["player_view"] is not None) != bool(late)  # one place, never both
+        assert all(t["player_view"] is None for t in turns if t["chosen"] is None)
+        # live and read back, the player's turn carries the roll, and only theirs
+        (out,) = _fight_outcomes(turn.events, "a:ada")
+        (kept,) = fight_checks(turns)
+        assert out.affordance == kept.affordance == "strike"
+        assert out.player_view == kept.player_view and out.player_view is not None
+        assert out.player_view["stat"] == "might" and out.outcome in ("wound", "parried")
+        assert _fight_outcomes(turn.events, "a:brute") == []
+    assert seen_late  # one against one, the player commits first: the roll comes on the foe's turn

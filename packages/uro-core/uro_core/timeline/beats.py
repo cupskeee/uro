@@ -70,6 +70,32 @@ class BeatRecord(BaseModel):
     threads_changed: list[BeatThreadChange] = Field(default_factory=list)
 
 
+def fight_checks(turns: list[dict[str, Any]]) -> list[BeatCheck]:
+    """A player's own turn in a fight, with the roll their ruleset lets them see (D-118), kept
+    like a check so the story read back still shows it. The roll is on the turn itself, or, in a
+    ruleset that resolves a round at once, among another turn's `views` in the same beat (D-119)."""
+    late: dict[str, dict[str, Any]] = {}
+    for turn in turns:
+        late.update(turn.get("views") or {})
+    checks = []
+    for turn in turns:
+        if turn.get("chosen") is None:
+            continue
+        own_view = turn.get("player_view")
+        other = late.get(turn["actor_id"], {}) if own_view is None else {}
+        view = own_view or other.get("player_view")
+        if view is not None:
+            checks.append(
+                BeatCheck(
+                    actor_id=turn["actor_id"],
+                    affordance=turn["action"],
+                    outcome=other.get("result") or turn.get("result") or "",
+                    player_view=view,
+                )
+            )
+    return checks
+
+
 def beat_records(
     rows: list[tuple[str, str, dict[str, Any]]], stakes: dict[str, str]
 ) -> list[BeatRecord]:
@@ -106,22 +132,6 @@ def beat_records(
                         player_view=p.get("player_view"),
                     )
                 )
-            elif (
-                own
-                and event_type == "EncounterTurnTaken"
-                and p.get("chosen") is not None
-                and p.get("player_view") is not None
-            ):
-                # a player's own turn in a fight, with the roll their ruleset lets them see
-                # (D-118): kept like a check, so the story read back still shows it
-                record.checks.append(
-                    BeatCheck(
-                        actor_id=p["actor_id"],
-                        affordance=p["action"],
-                        outcome=p.get("result") or "",
-                        player_view=p["player_view"],
-                    )
-                )
             elif own and event_type in _CREATED:
                 kind, id_key, name_key = _CREATED[event_type]
                 record.created.append(BeatCreated(kind=kind, id=p[id_key], name=p[name_key]))
@@ -130,6 +140,8 @@ def beat_records(
             elif event_type == "ThreadStateChanged":
                 first = changes.get(p["thread_id"], (p.get("from_state", ""), ""))[0]
                 changes[p["thread_id"]] = (first, p["to_state"])
+        if own:
+            record.checks += fight_checks([p for t, p in events if t == "EncounterTurnTaken"])
     for record, changes in zip(records, moved, strict=True):
         made = {c.id for c in record.created if c.kind == "thread"}
         record.threads_changed = [

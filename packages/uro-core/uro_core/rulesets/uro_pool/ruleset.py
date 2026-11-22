@@ -399,6 +399,16 @@ class UroPool:
                     payload={"wounds": dealt, "source": attacker_id, "pushed": pushed},
                     trace=f"round {st.round}: {attacker_id} strikes {act.target_id} "
                     f"{sorted(att)} vs {sorted(dfn)}{push_note} → {dealt} wound(s)",
+                    # the striker's own pool (D-119); the round resolves at once, so say whose
+                    player_view={
+                        "stat": "might",
+                        "dice": sorted(att),
+                        "against": _STRIKE_TARGET,
+                        "marks": _marks(att, _STRIKE_TARGET),
+                        "pushed": pushed,
+                        "band": "wound" if dealt else "parried",
+                    },
+                    viewer=attacker_id,
                 )
             )
         for actor_id, dealt in wounds.items():  # simultaneous: applied only after every roll
@@ -419,6 +429,14 @@ class UroPool:
                     actor_id=actor_id,
                     trace=f"round {st.round}: {actor_id} withdraws {sorted(dice)} → "
                     + ("away" if away else "cut off"),
+                    player_view={
+                        "stat": "wits",
+                        "dice": sorted(dice),
+                        "against": _STRIKE_TARGET,
+                        "marks": _marks(dice, _STRIKE_TARGET),
+                        "band": "away" if away else "cut off",
+                    },
+                    viewer=actor_id,
                 )
             )
         nxt = st.model_copy(update={"fighters": fighters, "committed": {}, "round": st.round + 1})

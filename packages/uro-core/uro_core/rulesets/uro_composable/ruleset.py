@@ -486,6 +486,18 @@ class UroComposable:
             "ratings": self._readings(sheet, left),
         }
 
+    def sheet_reads(self, sheet: SheetDict) -> dict[str, Any]:
+        """Each rating of a character in play as its player reads it (D-119): the step the sheet
+        keeps, the scale's word for it and the resolver's reading (`+3`, `3d6`), the same values
+        a creation preview's guidance gives. Optional on the port."""
+        s, scale = load(self.d, sheet), self.d.scale
+        return {
+            "ratings": {
+                key: {"step": step, "word": scale.word(step), "reads": self.resolver.reads(step)}
+                for key, step in s.ratings.items()
+            }
+        }
+
     def _readings(self, sheet: Sheet, left: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """Each rating as a creator shows it: its step, the scale's word for it, how the resolver
         reads it (`+2`, `3d6`), and whether a step up or down is still a build the creation's

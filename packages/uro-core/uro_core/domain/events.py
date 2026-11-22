@@ -861,6 +861,9 @@ class EncounterTurnTakenPayload(BaseModel):
     target_id: str = ""
     out: list[str] = Field(default_factory=list)
     player_view: dict[str, Any] | None = None
+    # D-119: other fighters' own rolls resolved on this turn (a round resolved all at once):
+    # actor id → {"result", "player_view"}. Each is for that fighter's player only.
+    views: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class EncounterJoinedPayload(BaseModel):
@@ -988,6 +991,7 @@ def encounter_turn_taken(
     target_id: str = "",
     out: list[str] | None = None,
     player_view: dict[str, Any] | None = None,
+    views: dict[str, dict[str, Any]] | None = None,
     caused_by: CausedBy | None = None,
 ) -> DomainEvent:
     return DomainEvent(
@@ -1004,6 +1008,7 @@ def encounter_turn_taken(
             target_id=target_id,
             out=out or [],
             player_view=player_view,
+            views=views or {},
         ).model_dump(),
     )
 

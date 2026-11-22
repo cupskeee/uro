@@ -257,6 +257,22 @@ def creation_guidance(ruleset: Any, spec: CharSpec) -> dict[str, Any] | None:
     return dict(guidance) if guidance is not None else None
 
 
+def sheet_reads(ruleset: Any, sheet: Sheet | None) -> dict[str, Any] | None:
+    """How a character's sheet reads to its own player (D-119), through the ruleset's optional
+    `sheet_reads(sheet)`: for the values a ruleset keeps one way and says another (a rating kept
+    as a step and read as "+3" or "3d6"), so no client works the reading out. The shape follows
+    the sheet: `{<group>: {<member>: {"reads": str, ...}}}`. None for a ruleset without the hook,
+    a character with no sheet, or a sheet it can't read."""
+    fn = getattr(ruleset, "sheet_reads", None)
+    if sheet is None or not callable(fn):
+        return None
+    try:
+        reads = fn(sheet)
+    except (ValidationError, ValueError, TypeError, KeyError):
+        return None
+    return dict(reads) if reads else None
+
+
 def starting_holdings(ruleset: Any, spec: CharSpec) -> list[Holding]:
     """The things a spec gives its character to hold from the start (D-114: a kit the player
     picked), through the ruleset's optional `starting_holdings(spec)`. None for a ruleset without
@@ -441,6 +457,10 @@ class Effect(BaseModel):
     # `player_view`: their own dice, modifier and the band reached. Set it only on the effect of
     # the action being resolved; None = nothing beyond the turn's result.
     player_view: dict[str, Any] | None = None
+    # Whose roll `player_view` is, when it isn't the character whose action is being resolved
+    # (D-119): a ruleset that resolves a whole round at once (uro_pool) names each striker here,
+    # so a strike rolled on another fighter's turn still reaches its own player. "" = the actor.
+    viewer: str = ""
 
 
 class EncounterOutcome(BaseModel):
